@@ -1,7 +1,7 @@
 # HillGrow — System Design Spec
 
 **Date:** 2026-08-31  
-**Status:** Draft — sections approved incrementally in brainstorming  
+**Status:** Approved 2026-08-31  
 **Target hardware:** ESP32-DevKitC-V4 (ESP32 classic) — 1 × Master (8 MB flash, 16 MB optional), N × Zone (4 MB WROOM), one shared rescue image  
 **Framework:** ESP-IDF v6.0.1, FreeRTOS SMP, C99/C11  
 **Repo:** `c:\Projects\HillGrov` → https://github.com/ekhpascal/HillGrov.git (`main`)  
