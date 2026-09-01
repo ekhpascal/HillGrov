@@ -120,6 +120,11 @@ static void test_debug_enable_unlocks_and_expires(void) {
     TEST_ASSERT_EQUAL_STRING("OK FW ROLLBACK\n", resp);
     TEST_ASSERT_EQUAL_INT(1, g_fake_app.fw_rollback_calls);
 
+    g_fake_app.fail_fw_rollback = 1;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET FW ROLLBACK CONFIRM"));
+    TEST_ASSERT_EQUAL_STRING("ERR INTERNAL\n", resp);
+    g_fake_app.fail_fw_rollback = 0;
+
     fake_clock_add(600001);
     TEST_ASSERT_EQUAL_INT(0, run("GET DEBUG"));
     TEST_ASSERT_EQUAL_STRING("OK DEBUG 0\n", resp);
@@ -151,6 +156,14 @@ static void test_time(void) {
 
     TEST_ASSERT_EQUAL_INT(-1, run("SET TIME 20260831 14:03:22"));
     TEST_ASSERT_EQUAL_STRING("ERR BAD_ARGS\n", resp);
+
+    /* trailing garbage after a full match: sscanf's conversion count alone
+     * would accept these (it stops silently at the bad character) */
+    TEST_ASSERT_EQUAL_INT(-1, run("SET TIME 2026-08-1x 14:03:22"));
+    TEST_ASSERT_EQUAL_STRING("ERR BAD_ARGS\n", resp);
+
+    TEST_ASSERT_EQUAL_INT(-1, run("SET TIME 2026-08-31 14:03:2x"));
+    TEST_ASSERT_EQUAL_STRING("ERR BAD_ARGS\n", resp);
 }
 
 static void test_save(void) {
@@ -175,6 +188,10 @@ static void test_factory_reset(void) {
     TEST_ASSERT_EQUAL_INT(0, run("FACTORY RESET CONFIRM"));
     TEST_ASSERT_EQUAL_STRING("OK FACTORY RESET\n", resp);
     TEST_ASSERT_EQUAL_INT(1, g_fake_app.factory_reset_calls);
+
+    g_fake_app.fail_factory_reset = 1;
+    TEST_ASSERT_EQUAL_INT(-1, run("FACTORY RESET CONFIRM"));
+    TEST_ASSERT_EQUAL_STRING("ERR INTERNAL\n", resp);
 }
 
 static void test_fw_update(void) {
@@ -192,6 +209,10 @@ static void test_fw_update(void) {
     TEST_ASSERT_EQUAL_STRING("ssid1", g_fake_app.fu_ssid);
     TEST_ASSERT_EQUAL_STRING("pass1", g_fake_app.fu_pass);
     TEST_ASSERT_EQUAL_STRING("http://x", g_fake_app.fu_url);
+
+    g_fake_app.fail_fw_update = 1;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET FW UPDATE ssid1 pass1 http://x"));
+    TEST_ASSERT_EQUAL_STRING("ERR INTERNAL\n", resp);
 }
 
 int main(void) { UNITY_BEGIN();

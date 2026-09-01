@@ -121,9 +121,16 @@ static int h_time(cmd_req_t *q, char *r, int l) {
         if (s_app->time_get(buf, sizeof buf) != 0) return cmd_err(r, l, "INTERNAL");
         return cmd_okf(r, l, "TIME %s", buf);
     }
-    int y, mo, d, h, mi, s;
-    if (sscanf(q->tok[0], "%d-%d-%d", &y, &mo, &d) != 3) return cmd_err(r, l, "BAD_ARGS");
-    if (sscanf(q->tok[1], "%d:%d:%d", &h, &mi, &s) != 3) return cmd_err(r, l, "BAD_ARGS");
+    /* sscanf's return value only counts successful conversions -- it stops
+     * silently at the first non-matching character, so "2026-08-1x" (within
+     * the ARG_STR length bound) would parse as y/mo/d with 'x' discarded.
+     * %n plus a strlen() check forces full-token consumption. */
+    int y, mo, d, h, mi, s, n = 0;
+    if (sscanf(q->tok[0], "%d-%d-%d%n", &y, &mo, &d, &n) != 3 || n != (int)strlen(q->tok[0]))
+        return cmd_err(r, l, "BAD_ARGS");
+    n = 0;
+    if (sscanf(q->tok[1], "%d:%d:%d%n", &h, &mi, &s, &n) != 3 || n != (int)strlen(q->tok[1]))
+        return cmd_err(r, l, "BAD_ARGS");
     if (s_app->time_set(y, mo, d, h, mi, s) != 0) return cmd_err(r, l, "BAD_ARGS");
     return cmd_okf(r, l, "TIME %04d-%02d-%02d %02d:%02d:%02d", y, mo, d, h, mi, s);
 }
