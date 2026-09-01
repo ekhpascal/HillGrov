@@ -81,8 +81,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 include(FetchContent)
 FetchContent_Declare(unity
-  URL https://github.com/ThrowTheSwitch/Unity/archive/refs/tags/v2.6.0.tar.gz
-  DOWNLOAD_EXTRACT_TIMESTAMP ON)
+  URL https://github.com/ThrowTheSwitch/Unity/archive/refs/tags/v2.6.0.tar.gz)
 FetchContent_MakeAvailable(unity)
 if(MSVC)
   add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
@@ -568,11 +567,6 @@ typedef struct {                     /* 16 B; per-shelf pollination */
     uint16_t interval_min, start_min, end_min;
     uint8_t  rsvd2[6];
 } hg_vib_cfg_t;
-typedef struct {                     /* 16 B; per-shelf pollination */
-    uint8_t  mode, intensity_pct, pulse_s, rsvd;   /* mode: 0 OFF 1 PULSE; intensity 20..100 */
-    uint16_t interval_min, start_min, end_min;
-    uint8_t  rsvd2[6];
-} hg_vib_cfg_t;
 typedef struct { uint8_t mode, pulse_s; uint16_t interval_min, start_min, end_min; } hg_aux_cfg_t; /* 8 B; mode: 0 OFF 1 PULSE */
 
 typedef struct {                     /* 72 B */
@@ -675,7 +669,6 @@ static void test_offsets_pinned(void) {
     TEST_ASSERT_EQUAL_size_t(36,  offsetof(hg_shelf_cfg_t, water));
     TEST_ASSERT_EQUAL_size_t(52,  offsetof(hg_shelf_cfg_t, fan));
     TEST_ASSERT_EQUAL_size_t(56,  offsetof(hg_shelf_cfg_t, vib));
-    TEST_ASSERT_EQUAL_size_t(56,  offsetof(hg_shelf_cfg_t, vib));
     TEST_ASSERT_EQUAL_size_t(6,   offsetof(hg_zone_cfg_t, link_loss_timeout_s));
     TEST_ASSERT_EQUAL_size_t(60,  offsetof(hg_daily_t, crc));
 }
@@ -701,7 +694,6 @@ static void test_defaults_hw(void) {
         TEST_ASSERT_EQUAL_UINT16(1300,     hw.shelf[i].soil_wet_mv[1]);
         TEST_ASSERT_EQUAL_UINT8(100,       hw.shelf[i].led_max_pct[0]);
         TEST_ASSERT_EQUAL_UINT8(8 + i,     hw.shelf[i].vib_ch);
-        TEST_ASSERT_EQUAL_UINT8(8 + i,     hw.shelf[i].vib_ch);
     }
     TEST_ASSERT_EQUAL_UINT8(0, hw.aux[0].type);
 }
@@ -720,8 +712,6 @@ static void test_defaults_cfg_inert(void) {
         TEST_ASSERT_EQUAL_UINT8(45, c.shelf[i].water.target_pct);
         TEST_ASSERT_EQUAL_UINT16(20, c.shelf[i].water.dose_s);
         TEST_ASSERT_EQUAL_UINT8(3,  c.shelf[i].fan.mode);          /* CYCLE */
-        TEST_ASSERT_EQUAL_UINT8(0,  c.shelf[i].vib.mode);           /* OFF */
-        TEST_ASSERT_EQUAL_UINT8(60, c.shelf[i].vib.intensity_pct);
         TEST_ASSERT_EQUAL_UINT8(0,  c.shelf[i].vib.mode);           /* OFF */
         TEST_ASSERT_EQUAL_UINT8(60, c.shelf[i].vib.intensity_pct);
     }
@@ -774,7 +764,6 @@ void hg_defaults_hw(hg_zone_hw_t *hw) {
         s->soil_max_ok_mv = 3200;
         s->pump_max_run_s   = 60;
         s->pump_max_daily_s = 600;
-        s->vib_ch = (uint8_t)(8 + i);
         s->vib_ch = (uint8_t)(8 + i);
     }
 }
@@ -1109,12 +1098,6 @@ const hg_field_t HG_FIELDS[] = {
     F(VIB,     "INTERVAL_MIN",4,  U16, 5, 1440, NULL),
     F(VIB,     "START",       6,  HHMM, 0, 1439, NULL),
     F(VIB,     "END",         8,  HHMM, 0, 1439, NULL),
-    F(VIB,     "MODE",        0,  ENUM, 0, 1, "OFF|PULSE"),
-    F(VIB,     "INTENSITY",   1,  U8, 20, 100, NULL),
-    F(VIB,     "PULSE_S",     2,  U8, 1, 30, NULL),
-    F(VIB,     "INTERVAL_MIN",4,  U16, 5, 1440, NULL),
-    F(VIB,     "START",       6,  HHMM, 0, 1439, NULL),
-    F(VIB,     "END",         8,  HHMM, 0, 1439, NULL),
     F(AUX,     "MODE",        0,  ENUM, 0, 1, "OFF|PULSE"),
     F(AUX,     "PULSE_S",     1,  U8, 1, 30, NULL),
     F(AUX,     "INTERVAL_MIN",2,  U16, 5, 1440, NULL),
@@ -1132,7 +1115,6 @@ const hg_field_t HG_FIELDS[] = {
     F(HWSHELF, "FAN",         3,  PIN, 0, 15, NULL),
     F(HWSHELF, "SOIL_A",      4,  PIN, 0, 7, NULL),
     F(HWSHELF, "SOIL_B",      5,  PIN, 0, 7, NULL),
-    F(HWSHELF, "VIB",         24, PIN, 0, 15, NULL),
     F(HWSHELF, "VIB",         24, PIN, 0, 15, NULL),
     F(HWSHELF, "LED_MAX_W",   6,  U8, 0, 100, NULL),
     F(HWSHELF, "LED_MAX_R",   7,  U8, 0, 100, NULL),
@@ -1181,7 +1163,6 @@ static void *group_base(uint8_t group, int idx, const hg_zone_hw_t *hw, const hg
     case HG_G_LIGHT:   return (void *)&cfg->shelf[idx].light;
     case HG_G_WATER:   return (void *)&cfg->shelf[idx].water;
     case HG_G_FAN:     return (void *)&cfg->shelf[idx].fan;
-    case HG_G_VIB:     return (void *)&cfg->shelf[idx].vib;
     case HG_G_VIB:     return (void *)&cfg->shelf[idx].vib;
     case HG_G_AUX:     return (void *)&cfg->aux[idx];
     case HG_G_HW:      return (void *)hw;
@@ -1412,7 +1393,6 @@ int hg_hw_validate(const hg_zone_hw_t *hw, char *err, size_t n) {
         if (mark_dup(pca, sh->led_ch[0]) != 0) return fail(err, n, s, HG_G_HWSHELF, "LED_W");
         if (mark_dup(pca, sh->led_ch[1]) != 0) return fail(err, n, s, HG_G_HWSHELF, "LED_R");
         if (mark_dup(pca, sh->vib_ch) != 0) return fail(err, n, s, HG_G_HWSHELF, "VIB");
-        if (mark_dup(pca, sh->vib_ch) != 0) return fail(err, n, s, HG_G_HWSHELF, "VIB");
         if (mark_dup(pcf, sh->pump_pin) != 0) return fail(err, n, s, HG_G_HWSHELF, "PUMP");
         if (mark_dup(pcf, sh->fan_pin) != 0) return fail(err, n, s, HG_G_HWSHELF, "FAN");
         if (sh->soil_ch[0] != HG_NONE && (sh->soil_ch[0] > 7 || soil[sh->soil_ch[0]]++))
@@ -1442,7 +1422,6 @@ int hg_cfg_validate(const hg_zone_cfg_t *cfg, const hg_zone_hw_t *hw, char *err,
         if (check_group_rows(&sc->light, HG_G_LIGHT, s, err, n) != 0) return -1;
         if (check_group_rows(&sc->water, HG_G_WATER, s, err, n) != 0) return -1;
         if (check_group_rows(&sc->fan, HG_G_FAN, s, err, n) != 0) return -1;
-        if (check_group_rows(&sc->vib, HG_G_VIB, s, err, n) != 0) return -1;
         if (check_group_rows(&sc->vib, HG_G_VIB, s, err, n) != 0) return -1;
         if (sc->light.on_min == sc->light.off_min) return fail(err, n, s, HG_G_LIGHT, "OFF");
         if (hw) {
