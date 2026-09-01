@@ -1,0 +1,26 @@
+cmake_minimum_required(VERSION 3.16)
+project(hillgrow_host_tests C)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+include(FetchContent)
+FetchContent_Declare(unity
+  URL https://github.com/ThrowTheSwitch/Unity/archive/refs/tags/v2.6.0.tar.gz
+  DOWNLOAD_EXTRACT_TIMESTAMP ON)
+FetchContent_MakeAvailable(unity)
+if(MSVC)
+  add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+endif()
+set(COMP ${CMAKE_CURRENT_SOURCE_DIR}/../../components)
+include_directories(
+  ${COMP}/app_version ${COMP}/hg_blob ${COMP}/hg_cfg ${COMP}/hg_model
+  ${COMP}/cli_line ${COMP}/notify ${COMP}/cmd_core ${COMP}/cmd_common
+  ${COMP}/zone_cmds ${COMP}/rescue_handover ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
+enable_testing()
+function(hg_test NAME)
+  add_executable(${NAME} ${NAME}.c fakes/fake_clock.c ${ARGN})
+  target_link_libraries(${NAME} unity)
+  target_compile_definitions(${NAME} PRIVATE HOST_TEST=1)
+  add_test(NAME ${NAME} COMMAND ${NAME})
+endfunction()
+
+hg_test(test_app_version ${COMP}/app_version/app_version.c)
