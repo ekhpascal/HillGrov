@@ -35,8 +35,11 @@
 | Addr | Device | Notes |
 |---|---|---|
 | 0x68 | DS3231 RTC | time authority; AT24C32 EEPROM at 0x57 unused in V1 |
-| 0x20 | PCF8575 | relays (7 used, 9 spare): main fan, 3 dampers, shutter, refill solenoid, overall grow light — pin map fixed in SP5 |
-| 0x44 | SHT31 (optional) | room temperature/humidity |
+| 0x20 | PCF8575 | relays (8 used, 8 spare): main fan, 3 dampers, shutter, refill solenoid, overall grow light, heater — pin map fixed in SP5 |
+| 0x44 | SHT31 | growth-room temperature/humidity |
+| 0x45 | SHT31 #2 (optional) | workshop/“inside” temperature/humidity |
+| 0x62 | SCD41 | CO₂ (growth room) |
+| 0x4D | SC16IS752 | I²C→UART bridge → RS-485 Modbus field bus: PAR sensor (400–700 nm) + remote/outdoor T/RH transmitters; 2nd UART spare |
 
 ### Master pin assignments (owner extensions 2026-09-01)
 
@@ -79,6 +82,8 @@ Reserved I²C: 0x70 (PCA9685 all-call — never use) · 0x48/0x49 (future ADS111
 - [ ] PCM5102A board: SCK pin tied to GND; 3.3 V supply; short I²S wires.
 - [ ] Load cell mounted under the reservoir, HX711 board on 3.3 V; tare/full calibration from the CLI (SP5).
 - [ ] Display link: straight TX↔RX cross to the S3 (GPIO26→S3-RX, GPIO25←S3-TX), common GND.
+- [ ] RS-485 field bus: A/B twisted pair, 120 Ω termination at both ends, bias resistors per transceiver board; Modbus RTU 9600 8N1; unique slave addresses noted here when assigned.
+- [ ] Heater: mechanical thermal cutout/thermostat **in series** with the relay-switched line — mandatory before first power-on (§11.8).
 
 ## Power
 

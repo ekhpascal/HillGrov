@@ -28,7 +28,8 @@ Zone identity is the eFuse MAC; the Master maps MAC → zone id / name / shelf c
 ```
  house Wi-Fi ──STA──┐                      phone/PC ──AP 192.168.7.7──┐
                     └──► MASTER (DevKitC-V4) ◄───────────────────────┘
-       I²C: DS3231 0x68 · PCF8575 0x20 (relays: fan, 3 dampers, shutter, refill, overall grow light) · [SHT31 0x44]
+       I²C: DS3231 0x68 · PCF8575 0x20 (relays ×8: fan, 3 dampers, shutter, refill, overall grow light, heater) · SHT31 0x44 room + [0x45 workshop]
+       SCD41 0x62 CO₂ · SC16IS752 0x4D → RS-485 Modbus field bus (PAR sensor, remote T/RH)
        UART1 ↔ ESP32-S3 touch display (optional) · SPI2 → microSD · I²S → PCM5102A DAC · strain-gauge level (HX711: DOUT 34, SCK 5)
        UART2 TX ──► ZONE 1 RX     ZONE 1 TX ──► ZONE 2 RX  …  ZONE N TX ──► MASTER UART2 RX
                      │ I²C: PCA9685 0x40 (ch 0–7 LED W/R × 4 shelves · ch 8–11 vibrator PWM × 4 · OE → GPIO23)
@@ -94,7 +95,7 @@ HillGrov/
 
 ### 1.6 Out of scope for V1
 
-Cloud connectivity; ADS1115 soil-ADC backend; PWM fan speed; ring-carried OTA; OTA of the rescue image; any Wi-Fi in `zone.bin`; heater / dehumidifier control.
+Cloud connectivity; ADS1115 soil-ADC backend; PWM fan speed; ring-carried OTA; OTA of the rescue image; any Wi-Fi in `zone.bin`; dehumidifier control.
 
 ---
 
@@ -199,6 +200,7 @@ CRC vector + bit-flip; COBS round-trip 0..128 incl. resync and oversize; frame e
 | FAN_MAIN (M) | — | 30 s | — | intake OPEN and ≥1 exhaust OPEN, re-checked every tick |
 | SHUTTER (M) | 60 s (120) | 5 s | — | — |
 | LIGHT_MAIN (M) | — | 30 s | 20 h (24 = unlimited) | overall grow light relay: own on/off schedule + duration-bounded manual override; coordinated with the blackout shutter (SP5) |
+| HEATER (M) | — | 60 s | configurable | valid room temp required; setpoint hysteresis; high-limit latch; mandatory mechanical thermal cutout in series (§11.8) |
 
 ### 3.3 Safe boot sequence
 
@@ -407,7 +409,7 @@ RAM: zone free heap ≈ 220 KB after boot; Master ≈ 95–110 KB (Wi-Fi buffer 
 | 2 | Zone shelf control | `safety`/`fault`/`soil_*`/`act_hal`/`pca9685`/`pcf8575`/controllers/`shelf` + zone rows | A standalone zone grows a shelf from its CLI: calibrated soil readings, scheduled light with caps, hysteresis watering with all limits, manual overrides, faults latching/clearing; `uart_test.py --suite full` passes on hardware |
 | 3 | Ring link | `ring_proto`/`ring_link`/`node_mgr` + forwarding + enrolment + config push + TIME_SYNC + FW_UPDATE handshake | Master + 2 zones: discovery, `SET ZONE 2 …` round-trips, heartbeats drive the node table, break blame correct when a node is unplugged, config pushed and reverted per §4.4, fleet OTA of one zone end-to-end via rescue pull |
 | 4 | Master web UI | `wifi_mgr`/`http_srv`/`hg_json`/`hg_fs`/`alarm_mgr`/`history` + pages (gzipped `EMBED_FILES` assets, vanilla JS) | Phone on the AP at 192.168.7.7: dashboard of all zones/shelves, config editing, alarms, history plots + text export, both firmware uploads, zone fleet update button |
-| 5 | Master global control | `time_svc`/`ds3231`/`sht31`/`psychro`/`vent_ctrl`/`reservoir_ctrl`/`shutter_ctrl` + Master pin map | Ventilation strategy on dew point with damper interlocks, reservoir refill with all guards, blackout shutter, overall-grow-light schedule, `inhibit_mask` propagation — hardware details fixed in the SP5 feature spec first |
+| 5 | Master global control | `time_svc`/`ds3231`/`sht31`/`psychro`/`vent_ctrl`/`reservoir_ctrl`/`shutter_ctrl` + Master pin map | Ventilation strategy on dew point (3-point T/RH: room/workshop/outdoor) with damper interlocks, CO₂ + PAR sensing (I²C + RS-485 Modbus field bus, §11.7), heater control (§11.8), reservoir refill with all guards, blackout shutter, overall-grow-light schedule, `inhibit_mask` propagation — hardware details fixed in the SP5 feature spec first |
 | 6 | Display node | `display/` app: ESP32-S3-DevKitC-1 + ST7796S 480×320 touch (HillBT-s3 hardware), LVGL 9, UART API client; Master gains a UART1 machine-mode CLI session + NOTIFY sink | One-screen touch panel shows live status and runs API commands; Master unaffected when the display is absent (§11.1) |
 | 7 | Media & storage | microSD (SPI2, FAT) + I²S → PCM5102A + audio player component | WAV playback from SD controlled via CLI/web/display without disturbing control loops (§11.2–11.3) |
 
@@ -468,6 +470,23 @@ Every shelf gets its own pollination vibrator, **PWM-controlled for intensity**,
 ### 11.5 Per-shelf PWM pollination vibrators (added 2026-09-01)
 
 Every shelf gets its own pollination vibrator, **PWM-controlled for intensity**, on **PCA9685 channels 8–11** (shelf 1–4). Consequences: the vibrators sit behind the same hardware OE kill line as the lights (dead through boot/crash/rescue); PCF8575 **P8 is freed** — the zone expander now carries 4 pumps + 4 fans + 8 spare relay pins; PCA channels **12–15 remain reserved** for future fan PWM. Data model: `vib_ch` joins the per-shelf hardware map, and a per-shelf `VIB` config group replaces the old zone-level pollination aux device — `MODE OFF|PULSE · INTENSITY 20–100 % · PULSE_S 1–30 · INTERVAL_MIN 5–1440 · START/END window`; safety class VIB applies per shelf (pulse ≤ 10 s default/30 cap, 60 s gap, 600 s/day per shelf). Struct sizes change: `hg_shelf_cfg_t` 56 → 72 B, `hg_zone_cfg_t` 272 → 336 B (blob 352 B = 4 ring chunks). The `aux[2]` slots remain for generic spare-relay devices.
+
+### 11.7 Environment sensing: CO₂, PAR, multi-point T/RH — the field bus (added 2026-09-01)
+
+All new sensing rides the buses; no ESP32 pins are consumed (GPIO35/36 remain the last spares).
+
+- **CO₂:** Sensirion SCD41 on I²C @0x62 (growth room; periodic measurement, CLI/web/display readout, input to the SP5 ventilation strategy).
+- **RS-485 Modbus field bus:** an SC16IS752 I²C→dual-UART bridge @0x4D drives an RS-485 transceiver (auto-direction via the bridge's RTS). The bus is Modbus RTU (9600 8N1 default), multi-drop over one twisted pair — the natural carrier for agricultural transmitters:
+  - **PAR sensor** (Photosynthetically Active Radiation, 400–700 nm, RS-485) — canopy light level, DLI cross-check, input to lighting strategy;
+  - **remote T/RH transmitters** — outdoor unit (intake decisions) and any further points; the bridge's second UART stays spare.
+- **Temperature/humidity, three points** for the dew-point ventilation strategy (requirements §2): growth room = SHT31 @0x44 (I²C); “inside”/workshop = SHT31 @0x45 (I²C, master is nearby) or a field-bus unit; outside = field-bus T/RH unit.
+- Driver shape (SP5): `sc16is752` (register codec pure / I²C glue), `modbus_rtu` (pure framing + CRC16, host-tested), `par_sensor` + `mb_th_sensor` register maps as data; all readings enter the same climate model with per-sensor validity rules (§3.6 style: stale/out-of-range → W_CLIMATE_SENSOR, strategy falls back).
+
+I²C address map after this: 0x20 PCF8575 · 0x40 PCA9685 (option) · 0x44/0x45 SHT31 ×2 · 0x48–0x4B ADS1115 (future) · 0x4D SC16IS752 · 0x57 AT24C32 (unused) · 0x62 SCD41 · 0x68 DS3231. No collisions.
+
+### 11.8 Heater control (added 2026-09-01 — promoted from out-of-scope)
+
+A heater element on **PCF8575 relay P7** (the 8th relay; 8 spare pins remain). Safety class HEATER: runs only while the growth-room temperature reading is valid and below the high limit; setpoint with hysteresis; high-limit → latched fault + relay off; min-off anti-chatter 60 s; continuous/daily caps configurable. **Hardware rule (bring-up checklist): a mechanical thermal cutout/thermostat wired in series with the heater relay is mandatory** — firmware is never the last line of defence on a heating element. Dehumidifier control remains out of scope.
 
 ### 11.6 Room presence sensor (added 2026-09-01)
 
