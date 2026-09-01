@@ -20,6 +20,8 @@ static int h_poke(cmd_req_t *q, char *r, int l) { (void)q; return cmd_okf(r, l, 
 static int h_wifi(cmd_req_t *q, char *r, int l) { (void)q; return cmd_okf(r, l, "WIFI"); }
 static int h_echo(cmd_req_t *q, char *r, int l) { (void)q; return cmd_okf(r, l, "ECHO"); }
 static int h_silent(cmd_req_t *q, char *r, int l){ (void)q; (void)r; (void)l; return 0; }  /* writes nothing */
+static int h_tag(cmd_req_t *q, char *r, int l)  { return cmd_okf(r, l, "TAG %d %s %s", (int)q->val[0], q->tok[1], q->tok[2]); }
+static int h_tag_mac(cmd_req_t *q, char *r, int l) { return cmd_okf(r, l, "TAGMAC %d %02X%02X", (int)q->val[0], q->mac[0], q->mac[5]); }
 
 static const cmd_arg_t A_LIGHT[] = {{"shelf",ARG_INT,1,4,NULL},{"white",ARG_INT,0,100,NULL},
                                     {"red",ARG_INT,0,100,NULL},{"minutes",ARG_INT,1,720,NULL}};
@@ -28,6 +30,8 @@ static const cmd_arg_t A_MAC[]   = {{"zone",ARG_INT,1,8,NULL},{"mac",ARG_MAC,0,0
 static const cmd_arg_t A_WHEN[]  = {{"at",ARG_TIME,0,1439,NULL}};
 static const cmd_arg_t A_CONF[]  = {{"confirm",ARG_ENUM,0,0,"CONFIRM"}};
 static const cmd_arg_t A_MODE[]  = {{"mode",ARG_ENUM,0,1,"OFF|ON"}};
+static const cmd_arg_t A_TAG[]   = {{"zone",ARG_INT,1,9,NULL},{"x",ARG_STR,0,15,NULL},{"mac",ARG_STR,0,15,NULL}};
+static const cmd_arg_t A_TAGMAC[] = {{"zone",ARG_INT,1,8,NULL},{"mac",ARG_MAC,0,0,NULL}};
 
 static const cmd_entry_t TBL[] = {
   { CMDV_SET|CMDV_GET, CMD_AREA_SHELF, "LIGHT", NULL, A_LIGHT, 1, 4, 4, CMDF_ACTUATOR|CMDF_ZONE, h_light, "manual override, then AUTO" },
@@ -39,6 +43,8 @@ static const cmd_entry_t TBL[] = {
   { CMDV_SET,          CMD_AREA_NET,   "WIFI", NULL,   A_MODE, 0, 1, 1, CMDF_MASTER, h_wifi, NULL },
   { CMDV_SET|CMDV_GET, CMD_AREA_SESSION,"ECHO", NULL,  A_MODE, 0, 1, 1, CMDF_SESSION, h_echo, NULL },
   { CMDV_GET,          CMD_AREA_SYSTEM,"SILENT", NULL, NULL,   0, 0, 0, 0, h_silent, NULL },
+  { CMDV_SET,          CMD_AREA_DEBUG, "TAG", NULL,    A_TAG, 1, 3, 3, 0, h_tag, NULL },
+  { CMDV_SET,          CMD_AREA_DEBUG, "TAG", "MAC",   A_TAGMAC, 1, 2, 2, 0, h_tag_mac, NULL },
 };
 #define TBL_N (int)(sizeof TBL / sizeof TBL[0])
 
@@ -155,6 +161,17 @@ static void test_internal_and_audit(void) {
     TEST_ASSERT_EQUAL_INT(1, audit_calls);                  /* GET is not audited */
 }
 
+static void test_split_noun_single_lookahead(void) {
+    /* Regression: two-word match only at noun0+2, not open-ended scan */
+    /* SET TAG 3 MAC <mac> should match two-word TAG MAC (noun2 at exactly noun0+2) */
+    TEST_ASSERT_EQUAL_INT(0, run("SET TAG 3 MAC 24:6F:28:AA:BB:02"));
+    TEST_ASSERT_EQUAL_STRING("OK TAGMAC 3 2402\n", resp);
+
+    /* SET TAG 3 x MAC should match one-word TAG with args "3", "x", "MAC" (no reroute) */
+    TEST_ASSERT_EQUAL_INT(0, run("SET TAG 3 x MAC"));
+    TEST_ASSERT_EQUAL_STRING("OK TAG 3 x MAC\n", resp);    /* q->tok[2]=="MAC" as STR arg, not noun2 */
+}
+
 int main(void) { UNITY_BEGIN();
     RUN_TEST(test_syntax_errors);
     RUN_TEST(test_match_case_and_two_word_precedence);
@@ -162,4 +179,5 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_gates);
     RUN_TEST(test_zone_prefix);
     RUN_TEST(test_internal_and_audit);
+    RUN_TEST(test_split_noun_single_lookahead);
     return UNITY_END(); }

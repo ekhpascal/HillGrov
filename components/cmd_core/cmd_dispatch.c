@@ -96,21 +96,18 @@ int cmd_dispatch(const cmd_core_t *core, cmd_session_t *ses, const char *line, c
 
     const cmd_entry_t *e = NULL;
     int args0 = 0;
-    int noun2_pos = -1;  /* position of noun2 if matched later, to skip in arg collection */
+    int noun2_pos = -1;  /* position of noun2 if matched with one arg in between */
 
     if (ntok > noun0 + 1) {
         e = match(core, vbit, tok[noun0], tok[noun0 + 1], 1);
         if (e) args0 = noun0 + 2;
     }
-    /* Try further ahead for two-word nouns with early arguments */
+    /* Try two-word noun with exactly one argument between them: noun0, arg, noun2 */
     if (!e && ntok > noun0 + 2) {
-        for (int i = noun0 + 2; i < ntok; i++) {
-            e = match(core, vbit, tok[noun0], tok[i], 1);
-            if (e) {
-                args0 = noun0 + 1;
-                noun2_pos = i;
-                break;
-            }
+        e = match(core, vbit, tok[noun0], tok[noun0 + 2], 1);
+        if (e) {
+            args0 = noun0 + 1;
+            noun2_pos = noun0 + 2;
         }
     }
     if (!e) {
