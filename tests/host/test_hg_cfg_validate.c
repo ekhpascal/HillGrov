@@ -75,10 +75,18 @@ static void test_cfg_rejects(void) {
     TEST_ASSERT_EQUAL_STRING("zonecfg.name", err);
 }
 
+static void test_str16_without_nul(void) {
+    hg_defaults_cfg(&cfg);
+    memset(cfg.shelf[0].crop, 'A', 16);  /* fill 16 bytes with 'A' (no NUL) */
+    TEST_ASSERT_EQUAL_INT(-1, hg_cfg_validate(&cfg, &hw, err, sizeof err));
+    TEST_ASSERT_EQUAL_STRING("shelf[0].crop", err);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_defaults_are_valid);
     RUN_TEST(test_hw_rejects);
     RUN_TEST(test_cfg_rejects);
+    RUN_TEST(test_str16_without_nul);
     return UNITY_END();
 }

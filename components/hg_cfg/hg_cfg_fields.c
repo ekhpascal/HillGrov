@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 #include "hg_cfg.h"
 
 const char *const HG_GROUP_NAMES[HG_G_COUNT] =
@@ -249,7 +250,7 @@ int hg_field_get_text(const hg_zone_hw_t *hw, const hg_zone_cfg_t *cfg, uint8_t 
     case HG_T_STR16: snprintf(out, cap, "%s", (const char *)src); return 0;
     case HG_T_BOOL:  snprintf(out, cap, "%u", *src); return 0;
     case HG_T_ENUM: { char b[16]; snprintf(out, cap, "%s", enum_name(f->enums, *src, b, sizeof b)); return 0; }
-    case HG_T_HHMM:  memcpy(&u16, src, 2); if (cap >= 6) hg_hhmm_format(u16, out); return 0;
+    case HG_T_HHMM: { char tmp[6]; memcpy(&u16, src, 2); hg_hhmm_format(u16, tmp); snprintf(out, cap, "%s", tmp); return 0; }
     case HG_T_PIN:
         if (*src == HG_NONE) snprintf(out, cap, "NONE");
         else snprintf(out, cap, "%u", *src);

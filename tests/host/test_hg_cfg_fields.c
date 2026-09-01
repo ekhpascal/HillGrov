@@ -81,11 +81,19 @@ static void test_errors(void) {
     TEST_ASSERT_EQUAL_INT(HG_G_WATER, hg_group_find("water"));
 }
 
+static void test_hhmm_truncation(void) {
+    char buf[4];
+    TEST_ASSERT_EQUAL_INT(0, hg_field_get_text(&hw, &cfg, HG_G_LIGHT, 0, "ON", buf, sizeof buf));
+    TEST_ASSERT_EQUAL_STRING("06:", buf);
+    TEST_ASSERT_EQUAL_CHAR('\0', buf[3]);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_table_integrity);
     RUN_TEST(test_set_get_roundtrip_all_rows);
     RUN_TEST(test_specific_forms);
     RUN_TEST(test_errors);
+    RUN_TEST(test_hhmm_truncation);
     return UNITY_END();
 }

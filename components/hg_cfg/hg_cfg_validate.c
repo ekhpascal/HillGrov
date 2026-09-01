@@ -28,9 +28,11 @@ static int fail(char *err, size_t n, int shelf, uint8_t group, const char *key) 
 }
 
 static int str16_ok(const char *s) {
-    for (int i = 0; i < 16 && s[i]; i++)
+    for (int i = 0; i < 16; i++) {
+        if (s[i] == '\0') return 1;
         if (s[i] < 0x20 || s[i] > 0x7E) return 0;
-    return s[15] == '\0' || 1; /* NUL guaranteed by writer; loaded blobs zero-filled */
+    }
+    return 0;
 }
 
 static long field_raw(const void *base, const hg_field_t *f) {
