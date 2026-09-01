@@ -35,7 +35,7 @@
 | Addr | Device | Notes |
 |---|---|---|
 | 0x68 | DS3231 RTC | time authority; AT24C32 EEPROM at 0x57 unused in V1 |
-| 0x20 | PCF8575 | relays (8 used, 8 spare): main fan, 3 dampers, shutter, refill solenoid, overall grow light, heater — pin map fixed in SP5 |
+| 0x20 | PCF8575 | relays (9 used, 7 spare): main fan, 3 dampers, blind open (P8) + blind close (P9), refill solenoid, overall grow light, heater — pin map fixed in SP5 |
 | 0x44 | SHT31 | growth-room temperature/humidity |
 | 0x45 | SHT31 #2 (optional) | workshop/“inside” temperature/humidity |
 | 0x62 | SCD41 | CO₂ (growth room) |
@@ -50,7 +50,8 @@
 | I²S audio out | 33 BCK · 32 WS/LRCK · 23 DOUT | GY-PCM5102 DAC; DAC SCK pin tied to GND (internal PLL) |
 | Reservoir level (strain gauge) | 34 (HX711 DOUT / analog in) · 5 (HX711 SCK) | GPIO5 high at reset = HX711 power-down (benign); no float switches — manual fill stop |
 | Room presence sensor | 39 (digital in, input-only) | PIR / mmWave OUT; external pull per module if open-collector |
-| Spare | 35, 36 (input-only ADC1) + 0 with care | further master I/O goes on the buses |
+| Blind end-stops | 35 (closed) · 36 (open) | input-only — **external pull-ups required** |
+| Spare | 0 with care only — master GPIO fully allocated | further master I/O goes on the buses |
 
 Reserved I²C: 0x70 (PCA9685 all-call — never use) · 0x48/0x49 (future ADS1115).
 
@@ -84,6 +85,7 @@ Reserved I²C: 0x70 (PCA9685 all-call — never use) · 0x48/0x49 (future ADS111
 - [ ] Display link: straight TX↔RX cross to the S3 (GPIO26→S3-RX, GPIO25←S3-TX), common GND.
 - [ ] RS-485 field bus: A/B twisted pair, 120 Ω termination at both ends, bias resistors per transceiver board; Modbus RTU 9600 8N1; unique slave addresses noted here when assigned.
 - [ ] Heater: mechanical thermal cutout/thermostat **in series** with the relay-switched line — mandatory before first power-on (§11.8).
+- [ ] Blind: external pull-ups on end-stop inputs GPIO35/36; motor stall-safe or fused; open/close relays verified never simultaneously closed (drive both = firmware bug → report).
 
 ## Power
 

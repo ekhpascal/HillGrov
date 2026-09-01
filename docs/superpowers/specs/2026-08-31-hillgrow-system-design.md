@@ -28,7 +28,7 @@ Zone identity is the eFuse MAC; the Master maps MAC → zone id / name / shelf c
 ```
  house Wi-Fi ──STA──┐                      phone/PC ──AP 192.168.7.7──┐
                     └──► MASTER (DevKitC-V4) ◄───────────────────────┘
-       I²C: DS3231 0x68 · PCF8575 0x20 (relays ×8: fan, 3 dampers, shutter, refill, overall grow light, heater) · SHT31 0x44 room + [0x45 workshop]
+       I²C: DS3231 0x68 · PCF8575 0x20 (relays ×9: fan, 3 dampers, blind open/close, refill, overall grow light, heater) · SHT31 0x44 room + [0x45 workshop]
        SCD41 0x62 CO₂ · SC16IS752 0x4D → RS-485 Modbus field bus (PAR sensor, remote T/RH)
        UART1 ↔ ESP32-S3 touch display (optional) · SPI2 → microSD · I²S → PCM5102A DAC · strain-gauge level (HX711: DOUT 34, SCK 5)
        UART2 TX ──► ZONE 1 RX     ZONE 1 TX ──► ZONE 2 RX  …  ZONE N TX ──► MASTER UART2 RX
@@ -56,6 +56,7 @@ Zone identity is the eFuse MAC; the Master maps MAC → zone id / name / shelf c
 | I²S audio (Master) | 33 BCK, 32 WS, 23 DOUT | PCM5102A (SCK pin → GND) |
 | Reservoir level (Master) | 34 (HX711 DOUT / analog in), 5 (HX711 SCK) | strain gauge; GPIO5 high at reset = HX711 power-down (benign) |
 | Room presence (Master) | 39 (digital in, input-only) | PIR / mmWave module OUT; occupancy-hold in firmware |
+| Blind end-stops (Master) | 35 (closed), 36 (open) | input-only; external pull-ups |
 | Never | 6–11, 12 | flash; MTDI strapping |
 
 Full table, GPIO budget and hardware rules live in `docs/pin-mapping.md`. Two rules carry a bring-up checkbox each: **PCF8575-driven loads must be active-low or gated** (the expander powers up with all pins HIGH); **PCA9685 OE needs a pull-up** (outputs disabled from power-on through boot/rescue/crash).
@@ -198,7 +199,7 @@ CRC vector + bit-flip; COBS round-trip 0..128 incl. resync and oversize; frame e
 | VALVE_REFILL (M) | 300 s (900) | 300 s | 1800 s (7200) | manual, operator-supervised fill (owner stops at full); level valid (strain gauge) and below max |
 | DAMPER (M) | per type (SP5) | — | — | open+close never together; closing last exhaust refused while fan ON |
 | FAN_MAIN (M) | — | 30 s | — | intake OPEN and ≥1 exhaust OPEN, re-checked every tick |
-| SHUTTER (M) | 60 s (120) | 5 s | — | — |
+| SHUTTER (M) | travel 60 s (120) | 5 s | — | DC-motor blind: open/close relays never together; stop at end-stop; no end-stop within travel time → latched F_SHUTTER_STUCK (§11.9) |
 | LIGHT_MAIN (M) | — | 30 s | 20 h (24 = unlimited) | overall grow light relay: own on/off schedule + duration-bounded manual override; coordinated with the blackout shutter (SP5) |
 | HEATER (M) | — | 60 s | configurable | valid room temp required; setpoint hysteresis; high-limit latch; mandatory mechanical thermal cutout in series (§11.8) |
 
@@ -488,11 +489,17 @@ I²C address map after this: 0x20 PCF8575 · 0x40 PCA9685 (option) · 0x44/0x45 
 
 A heater element on **PCF8575 relay P7** (the 8th relay; 8 spare pins remain). Safety class HEATER: runs only while the growth-room temperature reading is valid and below the high limit; setpoint with hysteresis; high-limit → latched fault + relay off; min-off anti-chatter 60 s; continuous/daily caps configurable. **Hardware rule (bring-up checklist): a mechanical thermal cutout/thermostat wired in series with the heater relay is mandatory** — firmware is never the last line of defence on a heating element. Dehumidifier control remains out of scope.
 
+### 11.9 Motorized blackout blind (updated 2026-09-01)
+
+The window blackout device is a **DC-motor-driven blind with end-stops**, replacing the single pulse relay. Drive: **two PCF8575 relays (P8 open / P9 close)** — reversing pair, never energised together (same hardware-interlock rule as the dampers). Position: **end-stop switches on GPIO35 (closed) and GPIO36 (open)** — input-only pins, external pull-ups required; position model CLOSED/OPENING/OPEN/CLOSING/UNKNOWN driven by the end-stops. Safety class SHUTTER becomes: drive stops the instant the target end-stop closes; travel timeout (default 60 s, cap 120 s) without reaching the end-stop → drive off + latched `F_SHUTTER_STUCK`; min-off 5 s between direction changes. Automation (SP5): close/open on schedule and as part of the photoperiod/blackout strategy (coordinated with the overall grow light); manual `SET OUT`-style commands remain duration-bounded. Bring-up rules: end-stop pull-ups; verify the motor is stall-safe or fused; verify relay rating vs motor stall current.
+
+With the end-stops on 35/36, **every directly usable Master GPIO is now allocated** — GPIO0 (strapping, with care) is the only remainder; all future Master I/O lives on the buses.
+
 ### 11.6 Room presence sensor (added 2026-09-01)
 
 A **room occupancy input on GPIO39** (input-only): PIR or mmWave radar module with a 3.3 V digital OUT. Firmware (SP5): debounce + configurable occupancy-hold timer; state in telemetry (`GET ROOM`), web UI and display node; `NOTIFY ROOM ENTER|EMPTY` edges; available as a condition for SP5 strategies (e.g. pause audio when the room empties, courtesy behaviour on entry) — never a safety input. If the module output is open-collector, an external pull resistor per its datasheet (GPIO39 has no internal pulls).
 
-Master GPIO after these allocations: free 35/36 (input-only ADC1) + 0 (with care); GPIO5 taken by the HX711 SCK, GPIO39 by the presence input. Further Master I/O grows on the buses (PCF8575 9 spare pins, more I²C devices, PCA9685 option).
+Master GPIO after these allocations: fully assigned — GPIO0 (with care) is the only remainder (GPIO5 = HX711 SCK, 34 = level, 35/36 = blind end-stops, 39 = presence). Further Master I/O grows on the buses (PCF8575 9 spare pins, more I²C devices, PCA9685 option).
 
 ---
 
