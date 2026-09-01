@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include "cmd_core.h"
@@ -17,6 +18,25 @@ static int row_visible(const cmd_core_t *core, const cmd_entry_t *e) {
     return 1;
 }
 
+/* Bounded append: writes fmt at buf[*off] within buf[0..cap), advances *off
+ * past what was actually written. snprintf/vsnprintf return the length they
+ * WOULD have written even when truncating, so accumulating that return value
+ * unclamped can push *off past cap on a later call, making buf+*off an
+ * out-of-bounds pointer and cap-*off underflow (huge size_t). This clamps
+ * *off to cap-1 (the NUL position) on truncation or when already full, so
+ * buf remains NUL-terminated and every write stays in bounds; further calls
+ * become safe no-ops. */
+static void sappend(char *buf, size_t cap, size_t *off, const char *fmt, ...) {
+    if (cap == 0 || *off >= cap) return;
+    va_list ap;
+    va_start(ap, fmt);
+    int w = vsnprintf(buf + *off, cap - *off, fmt, ap);
+    va_end(ap);
+    if (w < 0) return;                          /* encoding error: leave buf as-is (already NUL-terminated) */
+    if ((size_t)w >= cap - *off) { *off = cap - 1; return; }  /* truncated; vsnprintf still NUL-terminated at buf[cap-1] */
+    *off += (size_t)w;
+}
+
 static void render_arg(char *out, int cap, const cmd_arg_t *a) {
     switch (a->type) {
     case ARG_INT:  snprintf(out, (size_t)cap, "%s %ld-%ld", a->name, (long)a->min, (long)a->max); break;
@@ -33,11 +53,17 @@ static void render_arg(char *out, int cap, const cmd_arg_t *a) {
  * A two-word row with n_key >= 1 is "split-shape": its key args print
  * between noun1 and noun2 (e.g. "SET NODE <zone 1-8> NAME <name>"); a
  * two-word row with n_key == 0 is "adjacent" (noun1 noun2 <all args>),
- * e.g. "SET FW ROLLBACK <CONFIRM>". */
-static void render_usage(const cmd_entry_t *e, uint8_t vbit, char *out, int cap) {
-    int off = snprintf(out, (size_t)cap, "+ %s%s",
-                        vbit == CMDV_SET ? "SET " : vbit == CMDV_GET ? "GET " : "",
-                        e->noun1);
+ * e.g. "SET FW ROLLBACK <CONFIRM>".
+ * Deliberately not `static`: not part of the public API (not in
+ * cmd_core.h), but host tests link against it directly to exercise the
+ * sappend() buffer-clamping on a small, test-controlled cap. */
+void render_usage(const cmd_entry_t *e, uint8_t vbit, char *out, int cap) {
+    if (cap <= 0) return;
+    out[0] = '\0';
+    size_t off = 0;
+    sappend(out, (size_t)cap, &off, "+ %s%s",
+            vbit == CMDV_SET ? "SET " : vbit == CMDV_GET ? "GET " : "",
+            e->noun1);
     int nargs  = (vbit == CMDV_GET) ? e->n_key   : e->max_args;
     int minidx = (vbit == CMDV_GET) ? e->n_key   : e->min_args;
     int split  = e->noun2 && e->n_key >= 1;
@@ -46,15 +72,15 @@ static void render_usage(const cmd_entry_t *e, uint8_t vbit, char *out, int cap)
     int i = 0;
     for (; i < keyn; i++) {
         char a[40]; render_arg(a, (int)sizeof a, &e->args[i]);
-        off += snprintf(out + off, (size_t)(cap - off), i >= minidx ? " [<%s>]" : " <%s>", a);
+        sappend(out, (size_t)cap, &off, i >= minidx ? " [<%s>]" : " <%s>", a);
     }
-    if (e->noun2) off += snprintf(out + off, (size_t)(cap - off), " %s", e->noun2);
+    if (e->noun2) sappend(out, (size_t)cap, &off, " %s", e->noun2);
     for (; i < nargs; i++) {
         char a[40]; render_arg(a, (int)sizeof a, &e->args[i]);
-        off += snprintf(out + off, (size_t)(cap - off), i >= minidx ? " [<%s>]" : " <%s>", a);
+        sappend(out, (size_t)cap, &off, i >= minidx ? " [<%s>]" : " <%s>", a);
     }
-    if (e->flags & CMDF_UNLOCK) off += snprintf(out + off, (size_t)(cap - off), " [unlock]");
-    if (vbit != CMDV_GET && e->desc) off += snprintf(out + off, (size_t)(cap - off), "  -- %s", e->desc);
+    if (e->flags & CMDF_UNLOCK) sappend(out, (size_t)cap, &off, " [unlock]");
+    if (vbit != CMDV_GET && e->desc) sappend(out, (size_t)cap, &off, "  -- %s", e->desc);
 }
 
 int cmd_help(const cmd_core_t *core, cmd_session_t *ses, const char *const *tok, int ntok, char *resp, int len) {
@@ -69,9 +95,9 @@ int cmd_help(const cmd_core_t *core, cmd_session_t *ses, const char *const *tok,
             for (int i = 0; i < core->table_len; i++) {
                 const cmd_entry_t *e = &core->table[i];
                 if (e->area != a || !row_visible(core, e)) continue;
-                if (any) off += (size_t)snprintf(nouns + off, sizeof nouns - off, ", ");
-                if (e->noun2) off += (size_t)snprintf(nouns + off, sizeof nouns - off, "%s %s", e->noun1, e->noun2);
-                else          off += (size_t)snprintf(nouns + off, sizeof nouns - off, "%s", e->noun1);
+                if (any) sappend(nouns, sizeof nouns, &off, ", ");
+                if (e->noun2) sappend(nouns, sizeof nouns, &off, "%s %s", e->noun1, e->noun2);
+                else          sappend(nouns, sizeof nouns, &off, "%s", e->noun1);
                 any = 1;
             }
             if (any) cmd_linef(resp, len, "+ %s: %s -- <NOUN> HELP for details", AREA_NAMES[a], nouns);

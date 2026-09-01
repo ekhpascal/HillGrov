@@ -4,6 +4,11 @@
 #include "fake_clock.h"
 #include "test_cmd_core_fixture.h"
 
+/* cmd_help.c's render_usage() is deliberately non-static (not declared in
+ * cmd_core.h -- it is not public API) so this test can call it directly
+ * with a small, test-controlled buffer to exercise its offset clamping. */
+void render_usage(const cmd_entry_t *e, uint8_t vbit, char *out, int cap);
+
 static cmd_core_t core;
 static cmd_session_t ses;
 static char resp[CMD_RESP_MAX];
@@ -72,6 +77,14 @@ static void test_help_full_listing_under_4000_bytes(void) {
     TEST_ASSERT_TRUE(strlen(resp) < 4000);
     TEST_ASSERT_EQUAL_INT(0, run("GET HELP"));
     TEST_ASSERT_TRUE(strlen(resp) < 4000);
+
+    /* same guard under master role, where MASTER-flagged rows (hidden on
+       zone) become visible and add to the listing */
+    core.role = CMD_ROLE_MASTER;
+    TEST_ASSERT_EQUAL_INT(0, run("SET HELP"));
+    TEST_ASSERT_TRUE(strlen(resp) < 4000);
+    TEST_ASSERT_EQUAL_INT(0, run("GET HELP"));
+    TEST_ASSERT_TRUE(strlen(resp) < 4000);
 }
 
 static void test_help_split_noun_row(void) {
@@ -129,6 +142,56 @@ static void test_table_check_n_key_exceeds_max_args(void) {
     TEST_ASSERT_EQUAL_INT(0, cmd_table_check(&bad, 1));
 }
 
+static void test_table_check_min_exceeds_max_args(void) {
+    cmd_entry_t bad = TBL[0];           /* LIGHT: min_args 4, max_args 4 */
+    bad.min_args = 5;
+    TEST_ASSERT_EQUAL_INT(0, cmd_table_check(&bad, 1));
+}
+
+static void test_table_check_max_args_exceeds_cmd_max(void) {
+    cmd_entry_t bad = TBL[0];           /* LIGHT: max_args 4, n_key/min_args unaffected */
+    bad.max_args = CMD_MAX_ARGS + 1;
+    TEST_ASSERT_EQUAL_INT(0, cmd_table_check(&bad, 1));
+}
+
+static void test_table_check_null_handler(void) {
+    cmd_entry_t bad = TBL[0];
+    bad.handler = NULL;
+    TEST_ASSERT_EQUAL_INT(0, cmd_table_check(&bad, 1));
+}
+
+static void test_table_check_enum_null_enums(void) {
+    static const cmd_arg_t BAD_ENUM_ARGS[] = { {"mode", ARG_ENUM, 0, 1, NULL} };
+    cmd_entry_t bad = TBL[5];           /* POKE: SET-only, 1 ENUM arg */
+    bad.args = BAD_ENUM_ARGS;
+    TEST_ASSERT_EQUAL_INT(0, cmd_table_check(&bad, 1));
+}
+
+static void test_table_check_long_line_no_corruption(void) {
+    /* 8 ENUM args whose rendered text runs well past render_usage's 224-byte
+       internal buffer -- exercises sappend()'s offset clamping without a
+       crash or out-of-bounds write, and still correctly flags the row via
+       the >96-char rule (a truncated line is still > 96 chars here). */
+    static const char LONGENUM[] =
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";  /* 68 chars */
+    static const cmd_arg_t LONG_ARGS[8] = {
+        {"a1", ARG_ENUM, 0, 0, LONGENUM}, {"a2", ARG_ENUM, 0, 0, LONGENUM},
+        {"a3", ARG_ENUM, 0, 0, LONGENUM}, {"a4", ARG_ENUM, 0, 0, LONGENUM},
+        {"a5", ARG_ENUM, 0, 0, LONGENUM}, {"a6", ARG_ENUM, 0, 0, LONGENUM},
+        {"a7", ARG_ENUM, 0, 0, LONGENUM}, {"a8", ARG_ENUM, 0, 0, LONGENUM},
+    };
+    cmd_entry_t bad = { CMDV_SET, CMD_AREA_DEBUG, "LONG", NULL, LONG_ARGS, 0, 8, 8, 0, h_poke, NULL };
+    TEST_ASSERT_EQUAL_INT(0, cmd_table_check(&bad, 1));   /* flagged; no crash */
+
+    /* render directly into an undersized (64-byte) buffer: must stay in
+       bounds and leave a NUL-terminated, truncated string */
+    char small[64];
+    memset(small, 0x7E, sizeof small);   /* sentinel fill: '~' everywhere */
+    render_usage(&bad, CMDV_SET, small, (int)sizeof small);
+    TEST_ASSERT_EQUAL_INT('\0', small[sizeof small - 1]);
+    TEST_ASSERT_TRUE(strlen(small) < sizeof small);
+}
+
 int main(void) { UNITY_BEGIN();
     RUN_TEST(test_help_bare);
     RUN_TEST(test_help_set_light_exact);
@@ -142,4 +205,9 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_table_check_actuator_missing_duration_arg);
     RUN_TEST(test_table_check_bare_combined_with_set);
     RUN_TEST(test_table_check_n_key_exceeds_max_args);
+    RUN_TEST(test_table_check_min_exceeds_max_args);
+    RUN_TEST(test_table_check_max_args_exceeds_cmd_max);
+    RUN_TEST(test_table_check_null_handler);
+    RUN_TEST(test_table_check_enum_null_enums);
+    RUN_TEST(test_table_check_long_line_no_corruption);
     return UNITY_END(); }
