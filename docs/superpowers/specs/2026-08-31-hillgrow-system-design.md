@@ -17,7 +17,7 @@ Three IDF apps in one repository share `components/`:
 
 | Image | Runs on | Contains | Never contains |
 |---|---|---|---|
-| `master.bin` | 1 × DevKitC-V4 (8 MB, 16 MB optional) | Wi-Fi APSTA (AP `192.168.7.7` + STA to house Wi-Fi), web UI + HTTP API, ring master / node manager, zone & shelf model, global control (ventilation, dampers, reservoir, shutter, overall grow light, alarms), DS3231 time authority, CLI on UART0 | shelf hardware control |
+| `master.bin` | 1 × DevKitC-V4 (8 MB, 16 MB optional) | Wi-Fi APSTA (AP `192.168.7.7` + STA to house Wi-Fi), web UI + HTTP API, ring master / node manager, zone & shelf model, global control (ventilation, dampers, reservoir, shutter, overall grow light, alarms), DS3231 time authority, CLI on UART0, UART display link (ESP32-S3 touch panel), SD card + I²S audio player | shelf hardware control |
 | `zone.bin` | N × DevKitC-V4 (4 MB WROOM OK) | 1–4 Shelf objects, PCA9685 / PCF8575 / soil-ADC drivers, lighting / watering / fan / actuator controllers, safety manager, ring node, CLI on UART0 | Wi-Fi, HTTP |
 | `rescue.bin` | every node, `factory` partition | Wi-Fi + one upload page (manual mode) or pull-from-Master (fleet OTA) + OTA write | CLI, control logic, API |
 
@@ -29,6 +29,7 @@ Zone identity is the eFuse MAC; the Master maps MAC → zone id / name / shelf c
  house Wi-Fi ──STA──┐                      phone/PC ──AP 192.168.7.7──┐
                     └──► MASTER (DevKitC-V4) ◄───────────────────────┘
        I²C: DS3231 0x68 · PCF8575 0x20 (relays: fan, 3 dampers, shutter, refill, overall grow light) · [SHT31 0x44]
+       UART1 ↔ ESP32-S3 touch display (optional) · SPI2 → microSD · I²S → PCM5102A DAC · ADC 34/35/36 reservoir
        UART2 TX ──► ZONE 1 RX     ZONE 1 TX ──► ZONE 2 RX  …  ZONE N TX ──► MASTER UART2 RX
                      │ I²C: PCA9685 0x40 (8 LED ch WHITE/RED × 4 shelves, OE → GPIO23)
                      │      PCF8575 0x20 (4 pumps, 4 fans, vibrator, spare)
@@ -49,6 +50,10 @@ Zone identity is the eFuse MAC; the Master maps MAC → zone id / name / shelf c
 | PCA9685 OE (Zone) | 23 | active-low; **external pull-up** keeps LED outputs disabled until firmware enables |
 | Soil ADC1 (Zone) | 32, 33, 34, 35, 36, 39 | ADC1_CH4/5/6/7/0/3 |
 | Soil ADC2 (Zone) | 25, 26 | ADC2_CH8/9 — usable because `zone.bin` never starts Wi-Fi |
+| Display link UART1 (Master) | 25 (RX ← S3), 26 (TX → S3) | machine-mode CLI + NOTIFY, 115200 |
+| microSD SPI2 (Master) | 14 SCK, 13 MOSI, 27 MISO, 4 CS | FAT, media only |
+| I²S audio (Master) | 33 BCK, 32 WS, 23 DOUT | PCM5102A (SCK pin → GND) |
+| Reservoir (Master) | 34 level ADC, 35 float LOW, 36 float HIGH | input-only; external pull-ups on floats |
 | Never | 6–11, 12 | flash; MTDI strapping |
 
 Full table, GPIO budget and hardware rules live in `docs/pin-mapping.md`. Two rules carry a bring-up checkbox each: **PCF8575-driven loads must be active-low or gated** (the expander powers up with all pins HIGH); **PCA9685 OE needs a pull-up** (outputs disabled from power-on through boot/rescue/crash).
@@ -88,7 +93,7 @@ HillGrov/
 
 ### 1.6 Out of scope for V1
 
-Cloud connectivity; ADS1115 soil-ADC backend; PWM fan speed; ring-carried OTA; OTA of the rescue image; any Wi-Fi in `zone.bin`; heater / dehumidifier control; a display.
+Cloud connectivity; ADS1115 soil-ADC backend; PWM fan speed; ring-carried OTA; OTA of the rescue image; any Wi-Fi in `zone.bin`; heater / dehumidifier control.
 
 ---
 
@@ -402,6 +407,8 @@ RAM: zone free heap ≈ 220 KB after boot; Master ≈ 95–110 KB (Wi-Fi buffer 
 | 3 | Ring link | `ring_proto`/`ring_link`/`node_mgr` + forwarding + enrolment + config push + TIME_SYNC + FW_UPDATE handshake | Master + 2 zones: discovery, `SET ZONE 2 …` round-trips, heartbeats drive the node table, break blame correct when a node is unplugged, config pushed and reverted per §4.4, fleet OTA of one zone end-to-end via rescue pull |
 | 4 | Master web UI | `wifi_mgr`/`http_srv`/`hg_json`/`hg_fs`/`alarm_mgr`/`history` + pages (gzipped `EMBED_FILES` assets, vanilla JS) | Phone on the AP at 192.168.7.7: dashboard of all zones/shelves, config editing, alarms, history plots + text export, both firmware uploads, zone fleet update button |
 | 5 | Master global control | `time_svc`/`ds3231`/`sht31`/`psychro`/`vent_ctrl`/`reservoir_ctrl`/`shutter_ctrl` + Master pin map | Ventilation strategy on dew point with damper interlocks, reservoir refill with all guards, blackout shutter, overall-grow-light schedule, `inhibit_mask` propagation — hardware details fixed in the SP5 feature spec first |
+| 6 | Display node | `display/` app: ESP32-S3-DevKitC-1 + ST7796S 480×320 touch (HillBT-s3 hardware), LVGL 9, UART API client; Master gains a UART1 machine-mode CLI session + NOTIFY sink | One-screen touch panel shows live status and runs API commands; Master unaffected when the display is absent (§11.1) |
+| 7 | Media & storage | microSD (SPI2, FAT) + I²S → PCM5102A + audio player component | WAV playback from SD controlled via CLI/web/display without disturbing control loops (§11.2–11.3) |
 
 Each sub-project gets its own dated feature spec (where §-level detail is still open: SP2 controller state machines + optional DLI; SP4 page inventory; SP5 hardware) and implementation plan. **First milestone** = SP1 done criteria; first hardware smoke test: two DevKitCs, `HELP` on both consoles, rescue upload page reachable.
 
@@ -428,6 +435,28 @@ C (C11/gnu23 as compiled by IDF 6, `-Wall -Werror -Wextra`); one `.h`/`.c` pair 
 - SP5 spec: damper type (2-/3-wire, end switches), reservoir sensing (floats vs load cell), climate sensor (SHT31 default), Master PCF8575 relay map + `docs/pin-mapping.md` Master section, NC high-level float backstop.
 - Hardware bring-up checklist lives in `docs/pin-mapping.md` (active-low PCF loads, OE pull-up, ring RX pull-ups, soil pull-downs, I²C pull-ups, measure before connecting).
 - Pump limit defaults (60 s/600 s) are safe-direction placeholders — re-derive from measured peristaltic flow and pot volume during SP2 bring-up.
+
+---
+
+## 11. Owner extensions (added 2026-09-01)
+
+### 11.1 Display node — ESP32-S3 touch panel (new sub-project 6)
+
+A dedicated `display/` app on an **ESP32-S3-DevKitC-1 (N8R8)** with the proven HillBT-s3 display hardware, reused nearly unchanged: 3.5″ ST7796S 480×320 over SPI (40/80 MHz) + XPT2046 touch on a second SPI bus, LVGL 9 via `esp_lvgl_port`, no Wi-Fi/BT, single factory app (USB flashing; no rescue/AB for this node). It connects to the Master over a plain UART and is **just another API client**: it sends CLI lines and consumes `OK/ERR` + `NOTIFY` (the HillBT `wrover_link` pattern). Master side: a second machine-mode CLI session on **UART1 (GPIO26 TX → S3, GPIO25 RX ← S3, 115200)** plus a NOTIFY sink — no new command surface, no bypass of anything. Deliberately NOT a web-UI duplicate: V1 is **one screen** — status icons (zones online, faults, ring, reservoir) + a few live values + a couple of touch buttons mapped to API commands; expanded later. The Master runs identically with the display absent.
+
+### 11.2 SD card on the Master (new sub-project 7)
+
+MicroSD (3.3 V SPI module) on **SPI2: SCK GPIO14 · MOSI GPIO13 · MISO GPIO27 · CS GPIO4**, FAT via `esp_vfs_fat`/`sdspi`, hot-plug tolerant (mount on demand, all consumers survive a missing card). Purpose: **media storage** (audio, bulk file drops). Alarms and history stay on internal LittleFS — the system's records never depend on a removable card.
+
+### 11.3 Audio out — I²S → PCM5102A (new sub-project 7)
+
+**I²S: BCK GPIO33 · WS/LRCK GPIO32 · DOUT GPIO23** to a GY-PCM5102 DAC board (its SCK pin tied to GND → internal PLL). Player streams audio files from the SD card: **WAV in V1**, MP3 via a software decoder as a stretch goal decided in the SP7 feature spec. Control through the normal command surface (CLI + web + display node): PLAY/STOP/NEXT, playlist folder, soft volume; `NOTIFY` on track change. The player runs as an isolated task (I²S DMA + its own file-read task, ~24 KB buffers) and must never delay control, ring or safety work; audio RAM is accounted against the Master's free-heap budget (§6.4).
+
+### 11.4 Reservoir sensing pins (allocated now, implemented in SP5)
+
+**GPIO34 = analog level input (ADC1_CH6)** for a level/pressure sensor or a load-cell amplifier output; **GPIO35 = LOW float, GPIO36 = HIGH float** (input-only pins — external pull-ups required). GPIO39 stays the last spare analog input. The NC high-level float in series with the refill solenoid coil remains the hardware backstop. If SP5 chooses an HX711 load cell instead, its clock/data pair takes GPIO39 + one strapping-care pin, decided there.
+
+With these allocations the Master's directly usable GPIO set is fully assigned except GPIO39 (and 0/5 with care); further Master I/O grows on the buses (PCF8575 has 9 spare pins, more I²C devices, PCA9685 option).
 
 ---
 
