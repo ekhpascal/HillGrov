@@ -36,6 +36,13 @@ void hg_defaults_cfg(hg_zone_cfg_t *cfg) {
     cfg->source = HG_SRC_LOCAL;
     cfg->link_loss_timeout_s = 30;
     strcpy(cfg->name, "zone");
+    for (int i = 0; i < HG_MAX_AUX; i++) {
+        cfg->aux[i].mode = 0;
+        cfg->aux[i].pulse_s = 1;
+        cfg->aux[i].interval_min = 5;
+        cfg->aux[i].start_min = 0;
+        cfg->aux[i].end_min = 0;
+    }
     for (int i = 0; i < HG_MAX_SHELVES; i++) {
         hg_shelf_cfg_t *s = &cfg->shelf[i];
         s->enabled = 0;
