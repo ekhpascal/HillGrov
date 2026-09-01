@@ -65,6 +65,22 @@ static void test_take_dirty(void) {
     TEST_ASSERT_EQUAL_UINT32(0, hg_model_take_dirty(HG_CH_CFG, &staged, &gen)); /* cleared */
 }
 
+static void test_take_dirty_hw(void) {
+    TEST_ASSERT_EQUAL_INT(0, hg_model_edit(ed_cal, NULL, err, sizeof err));      /* HW_LIVE commit: hw_gen=1 */
+    uint8_t v = 70;
+    TEST_ASSERT_EQUAL_INT(0, hg_model_edit(ed_set_target, &v, err, sizeof err)); /* interleaved cfg edit */
+    uint8_t pin = 9;
+    TEST_ASSERT_EQUAL_INT(0, hg_model_edit(ed_pump_pin, &pin, err, sizeof err)); /* HW commit: hw_gen=2 */
+
+    hg_zone_hw_t staged_hw; uint32_t gen = 0;
+    TEST_ASSERT_EQUAL_UINT32(sizeof(hg_zone_hw_t), hg_model_take_dirty(HG_CH_HW, &staged_hw, &gen));
+    TEST_ASSERT_EQUAL_UINT32(2, gen); /* one increment per commit that touched hw */
+    TEST_ASSERT_EQUAL_UINT16(2900, staged_hw.shelf[0].soil_dry_mv[0]); /* cal edit */
+    TEST_ASSERT_EQUAL_UINT8(9, staged_hw.shelf[0].pump_pin);           /* pump-pin edit */
+    TEST_ASSERT_EQUAL_UINT32(0, hg_model_take_dirty(HG_CH_HW, &staged_hw, &gen)); /* cleared */
+    TEST_ASSERT_EQUAL_UINT8(HG_CH_CFG, hg_model_dirty_mask()); /* CFG bit from interleaved edit untouched */
+}
+
 static void test_boot_load(void) {
     hg_zone_cfg_t c; hg_zone_hw_t h;
     hg_defaults_cfg(&c); hg_defaults_hw(&h);
@@ -81,5 +97,6 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_invalid_edit_changes_nothing);
     RUN_TEST(test_hw_edit_restart_pending_cal_not);
     RUN_TEST(test_take_dirty);
+    RUN_TEST(test_take_dirty_hw);
     RUN_TEST(test_boot_load);
     return UNITY_END(); }
