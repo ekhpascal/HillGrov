@@ -54,6 +54,7 @@ Zone identity is the eFuse MAC; the Master maps MAC → zone id / name / shelf c
 | microSD SPI2 (Master) | 14 SCK, 13 MOSI, 27 MISO, 4 CS | FAT, media only |
 | I²S audio (Master) | 33 BCK, 32 WS, 23 DOUT | PCM5102A (SCK pin → GND) |
 | Reservoir level (Master) | 34 (HX711 DOUT / analog in), 5 (HX711 SCK) | strain gauge; GPIO5 high at reset = HX711 power-down (benign) |
+| Room presence (Master) | 39 (digital in, input-only) | PIR / mmWave module OUT; occupancy-hold in firmware |
 | Never | 6–11, 12 | flash; MTDI strapping |
 
 Full table, GPIO budget and hardware rules live in `docs/pin-mapping.md`. Two rules carry a bring-up checkbox each: **PCF8575-driven loads must be active-low or gated** (the expander powers up with all pins HIGH); **PCA9685 OE needs a pull-up** (outputs disabled from power-on through boot/rescue/crash).
@@ -468,7 +469,11 @@ Every shelf gets its own pollination vibrator, **PWM-controlled for intensity**,
 
 Every shelf gets its own pollination vibrator, **PWM-controlled for intensity**, on **PCA9685 channels 8–11** (shelf 1–4). Consequences: the vibrators sit behind the same hardware OE kill line as the lights (dead through boot/crash/rescue); PCF8575 **P8 is freed** — the zone expander now carries 4 pumps + 4 fans + 8 spare relay pins; PCA channels **12–15 remain reserved** for future fan PWM. Data model: `vib_ch` joins the per-shelf hardware map, and a per-shelf `VIB` config group replaces the old zone-level pollination aux device — `MODE OFF|PULSE · INTENSITY 20–100 % · PULSE_S 1–30 · INTERVAL_MIN 5–1440 · START/END window`; safety class VIB applies per shelf (pulse ≤ 10 s default/30 cap, 60 s gap, 600 s/day per shelf). Struct sizes change: `hg_shelf_cfg_t` 56 → 72 B, `hg_zone_cfg_t` 272 → 336 B (blob 352 B = 4 ring chunks). The `aux[2]` slots remain for generic spare-relay devices.
 
-Master GPIO after these allocations: free 35/36/39 (input-only ADC1) + 0 (with care); GPIO5 taken by the HX711 SCK. Further Master I/O grows on the buses (PCF8575 9 spare pins, more I²C devices, PCA9685 option).
+### 11.6 Room presence sensor (added 2026-09-01)
+
+A **room occupancy input on GPIO39** (input-only): PIR or mmWave radar module with a 3.3 V digital OUT. Firmware (SP5): debounce + configurable occupancy-hold timer; state in telemetry (`GET ROOM`), web UI and display node; `NOTIFY ROOM ENTER|EMPTY` edges; available as a condition for SP5 strategies (e.g. pause audio when the room empties, courtesy behaviour on entry) — never a safety input. If the module output is open-collector, an external pull resistor per its datasheet (GPIO39 has no internal pulls).
+
+Master GPIO after these allocations: free 35/36 (input-only ADC1) + 0 (with care); GPIO5 taken by the HX711 SCK, GPIO39 by the presence input. Further Master I/O grows on the buses (PCF8575 9 spare pins, more I²C devices, PCA9685 option).
 
 ---
 

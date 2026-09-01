@@ -46,7 +46,8 @@
 | microSD (SPI2) | 14 SCK · 13 MOSI · 27 MISO · 4 CS | 3.3 V SPI module, FAT; media only — alarms/history stay on internal flash |
 | I²S audio out | 33 BCK · 32 WS/LRCK · 23 DOUT | GY-PCM5102 DAC; DAC SCK pin tied to GND (internal PLL) |
 | Reservoir level (strain gauge) | 34 (HX711 DOUT / analog in) · 5 (HX711 SCK) | GPIO5 high at reset = HX711 power-down (benign); no float switches — manual fill stop |
-| Spare | 35, 36, 39 (input-only ADC1) + 0 with care | further master I/O goes on the buses |
+| Room presence sensor | 39 (digital in, input-only) | PIR / mmWave OUT; external pull per module if open-collector |
+| Spare | 35, 36 (input-only ADC1) + 0 with care | further master I/O goes on the buses |
 
 Reserved I²C: 0x70 (PCA9685 all-call — never use) · 0x48/0x49 (future ADS1115).
 
