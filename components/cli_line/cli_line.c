@@ -89,6 +89,9 @@ static void hist_down(cli_line_t *l, char *echo_out, size_t echo_cap, size_t *ec
 cli_evt_t cli_line_feed(cli_line_t *l, uint8_t b, uint32_t now_ms,
                          char *echo_out, size_t echo_cap, size_t *echo_len) {
     *echo_len = 0;
+    if (l->len == 0) l->buf[0] = '\0';      /* buf may still hold a taken line's leftover bytes */
+    int was_cr = l->last_cr;
+    l->last_cr = 0;                          /* only an immediately-following LF swallows */
 
     /* Machine mode: a partial line idle past STALE_MS is discarded before this byte is processed. */
     if (!l->echo && l->len > 0 && now_ms - l->last_ms > STALE_MS) {
@@ -115,8 +118,8 @@ cli_evt_t cli_line_feed(cli_line_t *l, uint8_t b, uint32_t now_ms,
     }
 
     if (b == '\r' || b == '\n') {
-        if (b == '\n' && l->last_cr) { l->last_cr = 0; return CLI_EVT_NONE; }  /* LF after CR swallowed */
-        l->last_cr = (uint8_t)(b == '\r');
+        if (b == '\n' && was_cr) return CLI_EVT_NONE;       /* LF immediately after CR swallowed */
+        if (b == '\r') l->last_cr = 1;
         l->browsing = 0;
         if (l->overflow) {
             l->overflow = 0;
@@ -126,7 +129,7 @@ cli_evt_t cli_line_feed(cli_line_t *l, uint8_t b, uint32_t now_ms,
             return CLI_EVT_TOO_LONG;
         }
         l->buf[l->len] = '\0';
-        hist_push(l);
+        if (l->echo) hist_push(l);                          /* history capture is human-mode only */
         echo_put(l, echo_out, echo_cap, echo_len, "\r\n", 2);
         return CLI_EVT_LINE;
     }
@@ -137,7 +140,6 @@ cli_evt_t cli_line_feed(cli_line_t *l, uint8_t b, uint32_t now_ms,
         l->overflow = 0;
         l->browsing = 0;
         l->hist_pos = -1;
-        l->last_cr = 0;
         echo_put(l, echo_out, echo_cap, echo_len, "^C\r\n", 4);
         return CLI_EVT_NONE;
     }

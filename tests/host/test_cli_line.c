@@ -36,6 +36,21 @@ static void test_crlf_swallow_and_lf_alone(void) {
     TEST_ASSERT_EQUAL_STRING("", cli_line_take(&l));
 }
 
+static void test_crlf_swallow_immediate_only(void) {
+    /* A stale last_cr flag must not swallow an LF that isn't immediately after the CR. */
+    TEST_ASSERT_EQUAL_INT(CLI_EVT_LINE, feed("\r"));
+    TEST_ASSERT_EQUAL_STRING("", cli_line_take(&l));
+    TEST_ASSERT_EQUAL_INT(CLI_EVT_NONE, feed("a"));
+    TEST_ASSERT_EQUAL_INT(CLI_EVT_LINE, feed("\n"));         /* not swallowed: 'a' intervened */
+    TEST_ASSERT_EQUAL_STRING("a", cli_line_take(&l));
+
+    TEST_ASSERT_EQUAL_INT(CLI_EVT_LINE, feed("\r"));
+    TEST_ASSERT_EQUAL_STRING("", cli_line_take(&l));
+    cli_line_feed(&l, 0x00, fake_clock_now(), eo, sizeof eo, &eol);  /* noise intervened */
+    TEST_ASSERT_EQUAL_INT(CLI_EVT_LINE, feed("\n"));         /* not swallowed */
+    TEST_ASSERT_EQUAL_STRING("", cli_line_take(&l));
+}
+
 static void test_history_up_down(void) {
     feed("AAA\r"); cli_line_take(&l);
     feed("BBB\r"); cli_line_take(&l);
@@ -72,6 +87,9 @@ static void test_machine_mode_stale_and_esc_noise(void) {
     TEST_ASSERT_EQUAL_UINT32(1, cli_line_stale(&l));
     feed("\x1b");
     TEST_ASSERT_EQUAL_UINT32(1, cli_line_noise(&l));
+    cli_line_set_echo(&l, 1);                                /* switch to human mode */
+    feed("\x1b[A");                                          /* "Z" must not be recallable: */
+    TEST_ASSERT_EQUAL_STRING("", l_buf_peek());              /* it was received in machine mode */
 }
 
 static void test_ctrl_c(void) {
@@ -85,6 +103,7 @@ static void test_ctrl_c(void) {
 int main(void) { UNITY_BEGIN();
     RUN_TEST(test_basic_line_and_backspace);
     RUN_TEST(test_crlf_swallow_and_lf_alone);
+    RUN_TEST(test_crlf_swallow_immediate_only);
     RUN_TEST(test_history_up_down);
     RUN_TEST(test_too_long_and_noise);
     RUN_TEST(test_machine_mode_stale_and_esc_noise);
