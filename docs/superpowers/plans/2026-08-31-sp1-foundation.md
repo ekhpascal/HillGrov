@@ -1058,6 +1058,7 @@ Expected: both FAIL (stubs).
 - [ ] **Step 3: Implement `components/hg_cfg/hg_cfg_fields.c`**
 
 ```c
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1309,7 +1310,7 @@ int hg_field_get_text(const hg_zone_hw_t *hw, const hg_zone_cfg_t *cfg, uint8_t 
     case HG_T_STR16: snprintf(out, cap, "%s", (const char *)src); return 0;
     case HG_T_BOOL:  snprintf(out, cap, "%u", *src); return 0;
     case HG_T_ENUM: { char b[16]; snprintf(out, cap, "%s", enum_name(f->enums, *src, b, sizeof b)); return 0; }
-    case HG_T_HHMM:  memcpy(&u16, src, 2); if (cap >= 6) hg_hhmm_format(u16, out); return 0;
+    case HG_T_HHMM: { char tmp[6]; memcpy(&u16, src, 2); hg_hhmm_format((int)u16, tmp); snprintf(out, cap, "%s", tmp); return 0; }
     case HG_T_PIN:
         if (*src == HG_NONE) snprintf(out, cap, "NONE");
         else snprintf(out, cap, "%u", *src);
@@ -1349,9 +1350,11 @@ static int fail(char *err, size_t n, int shelf, uint8_t group, const char *key) 
 }
 
 static int str16_ok(const char *s) {
-    for (int i = 0; i < 16 && s[i]; i++)
+    for (int i = 0; i < 16; i++) {
+        if (s[i] == '\0') return 1;
         if (s[i] < 0x20 || s[i] > 0x7E) return 0;
-    return s[15] == '\0' || 1; /* NUL guaranteed by writer; loaded blobs zero-filled */
+    }
+    return 0; /* no NUL within the 16-byte field */
 }
 
 static long field_raw(const void *base, const hg_field_t *f) {
