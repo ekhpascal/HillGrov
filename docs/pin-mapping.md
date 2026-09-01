@@ -45,9 +45,8 @@
 | Display link UART1 | 26 (TX → S3 RX), 25 (RX ← S3 TX) | ESP32-S3 touch panel, machine-mode CLI + NOTIFY, 115200 8N1 |
 | microSD (SPI2) | 14 SCK · 13 MOSI · 27 MISO · 4 CS | 3.3 V SPI module, FAT; media only — alarms/history stay on internal flash |
 | I²S audio out | 33 BCK · 32 WS/LRCK · 23 DOUT | GY-PCM5102 DAC; DAC SCK pin tied to GND (internal PLL) |
-| Reservoir level | 34 (ADC1_CH6, analog) | level/pressure sensor or load-cell amp output — SP5 |
-| Reservoir floats | 35 LOW · 36 HIGH | input-only pins — **external pull-ups required** |
-| Spare | 39 (input-only ADC1) + 0/5 with care | last free master pins — further I/O goes on the buses |
+| Reservoir level (strain gauge) | 34 (HX711 DOUT / analog in) · 5 (HX711 SCK) | GPIO5 high at reset = HX711 power-down (benign); no float switches — manual fill stop |
+| Spare | 35, 36, 39 (input-only ADC1) + 0 with care | further master I/O goes on the buses |
 
 Reserved I²C: 0x70 (PCA9685 all-call — never use) · 0x48/0x49 (future ADS1115).
 
@@ -74,10 +73,10 @@ Reserved I²C: 0x70 (PCA9685 all-call — never use) · 0x48/0x49 (future ADS111
 - [ ] 4.7 kΩ I²C pull-ups on GPIO21/22 (once per bus).
 - [ ] Rescue button: momentary switch GPIO15 → GND.
 - [ ] 12 V supply sized for **all zones dosing simultaneously** (pump serialization is per-zone only) plus LED load.
-- [ ] Master (SP5): NC high-level float switch wired **in series with the refill solenoid coil** as the hardware overfill backstop.
+- [ ] Refill is operator-supervised (no floats): verify at SP5 bring-up that the valve's max-run timeout closes it even when unattended.
 - [ ] Never connect 12/24 V to any ESP32 pin; MOSFET/relay boards isolate all loads.
 - [ ] PCM5102A board: SCK pin tied to GND; 3.3 V supply; short I²S wires.
-- [ ] External pull-ups (e.g. 100 kΩ to 3.3 V) on float-switch inputs GPIO35/36 — input-only pins have no internal pulls.
+- [ ] Load cell mounted under the reservoir, HX711 board on 3.3 V; tare/full calibration from the CLI (SP5).
 - [ ] Display link: straight TX↔RX cross to the S3 (GPIO26→S3-RX, GPIO25←S3-TX), common GND.
 
 ## Power
