@@ -29,3 +29,4 @@ set(HG_CFG_SRC ${COMP}/hg_cfg/hg_cfg_defaults.c ${COMP}/hg_cfg/hg_cfg_fields.c $
 hg_test(test_hg_cfg_fields   ${HG_CFG_SRC})
 hg_test(test_hg_cfg_validate ${HG_CFG_SRC})
 hg_test(test_cli_line ${COMP}/cli_line/cli_line.c)
+hg_test(test_notify ${COMP}/notify/notify.c)
