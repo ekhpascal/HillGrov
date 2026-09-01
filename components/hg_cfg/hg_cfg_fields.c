@@ -145,7 +145,12 @@ int hg_hhmm_parse(const char *s) {
 }
 
 void hg_hhmm_format(int minutes, char out[6]) {
-    snprintf(out, 6, "%02d:%02d", minutes / 60, minutes % 60);
+    /* Callers always pass a parsed 0..1439 value, but GCC's -Wformat-truncation
+     * (target build only; MSVC has no equivalent check) can't see that from a
+     * plain int, so it assumes minutes/60 could need more than 2 digits. The
+     * unsigned mod gives it a provable <1440 bound. */
+    unsigned m = (unsigned)minutes % 1440u;
+    snprintf(out, 6, "%02u:%02u", m / 60u, m % 60u);
 }
 
 static int enum_parse(const char *enums, const char *val, long *out) {

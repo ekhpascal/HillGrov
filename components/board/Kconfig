@@ -1,0 +1,13 @@
+menu "HillGrow"
+    choice HG_ROLE
+        prompt "Node role"
+        default HG_ROLE_ZONE
+        config HG_ROLE_MASTER
+            bool "Master"
+        config HG_ROLE_ZONE
+            bool "Zone"
+    endchoice
+    config HILLGROW_DEBUG_KEY
+        string "Debug unlock key"
+        default "hill"
+endmenu
