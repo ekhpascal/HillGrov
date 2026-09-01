@@ -53,12 +53,15 @@ static void test_hw_edit_restart_pending_cal_not(void) {
 }
 
 static void test_take_dirty(void) {
-    uint8_t v = 50;
-    hg_model_edit(ed_set_target, &v, err, sizeof err);
+    uint8_t v = 50, pin = 9;
+    hg_model_edit(ed_set_target, &v, err, sizeof err);   /* cfg edit #1: generation=1, seq=1 */
+    hg_model_edit(ed_pump_pin, &pin, err, sizeof err);   /* hw edit: seq=2, cfg.generation untouched */
+    v = 51;
+    hg_model_edit(ed_set_target, &v, err, sizeof err);   /* cfg edit #2: generation=2, seq=3 */
     hg_zone_cfg_t staged; uint32_t gen = 0;
     TEST_ASSERT_EQUAL_UINT32(sizeof(hg_zone_cfg_t), hg_model_take_dirty(HG_CH_CFG, &staged, &gen));
-    TEST_ASSERT_EQUAL_UINT32(1, gen);
-    TEST_ASSERT_EQUAL_UINT8(50, staged.shelf[0].water.target_pct);
+    TEST_ASSERT_EQUAL_UINT32(2, gen); /* == cfg.generation, not seq (3) */
+    TEST_ASSERT_EQUAL_UINT8(51, staged.shelf[0].water.target_pct);
     TEST_ASSERT_EQUAL_UINT32(0, hg_model_take_dirty(HG_CH_CFG, &staged, &gen)); /* cleared */
 }
 
