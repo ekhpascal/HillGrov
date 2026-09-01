@@ -20,12 +20,13 @@ int hg_handover_pack(const hg_handover_t *h, uint8_t out[HG_HANDOVER_LEN]) {
     if (!h || !out) return -1;
 
     /* Check string lengths - must fit NUL-terminated in their fields */
-    /* ssid[33] can hold max 32 chars + NUL */
-    if (strlen(h->ssid) > 32) return -1;
-    /* pass[65] can hold max 64 chars + NUL */
-    if (strlen(h->pass) > 64) return -1;
-    /* url[64] can hold max 63 chars + NUL */
-    if (strlen(h->url) > 63) return -1;
+    /* Use strnlen to avoid reading past unterminated arrays */
+    /* ssid[33]: strnlen returns 33 if no NUL found within 33 bytes */
+    if (strnlen(h->ssid, 33) >= 33) return -1;
+    /* pass[65]: strnlen returns 65 if no NUL found within 65 bytes */
+    if (strnlen(h->pass, 65) >= 65) return -1;
+    /* url[64]: strnlen returns 64 if no NUL found within 64 bytes */
+    if (strnlen(h->url, 64) >= 64) return -1;
 
     /* Clear the buffer */
     memset(out, 0, HG_HANDOVER_LEN);

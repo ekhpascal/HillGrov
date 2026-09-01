@@ -82,11 +82,28 @@ static void test_handover_33char_ssid_rejects(void) {
     TEST_ASSERT_EQUAL_INT(-1, pack_ret);
 }
 
+static void test_handover_unterminated_ssid_rejects(void) {
+    hg_handover_t in = {
+        .expect_link = 1,
+        .pass = "hillgrow1",
+        .url = "http://192.168.7.7/fw/zone.bin"
+    };
+
+    /* Fill ssid with 'A' across all 33 bytes - no NUL terminator */
+    memset(in.ssid, 'A', sizeof in.ssid);
+
+    uint8_t buf[HG_HANDOVER_LEN];
+
+    int pack_ret = hg_handover_pack(&in, buf);
+    TEST_ASSERT_EQUAL_INT(-1, pack_ret);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_handover_pack_unpack_roundtrip);
     RUN_TEST(test_handover_flipped_byte_rejects);
     RUN_TEST(test_handover_wrong_magic_rejects);
     RUN_TEST(test_handover_33char_ssid_rejects);
+    RUN_TEST(test_handover_unterminated_ssid_rejects);
     return UNITY_END();
 }
