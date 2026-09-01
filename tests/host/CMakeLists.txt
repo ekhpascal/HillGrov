@@ -24,3 +24,4 @@ function(hg_test NAME)
 endfunction()
 
 hg_test(test_app_version ${COMP}/app_version/app_version.c)
+hg_test(test_hg_blob ${COMP}/hg_blob/hg_blob.c)
