@@ -83,7 +83,7 @@ Reserved I²C: 0x70 (PCA9685 all-call — never use) · 0x48/0x49 (future ADS111
 - [ ] PCM5102A board: SCK pin tied to GND; 3.3 V supply; short I²S wires.
 - [ ] Load cell mounted under the reservoir, HX711 board on 3.3 V; tare/full calibration from the CLI (SP5).
 - [ ] Display link: straight TX↔RX cross to the S3 (GPIO26→S3-RX, GPIO25←S3-TX), common GND.
-- [ ] RS-485 field bus: A/B twisted pair, 120 Ω termination at both ends, bias resistors per transceiver board; Modbus RTU 9600 8N1; unique slave addresses noted here when assigned.
+- [ ] RS-485 field bus: isolated TTL↔RS-485 module with automatic flow direction (no DE/RE line — pairs with the SC16IS752 TX/RX directly, 3.3 V logic side); A/B twisted pair, 120 Ω termination at both ends; Modbus RTU 9600 8N1; unique slave addresses noted here when assigned.
 - [ ] Heater: mechanical thermal cutout/thermostat **in series** with the relay-switched line — mandatory before first power-on (§11.8).
 - [ ] Blind: external pull-ups on end-stop inputs GPIO35/36; motor stall-safe or fused; open/close relays verified never simultaneously closed (drive both = firmware bug → report).
 
