@@ -27,8 +27,8 @@
 
 | Addr | Device | Channels |
 |---|---|---|
-| 0x40 | PCA9685 @ ~1017 Hz | ch 0..7 = shelf n WHITE `2(n−1)` / RED `2(n−1)+1`; ch 8..15 spare (future fan PWM) |
-| 0x20 | PCF8575 (all pins **active-low**) | flat numbering P0–P15: P0–P3 pumps 1–4 · P4–P7 fans 1–4 · P8 pollination vibrator · P9–P15 spare relays |
+| 0x40 | PCA9685 @ ~1017 Hz | ch 0..7 = shelf n WHITE `2(n−1)` / RED `2(n−1)+1`; ch 8..11 = vibrator shelf 1..4 (PWM intensity); ch 12..15 spare (future fan PWM) |
+| 0x20 | PCF8575 (all pins **active-low**) | flat numbering P0–P15: P0–P3 pumps 1–4 · P4–P7 fans 1–4 · P8–P15 spare relays |
 
 ## Master-only
 

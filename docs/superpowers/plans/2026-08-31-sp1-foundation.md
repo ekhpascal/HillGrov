@@ -527,7 +527,8 @@ typedef struct {                     /* 32 B */
     uint16_t soil_max_ok_mv;         /* 18 */
     uint16_t pump_max_run_s;         /* 20 SAFETY 1..300 */
     uint16_t pump_max_daily_s;       /* 22 SAFETY 1..3600 */
-    uint8_t  rsvd[8];                /* 24 */
+    uint8_t  vib_ch;                 /* 24 PCA9685 channel of the shelf vibrator; HG_NONE = absent */
+    uint8_t  rsvd[7];                /* 25 */
 } hg_shelf_hw_t;
 
 typedef struct { uint8_t type, pin, shelf_mask, rsvd; } hg_aux_hw_t; /* 4 B; type: 0 NONE, 1 VIBRATOR, 2 RELAY */
@@ -562,9 +563,19 @@ typedef struct {                     /* 16 B */
 } hg_water_cfg_t;
 
 typedef struct { uint8_t mode, on_min; uint16_t period_min; } hg_fan_cfg_t;  /* 4 B; mode: 0 OFF 1 ON 2 LIGHT 3 CYCLE */
+typedef struct {                     /* 16 B; per-shelf pollination */
+    uint8_t  mode, intensity_pct, pulse_s, rsvd;   /* mode: 0 OFF 1 PULSE; intensity 20..100 */
+    uint16_t interval_min, start_min, end_min;
+    uint8_t  rsvd2[6];
+} hg_vib_cfg_t;
+typedef struct {                     /* 16 B; per-shelf pollination */
+    uint8_t  mode, intensity_pct, pulse_s, rsvd;   /* mode: 0 OFF 1 PULSE; intensity 20..100 */
+    uint16_t interval_min, start_min, end_min;
+    uint8_t  rsvd2[6];
+} hg_vib_cfg_t;
 typedef struct { uint8_t mode, pulse_s; uint16_t interval_min, start_min, end_min; } hg_aux_cfg_t; /* 8 B; mode: 0 OFF 1 PULSE */
 
-typedef struct {                     /* 56 B */
+typedef struct {                     /* 72 B */
     char     crop[16];               /* 0 */
     uint8_t  enabled, profile_id;    /* 16 */
     uint8_t  rsvd[2];                /* 18 */
@@ -572,9 +583,10 @@ typedef struct {                     /* 56 B */
     hg_light_cfg_t light;            /* 24 */
     hg_water_cfg_t water;            /* 36 */
     hg_fan_cfg_t   fan;              /* 52 */
+    hg_vib_cfg_t   vib;              /* 56 */
 } hg_shelf_cfg_t;
 
-typedef struct {                     /* 272 B */
+typedef struct {                     /* 336 B */
     uint32_t generation;             /* 0  0 = never written */
     uint8_t  source;                 /* 4  HG_SRC_* of last writer */
     uint8_t  rsvd0;                  /* 5 */
@@ -582,7 +594,7 @@ typedef struct {                     /* 272 B */
     char     name[16];               /* 8 */
     hg_aux_cfg_t aux[HG_MAX_AUX];    /* 24 */
     uint8_t  rsvd[8];                /* 40 */
-    hg_shelf_cfg_t shelf[HG_MAX_SHELVES]; /* 48..271 */
+    hg_shelf_cfg_t shelf[HG_MAX_SHELVES]; /* 48..335 */
 } hg_zone_cfg_t;
 
 /* ---------- daily safety counters (RTC_NOINIT + NVS "daily") ---------- */
@@ -603,8 +615,9 @@ _Static_assert(sizeof(hg_light_cfg_t) == 12, "hg_light_cfg_t");
 _Static_assert(sizeof(hg_water_cfg_t) == 16, "hg_water_cfg_t");
 _Static_assert(sizeof(hg_fan_cfg_t)   == 4,  "hg_fan_cfg_t");
 _Static_assert(sizeof(hg_aux_cfg_t)   == 8,  "hg_aux_cfg_t");
-_Static_assert(sizeof(hg_shelf_cfg_t) == 56, "hg_shelf_cfg_t");
-_Static_assert(sizeof(hg_zone_cfg_t)  == 272,"hg_zone_cfg_t");
+_Static_assert(sizeof(hg_vib_cfg_t)   == 16, "hg_vib_cfg_t");
+_Static_assert(sizeof(hg_shelf_cfg_t) == 72, "hg_shelf_cfg_t");
+_Static_assert(sizeof(hg_zone_cfg_t)  == 336,"hg_zone_cfg_t");
 _Static_assert(sizeof(hg_daily_t)     == 64, "hg_daily_t");
 
 #ifdef __cplusplus
@@ -661,6 +674,8 @@ static void test_offsets_pinned(void) {
     TEST_ASSERT_EQUAL_size_t(24,  offsetof(hg_shelf_cfg_t, light));
     TEST_ASSERT_EQUAL_size_t(36,  offsetof(hg_shelf_cfg_t, water));
     TEST_ASSERT_EQUAL_size_t(52,  offsetof(hg_shelf_cfg_t, fan));
+    TEST_ASSERT_EQUAL_size_t(56,  offsetof(hg_shelf_cfg_t, vib));
+    TEST_ASSERT_EQUAL_size_t(56,  offsetof(hg_shelf_cfg_t, vib));
     TEST_ASSERT_EQUAL_size_t(6,   offsetof(hg_zone_cfg_t, link_loss_timeout_s));
     TEST_ASSERT_EQUAL_size_t(60,  offsetof(hg_daily_t, crc));
 }
@@ -685,6 +700,8 @@ static void test_defaults_hw(void) {
         TEST_ASSERT_EQUAL_UINT16(2800,     hw.shelf[i].soil_dry_mv[0]);
         TEST_ASSERT_EQUAL_UINT16(1300,     hw.shelf[i].soil_wet_mv[1]);
         TEST_ASSERT_EQUAL_UINT8(100,       hw.shelf[i].led_max_pct[0]);
+        TEST_ASSERT_EQUAL_UINT8(8 + i,     hw.shelf[i].vib_ch);
+        TEST_ASSERT_EQUAL_UINT8(8 + i,     hw.shelf[i].vib_ch);
     }
     TEST_ASSERT_EQUAL_UINT8(0, hw.aux[0].type);
 }
@@ -703,6 +720,10 @@ static void test_defaults_cfg_inert(void) {
         TEST_ASSERT_EQUAL_UINT8(45, c.shelf[i].water.target_pct);
         TEST_ASSERT_EQUAL_UINT16(20, c.shelf[i].water.dose_s);
         TEST_ASSERT_EQUAL_UINT8(3,  c.shelf[i].fan.mode);          /* CYCLE */
+        TEST_ASSERT_EQUAL_UINT8(0,  c.shelf[i].vib.mode);           /* OFF */
+        TEST_ASSERT_EQUAL_UINT8(60, c.shelf[i].vib.intensity_pct);
+        TEST_ASSERT_EQUAL_UINT8(0,  c.shelf[i].vib.mode);           /* OFF */
+        TEST_ASSERT_EQUAL_UINT8(60, c.shelf[i].vib.intensity_pct);
     }
     TEST_ASSERT_EQUAL_UINT8(0, c.aux[0].mode);
 }
@@ -753,6 +774,8 @@ void hg_defaults_hw(hg_zone_hw_t *hw) {
         s->soil_max_ok_mv = 3200;
         s->pump_max_run_s   = 60;
         s->pump_max_daily_s = 600;
+        s->vib_ch = (uint8_t)(8 + i);
+        s->vib_ch = (uint8_t)(8 + i);
     }
 }
 
@@ -779,6 +802,12 @@ void hg_defaults_cfg(hg_zone_cfg_t *cfg) {
         s->fan.mode = 3;
         s->fan.on_min = 15;
         s->fan.period_min = 60;
+        s->vib.mode = 0;
+        s->vib.intensity_pct = 60;
+        s->vib.pulse_s = 5;
+        s->vib.interval_min = 120;
+        s->vib.start_min = 10 * 60;
+        s->vib.end_min = 16 * 60;
     }
 }
 ```
@@ -812,7 +841,7 @@ git push
 - Produces (used by zone_cmds Task 10, hg_model Task 9, SP4 JSON):
 
 ```c
-typedef enum { HG_G_ZONECFG = 0, HG_G_SHELF, HG_G_LIGHT, HG_G_WATER, HG_G_FAN,
+typedef enum { HG_G_ZONECFG = 0, HG_G_SHELF, HG_G_LIGHT, HG_G_WATER, HG_G_FAN, HG_G_VIB,
                HG_G_AUX, HG_G_HW, HG_G_HWSHELF, HG_G_CAL, HG_G_COUNT } hg_group_t;
 typedef enum { HG_T_U8, HG_T_U16, HG_T_BOOL, HG_T_HHMM, HG_T_ENUM, HG_T_STR16, HG_T_PIN } hg_ftype_t;
 typedef struct { uint8_t group; const char *key; uint16_t offset; uint8_t type;
@@ -831,7 +860,7 @@ int  hg_hw_validate(const hg_zone_hw_t *hw, char *err, size_t errlen);          
 int  hg_cfg_validate(const hg_zone_cfg_t *cfg, const hg_zone_hw_t *hw_or_null, char *err, size_t errlen);
 ```
 
-Row inventory (offsets are `offsetof` into the group's base struct; scope in parentheses): **ZONECFG**(zone,`hg_zone_cfg_t`): NAME STR16@name · LINKLOSS_S U16@6 10..600. **SHELF**(shelf,`hg_shelf_cfg_t`): CROP STR16@0 · ENABLED BOOL@16 · PROFILE U8@17 0..16. **LIGHT**(shelf,`.light`): ON HHMM@0 · OFF HHMM@2 · WHITE U8@4 0..100 · RED U8@5 0..100 · RAMP_MIN U8@6 0..120 · DLI U16@8 0..1000. **WATER**(shelf,`.water`): MODE ENUM@0 `OFF|AUTO` · TARGET U8@1 0..100 · HYST U8@2 1..30 · SETTLE_MIN U8@3 1..60 · DOSE_S U16@4 1..300 · INTERVAL_MIN U16@6 10..1440 · MAX_DOSES U8@8 0..24 · DIFF_MAX U8@9 5..50 · WIN_START HHMM@10 · WIN_END HHMM@12. **FAN**(shelf,`.fan`): MODE ENUM@0 `OFF|ON|LIGHT|CYCLE` · ON_MIN U8@1 0..60 · PERIOD_MIN U16@2 0..1440. **AUX**(aux,`hg_aux_cfg_t`): MODE ENUM@0 `OFF|PULSE` · PULSE_S U8@1 1..30 · INTERVAL_MIN U16@2 5..1440 · START HHMM@4 · END HHMM@6. **HW**(zone,`hg_zone_hw_t`): SHELVES U8@0 1..4 · PCA_ADDR U8@1 0..127 · PCF_ADDR U8@2 0..127 · SOIL_BACKEND ENUM@3 `INTERNAL|ADS1115` · PCF_ACTLOW U16@4 0..65535 · PCA_HZ U16@6 200..1500. **HWSHELF**(shelf,`hg_shelf_hw_t`): LED_W PIN@0 max15 · LED_R PIN@1 max15 · PUMP PIN@2 max15 · FAN PIN@3 max15 · SOIL_A PIN@4 max7 · SOIL_B PIN@5 max7 · LED_MAX_W U8@6 0..100 · LED_MAX_R U8@7 0..100 · PUMP_MAX_RUN_S U16@20 1..300 · PUMP_MAX_DAILY_S U16@22 1..3600. **CAL**(shelf,`hg_shelf_hw_t`): DRY_A U16@8 0..3300 · DRY_B U16@10 · WET_A U16@12 · WET_B U16@14 · MIN_OK U16@16 · MAX_OK U16@18.
+Row inventory (offsets are `offsetof` into the group's base struct; scope in parentheses): **ZONECFG**(zone,`hg_zone_cfg_t`): NAME STR16@name · LINKLOSS_S U16@6 10..600. **SHELF**(shelf,`hg_shelf_cfg_t`): CROP STR16@0 · ENABLED BOOL@16 · PROFILE U8@17 0..16. **LIGHT**(shelf,`.light`): ON HHMM@0 · OFF HHMM@2 · WHITE U8@4 0..100 · RED U8@5 0..100 · RAMP_MIN U8@6 0..120 · DLI U16@8 0..1000. **WATER**(shelf,`.water`): MODE ENUM@0 `OFF|AUTO` · TARGET U8@1 0..100 · HYST U8@2 1..30 · SETTLE_MIN U8@3 1..60 · DOSE_S U16@4 1..300 · INTERVAL_MIN U16@6 10..1440 · MAX_DOSES U8@8 0..24 · DIFF_MAX U8@9 5..50 · WIN_START HHMM@10 · WIN_END HHMM@12. **FAN**(shelf,`.fan`): MODE ENUM@0 `OFF|ON|LIGHT|CYCLE` · ON_MIN U8@1 0..60 · PERIOD_MIN U16@2 0..1440. **VIB**(shelf,`.vib`): MODE ENUM@0 `OFF|PULSE` · INTENSITY U8@1 20..100 · PULSE_S U8@2 1..30 · INTERVAL_MIN U16@4 5..1440 · START HHMM@6 · END HHMM@8. **VIB**(shelf,`.vib`): MODE ENUM@0 `OFF|PULSE` · INTENSITY U8@1 20..100 · PULSE_S U8@2 1..30 · INTERVAL_MIN U16@4 5..1440 · START HHMM@6 · END HHMM@8. **AUX**(aux,`hg_aux_cfg_t`): MODE ENUM@0 `OFF|PULSE` · PULSE_S U8@1 1..30 · INTERVAL_MIN U16@2 5..1440 · START HHMM@4 · END HHMM@6. **HW**(zone,`hg_zone_hw_t`): SHELVES U8@0 1..4 · PCA_ADDR U8@1 0..127 · PCF_ADDR U8@2 0..127 · SOIL_BACKEND ENUM@3 `INTERNAL|ADS1115` · PCF_ACTLOW U16@4 0..65535 · PCA_HZ U16@6 200..1500. **HWSHELF**(shelf,`hg_shelf_hw_t`): LED_W PIN@0 max15 · LED_R PIN@1 max15 · PUMP PIN@2 max15 · FAN PIN@3 max15 · SOIL_A PIN@4 max7 · SOIL_B PIN@5 max7 · LED_MAX_W U8@6 0..100 · LED_MAX_R U8@7 0..100 · PUMP_MAX_RUN_S U16@20 1..300 · PUMP_MAX_DAILY_S U16@22 1..3600. **CAL**(shelf,`hg_shelf_hw_t`): DRY_A U16@8 0..3300 · DRY_B U16@10 · WET_A U16@12 · WET_B U16@14 · MIN_OK U16@16 · MAX_OK U16@18.
 
 Type semantics: BOOL accepts `0|1|ON|OFF|ENABLE|DISABLE`, prints `0/1`; ENUM accepts a name (case-insensitive) or its index, prints the name; PIN accepts `NONE` (=0xFF) or 0..max, prints `NONE` or the number; STR16 ≤15 chars, printable 0x20–0x7E, **no spaces** (tokenizer), NUL-padded; HHMM accepts `H:MM`/`HH:MM` or bare minutes, prints `HH:MM`. U16 values are written/read with `memcpy` (alignment-safe).
 
@@ -861,7 +890,7 @@ void tearDown(void) {}
 
 static const size_t GROUP_SIZE[HG_G_COUNT] = {
     sizeof(hg_zone_cfg_t), sizeof(hg_shelf_cfg_t), sizeof(hg_light_cfg_t),
-    sizeof(hg_water_cfg_t), sizeof(hg_fan_cfg_t), sizeof(hg_aux_cfg_t),
+    sizeof(hg_water_cfg_t), sizeof(hg_fan_cfg_t), sizeof(hg_vib_cfg_t), sizeof(hg_aux_cfg_t),
     sizeof(hg_zone_hw_t), sizeof(hg_shelf_hw_t), sizeof(hg_shelf_hw_t) };
 
 static size_t type_width(uint8_t t) {
@@ -1046,7 +1075,7 @@ Expected: both FAIL (stubs).
 #include "hg_cfg.h"
 
 const char *const HG_GROUP_NAMES[HG_G_COUNT] =
-    { "ZONECFG", "SHELF", "LIGHT", "WATER", "FAN", "AUX", "HW", "HWSHELF", "CAL" };
+    { "ZONECFG", "SHELF", "LIGHT", "WATER", "FAN", "VIB", "AUX", "HW", "HWSHELF", "CAL" };
 
 #define F(g, k, off, t, lo, hi, e) { HG_G_##g, k, (uint16_t)(off), HG_T_##t, lo, hi, e }
 const hg_field_t HG_FIELDS[] = {
@@ -1074,6 +1103,18 @@ const hg_field_t HG_FIELDS[] = {
     F(FAN,     "MODE",        0,  ENUM, 0, 3, "OFF|ON|LIGHT|CYCLE"),
     F(FAN,     "ON_MIN",      1,  U8, 0, 60, NULL),
     F(FAN,     "PERIOD_MIN",  2,  U16, 0, 1440, NULL),
+    F(VIB,     "MODE",        0,  ENUM, 0, 1, "OFF|PULSE"),
+    F(VIB,     "INTENSITY",   1,  U8, 20, 100, NULL),
+    F(VIB,     "PULSE_S",     2,  U8, 1, 30, NULL),
+    F(VIB,     "INTERVAL_MIN",4,  U16, 5, 1440, NULL),
+    F(VIB,     "START",       6,  HHMM, 0, 1439, NULL),
+    F(VIB,     "END",         8,  HHMM, 0, 1439, NULL),
+    F(VIB,     "MODE",        0,  ENUM, 0, 1, "OFF|PULSE"),
+    F(VIB,     "INTENSITY",   1,  U8, 20, 100, NULL),
+    F(VIB,     "PULSE_S",     2,  U8, 1, 30, NULL),
+    F(VIB,     "INTERVAL_MIN",4,  U16, 5, 1440, NULL),
+    F(VIB,     "START",       6,  HHMM, 0, 1439, NULL),
+    F(VIB,     "END",         8,  HHMM, 0, 1439, NULL),
     F(AUX,     "MODE",        0,  ENUM, 0, 1, "OFF|PULSE"),
     F(AUX,     "PULSE_S",     1,  U8, 1, 30, NULL),
     F(AUX,     "INTERVAL_MIN",2,  U16, 5, 1440, NULL),
@@ -1091,6 +1132,8 @@ const hg_field_t HG_FIELDS[] = {
     F(HWSHELF, "FAN",         3,  PIN, 0, 15, NULL),
     F(HWSHELF, "SOIL_A",      4,  PIN, 0, 7, NULL),
     F(HWSHELF, "SOIL_B",      5,  PIN, 0, 7, NULL),
+    F(HWSHELF, "VIB",         24, PIN, 0, 15, NULL),
+    F(HWSHELF, "VIB",         24, PIN, 0, 15, NULL),
     F(HWSHELF, "LED_MAX_W",   6,  U8, 0, 100, NULL),
     F(HWSHELF, "LED_MAX_R",   7,  U8, 0, 100, NULL),
     F(HWSHELF, "PUMP_MAX_RUN_S",   20, U16, 1, 300, NULL),
@@ -1138,6 +1181,8 @@ static void *group_base(uint8_t group, int idx, const hg_zone_hw_t *hw, const hg
     case HG_G_LIGHT:   return (void *)&cfg->shelf[idx].light;
     case HG_G_WATER:   return (void *)&cfg->shelf[idx].water;
     case HG_G_FAN:     return (void *)&cfg->shelf[idx].fan;
+    case HG_G_VIB:     return (void *)&cfg->shelf[idx].vib;
+    case HG_G_VIB:     return (void *)&cfg->shelf[idx].vib;
     case HG_G_AUX:     return (void *)&cfg->aux[idx];
     case HG_G_HW:      return (void *)hw;
     case HG_G_HWSHELF: return (void *)&hw->shelf[idx];
@@ -1366,6 +1411,8 @@ int hg_hw_validate(const hg_zone_hw_t *hw, char *err, size_t n) {
         if (check_group_rows(sh, HG_G_CAL, s, err, n) != 0) return -1;
         if (mark_dup(pca, sh->led_ch[0]) != 0) return fail(err, n, s, HG_G_HWSHELF, "LED_W");
         if (mark_dup(pca, sh->led_ch[1]) != 0) return fail(err, n, s, HG_G_HWSHELF, "LED_R");
+        if (mark_dup(pca, sh->vib_ch) != 0) return fail(err, n, s, HG_G_HWSHELF, "VIB");
+        if (mark_dup(pca, sh->vib_ch) != 0) return fail(err, n, s, HG_G_HWSHELF, "VIB");
         if (mark_dup(pcf, sh->pump_pin) != 0) return fail(err, n, s, HG_G_HWSHELF, "PUMP");
         if (mark_dup(pcf, sh->fan_pin) != 0) return fail(err, n, s, HG_G_HWSHELF, "FAN");
         if (sh->soil_ch[0] != HG_NONE && (sh->soil_ch[0] > 7 || soil[sh->soil_ch[0]]++))
@@ -1395,6 +1442,8 @@ int hg_cfg_validate(const hg_zone_cfg_t *cfg, const hg_zone_hw_t *hw, char *err,
         if (check_group_rows(&sc->light, HG_G_LIGHT, s, err, n) != 0) return -1;
         if (check_group_rows(&sc->water, HG_G_WATER, s, err, n) != 0) return -1;
         if (check_group_rows(&sc->fan, HG_G_FAN, s, err, n) != 0) return -1;
+        if (check_group_rows(&sc->vib, HG_G_VIB, s, err, n) != 0) return -1;
+        if (check_group_rows(&sc->vib, HG_G_VIB, s, err, n) != 0) return -1;
         if (sc->light.on_min == sc->light.off_min) return fail(err, n, s, HG_G_LIGHT, "OFF");
         if (hw) {
             if (sc->enabled && s >= hw->shelf_count) return fail(err, n, s, HG_G_SHELF, "ENABLED");
@@ -2240,7 +2289,7 @@ uint8_t  hg_model_dirty_mask(void);
 int      hg_model_restart_pending(void);
 ```
 
-Semantics: `hg_model_edit` copies the live `hw`+`cfg` (432 B) to stack scratch → runs `fn` → mask & (HW|HW_LIVE) → `hg_hw_validate(scratch_hw)`; mask & CFG or any hw change → `hg_cfg_validate(scratch_cfg, scratch_hw)` → on any failure return −2 with the path, live structs untouched → commit: memcpy back; if mask & CFG: `generation = generation + 1` (skip 0 on wrap), `source = HG_SRC_LOCAL`; `seq++`; `dirty |= (mask & HW_LIVE ? HG_CH_HW : 0) | (mask & (HG_CH_HW|HG_CH_CFG))`; `restart_pending = 1` when mask & HG_CH_HW. Mutex is a real FreeRTOS mutex on target, a no-op under `HOST_TEST` (`#ifndef HOST_TEST` around the three lock lines only — the header stays pure).
+Semantics: `hg_model_edit` copies the live `hw`+`cfg` (496 B) to stack scratch → runs `fn` → mask & (HW|HW_LIVE) → `hg_hw_validate(scratch_hw)`; mask & CFG or any hw change → `hg_cfg_validate(scratch_cfg, scratch_hw)` → on any failure return −2 with the path, live structs untouched → commit: memcpy back; if mask & CFG: `generation = generation + 1` (skip 0 on wrap), `source = HG_SRC_LOCAL`; `seq++`; `dirty |= (mask & HW_LIVE ? HG_CH_HW : 0) | (mask & (HG_CH_HW|HG_CH_CFG))`; `restart_pending = 1` when mask & HG_CH_HW. Mutex is a real FreeRTOS mutex on target, a no-op under `HOST_TEST` (`#ifndef HOST_TEST` around the three lock lines only — the header stays pure).
 
 - [ ] **Step 1: Header + stubs + test.** `tests/host/test_hg_model.c` (complete):
 
@@ -2351,7 +2400,7 @@ int main(void) { UNITY_BEGIN();
 | Row | args | flags | behaviour |
 |---|---|---|---|
 | `SET\|GET ZONECFG` | SET: `<key> <value>` (STR,STR); GET: none (`n_key 0`) | – | field set / group print |
-| `SET\|GET SHELF <s>` / `LIGHT` / `WATER` / `FAN` | SET: `<shelf 1-4> <key> <value>`; GET: `<shelf 1-4>` (`n_key 1`) | – | shelf-scoped field set / group print |
+| `SET\|GET SHELF <s>` / `LIGHT` / `WATER` / `FAN` / `VIB` | SET: `<shelf 1-4> <key> <value>`; GET: `<shelf 1-4>` (`n_key 1`) | – | shelf-scoped field set / group print |
 | `SET\|GET AUX <a 1-2>` | as shelf rows with idx 1–2 | – | aux-scoped |
 | `SET\|GET HW` | zone-scoped | `CMDF_UNLOCK` on SET | installer plane |
 | `SET\|GET HWSHELF <s>` | shelf-scoped | `CMDF_UNLOCK` on SET (single row: gate checked in handler for the SET verb only) | installer plane |
@@ -2599,7 +2648,7 @@ int  hg_store_set_zid(uint8_t id);
 int  hg_store_factory_reset(void); /* erase namespace "hg", esp_restart(); returns only on failure */
 ```
 
-`components/hg_store/hg_store.c` — complete: keys `zid` (u8), `hw`, `cfg`, throttle table `{hw: 0 ms, cfg: 5000 ms}`; pass logic: for each kind with `hg_model_dirty_mask()` bit set and `now - last_write >= throttle` → `hg_model_take_dirty(kind, staging, &gen)` → `hg_blob_wrap(HG_MAGIC_*, HG_*_VER, gen, …)` into a static 304-B buffer → `nvs_set_blob` + `nvs_commit` (failure: `ESP_LOGE`, re-set dirty via a retry flag, back off 30 s; 3 consecutive → log `F_NVS placeholder` — the fault store arrives in SP2); boot load: `nvs_get_blob` each key, `hg_blob_unwrap` (+ on `MIGRATED` mark dirty so it rewrites), `hg_hw_validate`/`hg_cfg_validate` → on any failure log W and pass NULL for that plane to `hg_model_boot_load` (defaults); `hg_store_flush` gives the semaphore and polls the dirty mask ≤ timeout. Single `nvs_open("hg", NVS_READWRITE, …)` kept open.
+`components/hg_store/hg_store.c` — complete: keys `zid` (u8), `hw`, `cfg`, throttle table `{hw: 0 ms, cfg: 5000 ms}`; pass logic: for each kind with `hg_model_dirty_mask()` bit set and `now - last_write >= throttle` → `hg_model_take_dirty(kind, staging, &gen)` → `hg_blob_wrap(HG_MAGIC_*, HG_*_VER, gen, …)` into a static 368-B buffer (16 + 336, rounded) → `nvs_set_blob` + `nvs_commit` (failure: `ESP_LOGE`, re-set dirty via a retry flag, back off 30 s; 3 consecutive → log `F_NVS placeholder` — the fault store arrives in SP2); boot load: `nvs_get_blob` each key, `hg_blob_unwrap` (+ on `MIGRATED` mark dirty so it rewrites), `hg_hw_validate`/`hg_cfg_validate` → on any failure log W and pass NULL for that plane to `hg_model_boot_load` (defaults); `hg_store_flush` gives the semaphore and polls the dirty mask ≤ timeout. Single `nvs_open("hg", NVS_READWRITE, …)` kept open.
 
 `zone/main/app_if_zone.c` — complete `app_if_t` implementation exported as `const app_if_t APP_IF_ZONE`: `zone_id` = `hg_store_zid`; `get_mac` = `esp_efuse_mac_get_default`; `node_name` = model `cfg.name`; `uptime_s` = `esp_timer_get_time()/1000000`; `status_lines` appends `  Uptime : %u s`, `  Heap min : %u`, `  Log drops : %u`, `  Cfg gen : %u`, `  Restart pending : %d`; `log_set` = `esp_log_level_set(tag ? tag : "*", lvl)` + echo `esp_log_level_get`; `time_get/_set` via `time()/localtime_r/settimeofday` (source string fixed `NONE`/`SET` in SP1); `save_flush` = `hg_store_flush`; `fw_info` via `esp_ota_get_running_partition()` + `esp_app_get_description()->version` + `esp_ota_get_state_partition`; `fw_rollback` = `esp_ota_mark_app_invalid_rollback_and_reboot()`; `fw_update` = `hg_handover_write` + `hg_reboot_to_rescue()`; `reboot` = `esp_restart`; `factory_reset` = `hg_store_factory_reset`. Also implement `void hg_reboot_to_rescue(void)` here for now: `bootloader_common_get_rtc_retain_mem()->custom[0] = 0xB0FAAF0B; bootloader_common_update_rtc_retain_mem(NULL, false); esp_restart();` (requires `bootloader_support`).
 

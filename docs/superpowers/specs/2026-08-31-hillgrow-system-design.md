@@ -31,8 +31,8 @@ Zone identity is the eFuse MAC; the Master maps MAC → zone id / name / shelf c
        I²C: DS3231 0x68 · PCF8575 0x20 (relays: fan, 3 dampers, shutter, refill, overall grow light) · [SHT31 0x44]
        UART1 ↔ ESP32-S3 touch display (optional) · SPI2 → microSD · I²S → PCM5102A DAC · strain-gauge level (HX711: DOUT 34, SCK 5)
        UART2 TX ──► ZONE 1 RX     ZONE 1 TX ──► ZONE 2 RX  …  ZONE N TX ──► MASTER UART2 RX
-                     │ I²C: PCA9685 0x40 (8 LED ch WHITE/RED × 4 shelves, OE → GPIO23)
-                     │      PCF8575 0x20 (4 pumps, 4 fans, vibrator, spare)
+                     │ I²C: PCA9685 0x40 (ch 0–7 LED W/R × 4 shelves · ch 8–11 vibrator PWM × 4 · OE → GPIO23)
+                     │      PCF8575 0x20 (4 pumps, 4 fans, 8 spare)
                      │ ADC: 8 × SEN0193 (6 on ADC1, 2 on ADC2)
                      └ USB UART0: CLI + logs (bring-up / standalone operation)
 ```
@@ -143,7 +143,7 @@ Ids: `0x00` Master · `0x01..0x10` reserved for zones by the protocol — V1 bui
 
 **CMD carries CLI text.** The zone executes it through the same table-driven `cmd_dispatch()` as its own console — one grammar, one range check, one safety gate, `GET`/`HELP` over the ring for free; the Master compiles in no zone vocabulary, so images cannot skew during one-at-a-time fleet updates. ACK detail is the verbatim reply line. Master-local failures map to CLI tokens `ZONE_TIMEOUT | ZONE_OFFLINE | ZONE_UNKNOWN | RING_DOWN | BUSY`.
 
-Wire field values: `time_quality` {0 NONE, 1 COARSE (assumed/RTC-restored), 2 SYNCED}; `link_flags` b0 upstream_alive, b1 master_alive, b2 heard_by_master (from `online_mask`); shelf `out_flags` b0 pump, b1 fan, b2 aux, b3 light_on, b4 manual_override; `shelf_faults[n]` is the shelf-scoped fault subset of §3.8 with bit indices fixed in `fault.h`. Remote `GET`/`HELP` answers fit the single-ACK 125 B reply cap — longer replies truncate at a line boundary; full dumps (`GET CONFIG`, bare `HELP`) are Master-side operations (config cache / local table).
+Wire field values: `time_quality` {0 NONE, 1 COARSE (assumed/RTC-restored), 2 SYNCED}; `link_flags` b0 upstream_alive, b1 master_alive, b2 heard_by_master (from `online_mask`); shelf `out_flags` b0 pump, b1 fan, b2 vib, b3 light_on, b4 manual_override; `shelf_faults[n]` is the shelf-scoped fault subset of §3.8 with bit indices fixed in `fault.h`. Remote `GET`/`HELP` answers fit the single-ACK 125 B reply cap — longer replies truncate at a line boundary; full dumps (`GET CONFIG`, bare `HELP`) are Master-side operations (config cache / local table).
 
 ### 2.5 Store-and-forward
 
@@ -192,7 +192,7 @@ CRC vector + bit-flip; COBS round-trip 0..128 incl. resync and oversize; frame e
 | PUMP | 60 s (300) | 600 s | 600 s (3600) | **one pump ON per zone** (per-zone only — PSU sized for all zones dosing simultaneously, decision, brainstorm); soil valid; calibration valid; not inhibited |
 | LIGHT | — | — | 20 h (24 = unlimited) | per-shelf duty cap `led_max_pct` |
 | FAN (shelf) | — | 30 s | — | — |
-| VIB | 10 s (30) | 60 s | 600 s (1800) | — |
+| VIB (per shelf, PCA9685 PWM ch 8–11) | 10 s (30) | 60 s | 600 s (1800) per shelf | intensity 20–100 %; behind the OE kill line like the lights |
 | VALVE_REFILL (M) | 300 s (900) | 300 s | 1800 s (7200) | manual, operator-supervised fill (owner stops at full); level valid (strain gauge) and below max |
 | DAMPER (M) | per type (SP5) | — | — | open+close never together; closing last exhaust refused while fan ON |
 | FAN_MAIN (M) | — | 30 s | — | intake OPEN and ≥1 exhaust OPEN, re-checked every tick |
@@ -261,7 +261,7 @@ Gate refusal matrix per mode; lease clamp/refuse/expiry; pump hard cap under con
 | Plane | Struct (size) | Writer | Persisted | Authoritative |
 |---|---|---|---|---|
 | HARDWARE | `hg_zone_hw_t` (160 B): shelf_count, PCA/PCF addresses, per-shelf channel/pin/ADC maps, calibration (mV), **installed safety limits** (`led_max_pct[2]`, `pump_max_run_s`, `pump_max_daily_s`), optional aux devices | installer (CLI, incl. forwarded) | Zone NVS `hw` | Zone (Master keeps a RAM cache via CFG_GET for display/export) |
-| LOGICAL | `hg_zone_cfg_t` (272 B): name, per-shelf crop + light/water/fan/aux schedules, link_loss_timeout_s | Master (web/CLI); Zone CLI only during bring-up | Master NVS `zcN` + Zone NVS `cfg` (cache) | Master once one exists |
+| LOGICAL | `hg_zone_cfg_t` (336 B): name, per-shelf crop + light/water/fan/vibrator schedules (+2 spare-relay aux devices), link_loss_timeout_s | Master (web/CLI); Zone CLI only during bring-up | Master NVS `zcN` + Zone NVS `cfg` (cache) | Master once one exists |
 | RUNTIME | `hg_zone_rt_t` (224 B) | `ctrl` task only | only `hg_daily_t` (64 B: pump/dose/light/vib daily counters + coarse time) — RTC_NOINIT copy every tick + NVS every 15 min | Zone |
 | TELEMETRY | heartbeat payload (§2.4) | built from RUNTIME | never (history = Master LittleFS) | — |
 
@@ -285,7 +285,7 @@ Chunked transfer per §2.9 (`hg_xfer`: 112 B self-contained chunks, 768 B reasse
 
 ### 4.6 One field table drives CLI, JSON and validation
 
-`hg_field_t {group, key, offset, type (U8/U16/BOOL/HHMM/ENUM/STR/PIN), min, max, names}` — ~50 rows, integrity-checked by a host test and at boot. Derived: **CLI** `SET <GROUP> <shelf> <KEY> <value>` → `OK <GROUP> <shelf> <KEY> <value>`; `GET <GROUP> <shelf>` → `Label : value` lines; `GET CONFIG` = replayable `SET` lines (the zone's export/import — paste into PuTTY or uart_test.py); generated HELP with ranges. Groups: ZONECFG, SHELF (crop/enabled/profile), LIGHT, WATER, FAN, AUX, HW, HWSHELF, CAL. **JSON** (Master only, cJSON managed component): `/api/config` GET/PUT with merge semantics — missing keys keep values, unknown keys → `warnings[]`, first bad value aborts with its path (HTTP 400), whole document validated into a scratch copy before one atomic apply; HH:MM strings; export includes Wi-Fi passwords (`?secrets=0` omits) — it is the disaster-recovery backup. **Validation** (`hg_cfg_validate`/`hg_hw_validate`): table ranges + cross-field rules (duplicate channel/pin/ADC, light.on≠off, enabled shelf < shelf_count, dose vs pump caps); one source of truth for CLI, HTTP, ring receiver and NVS loader; error = field path used verbatim everywhere.
+`hg_field_t {group, key, offset, type (U8/U16/BOOL/HHMM/ENUM/STR/PIN), min, max, names}` — ~50 rows, integrity-checked by a host test and at boot. Derived: **CLI** `SET <GROUP> <shelf> <KEY> <value>` → `OK <GROUP> <shelf> <KEY> <value>`; `GET <GROUP> <shelf>` → `Label : value` lines; `GET CONFIG` = replayable `SET` lines (the zone's export/import — paste into PuTTY or uart_test.py); generated HELP with ranges. Groups: ZONECFG, SHELF (crop/enabled/profile), LIGHT, WATER, FAN, VIB (per-shelf pollination: mode/intensity/pulse/interval/window), AUX, HW, HWSHELF, CAL. **JSON** (Master only, cJSON managed component): `/api/config` GET/PUT with merge semantics — missing keys keep values, unknown keys → `warnings[]`, first bad value aborts with its path (HTTP 400), whole document validated into a scratch copy before one atomic apply; HH:MM strings; export includes Wi-Fi passwords (`?secrets=0` omits) — it is the disaster-recovery backup. **Validation** (`hg_cfg_validate`/`hg_hw_validate`): table ranges + cross-field rules (duplicate channel/pin/ADC, light.on≠off, enabled shelf < shelf_count, dose vs pump caps); one source of truth for CLI, HTTP, ring receiver and NVS loader; error = field path used verbatim everywhere.
 
 ### 4.7 Profiles
 
@@ -321,7 +321,7 @@ One `cmd_task` per node (core 0, prio 5) is the only caller of `cmd_dispatch()`,
 
 ### 5.4 Vocabulary (V1, by area — full usage strings generated from the table)
 
-SYSTEM `HELP · GET ID/VERSION/STATUS · REBOOT <CONFIRM> · FACTORY RESET <CONFIRM>`; CONFIG `SAVE · GET CONFIG` (replayable DUMP) + the field grammar `SET <GROUP> <shelf> <KEY> <v>` of §4.6; SESSION `SET ECHO · SET NOTIFY <TYPE|ALL> ON|OFF · SET LOG <level> [tag] · DEBUG ENABLE <key>`; TIME `GET/SET TIME`; FIRMWARE `GET FW · SET FW ROLLBACK <CONFIRM> [unlock] · SET FW UPDATE <ssid> <pass> <url> [zone, unlock, local console only — writes the handover verbatim; the ring path never carries a URL] · SET FW ZONE <z>/ZONES/ABORT [master]`; RING/NODES `GET RING · GET NODES/NODE/UNASSIGNED/PING · SET NODE <z> MAC|NAME · CLEAR NODE <z>`; SHELF/actuators (zone) `SET SHELVES <n> · SET SHELF <s> CROP|ENABLE · SET AUTO <s>` (releases every override on the shelf) · `SET LIGHT <s> <w> <r> <minutes> · SET PUMP <s> <seconds> · SET FAN <s> <minutes> · SET VIB <seconds>` — a 0 value releases that actuator's override, the controller resumes next tick; SENSORS `GET SOIL/SENSORS · SET CAL <s> <A|B> <DRY|WET> <mv> · SET SOILCAP <s> <A|B> <DRY|WET>` (captures the current filtered mV as that calibration point); FAULTS `GET FAULTS · CLEAR FAULT <CODE|ALL> [shelf] · GET SAFE · SET SAFE ON|OFF [master] · GET OUTPUTS`; MASTER `SET OUT <n> <min> · GET ALARMS · SET WIFI STA|AP · SET NTP · SET TZ · SET PROFILE …`; DEBUG (unlock) `GET I2C SCAN · SET GPIO/PCA RAW/PCF RAW <…> <seconds>` (auto-revert), `GET ADC RAW`.
+SYSTEM `HELP · GET ID/VERSION/STATUS · REBOOT <CONFIRM> · FACTORY RESET <CONFIRM>`; CONFIG `SAVE · GET CONFIG` (replayable DUMP) + the field grammar `SET <GROUP> <shelf> <KEY> <v>` of §4.6; SESSION `SET ECHO · SET NOTIFY <TYPE|ALL> ON|OFF · SET LOG <level> [tag] · DEBUG ENABLE <key>`; TIME `GET/SET TIME`; FIRMWARE `GET FW · SET FW ROLLBACK <CONFIRM> [unlock] · SET FW UPDATE <ssid> <pass> <url> [zone, unlock, local console only — writes the handover verbatim; the ring path never carries a URL] · SET FW ZONE <z>/ZONES/ABORT [master]`; RING/NODES `GET RING · GET NODES/NODE/UNASSIGNED/PING · SET NODE <z> MAC|NAME · CLEAR NODE <z>`; SHELF/actuators (zone) `SET SHELVES <n> · SET SHELF <s> CROP|ENABLE · SET AUTO <s>` (releases every override on the shelf) · `SET LIGHT <s> <w> <r> <minutes> · SET PUMP <s> <seconds> · SET FAN <s> <minutes> · SET VIB <s> <seconds>` — a 0 value releases that actuator's override, the controller resumes next tick; SENSORS `GET SOIL/SENSORS · SET CAL <s> <A|B> <DRY|WET> <mv> · SET SOILCAP <s> <A|B> <DRY|WET>` (captures the current filtered mV as that calibration point); FAULTS `GET FAULTS · CLEAR FAULT <CODE|ALL> [shelf] · GET SAFE · SET SAFE ON|OFF [master] · GET OUTPUTS`; MASTER `SET OUT <n> <min> · GET ALARMS · SET WIFI STA|AP · SET NTP · SET TZ · SET PROFILE …`; DEBUG (unlock) `GET I2C SCAN · SET GPIO/PCA RAW/PCF RAW <…> <seconds>` (auto-revert), `GET ADC RAW`.
 
 ### 5.5 NOTIFY
 
@@ -455,6 +455,18 @@ MicroSD (3.3 V SPI module) on **SPI2: SCK GPIO14 · MOSI GPIO13 · MISO GPIO27 �
 ### 11.4 Reservoir level — strain gauge (updated 2026-09-01)
 
 Level comes from a **strain gauge / load cell under the reservoir** — no float switches: filling is manually stopped by the operator (owner decision). Interface: **HX711 — DOUT → GPIO34, PD_SCK → GPIO5** (GPIO5 idles high at reset, which holds the HX711 in power-down until firmware drives it — a clean power-up state); if an analog amplifier is chosen instead, its output uses GPIO34 (ADC1_CH6) and GPIO5 stays free. Software (SP5): weight → level % with tare + full calibration from CLI/web; low threshold → fleet pump inhibit; above-max while the refill valve is on → valve off + latched fault; implausible/stuck readings → `F_LEVEL_INVALID`. The refill valve is duration-bounded and operator-supervised.
+
+### 11.5 Per-shelf PWM pollination vibrators (added 2026-09-01)
+
+Every shelf gets its own pollination vibrator, **PWM-controlled for intensity**, on **PCA9685 channels 8–11** (shelf 1–4). Consequences: the vibrators sit behind the same hardware OE kill line as the lights (dead through boot/crash/rescue); PCF8575 **P8 is freed** — the zone expander now carries 4 pumps + 4 fans + 8 spare relay pins; PCA channels **12–15 remain reserved** for future fan PWM. Data model: `vib_ch` joins the per-shelf hardware map, and a per-shelf `VIB` config group replaces the old zone-level pollination aux device — `MODE OFF|PULSE · INTENSITY 20–100 % · PULSE_S 1–30 · INTERVAL_MIN 5–1440 · START/END window`; safety class VIB applies per shelf (pulse ≤ 10 s default/30 cap, 60 s gap, 600 s/day per shelf). Struct sizes change: `hg_shelf_cfg_t` 56 → 72 B, `hg_zone_cfg_t` 272 → 336 B (blob 352 B = 4 ring chunks). The `aux[2]` slots remain for generic spare-relay devices.
+
+### 11.5 Per-shelf PWM pollination vibrators (added 2026-09-01)
+
+Every shelf gets its own pollination vibrator, **PWM-controlled for intensity**, on **PCA9685 channels 8–11** (shelf 1–4). Consequences: the vibrators sit behind the same hardware OE kill line as the lights (dead through boot/crash/rescue); PCF8575 **P8 is freed** — the zone expander now carries 4 pumps + 4 fans + 8 spare relay pins; PCA channels **12–15 remain reserved** for future fan PWM. Data model: `vib_ch` joins the per-shelf hardware map, and a per-shelf `VIB` config group replaces the old zone-level pollination aux device — `MODE OFF|PULSE · INTENSITY 20–100 % · PULSE_S 1–30 · INTERVAL_MIN 5–1440 · START/END window`; safety class VIB applies per shelf (pulse ≤ 10 s default/30 cap, 60 s gap, 600 s/day per shelf). Struct sizes change: `hg_shelf_cfg_t` 56 → 72 B, `hg_zone_cfg_t` 272 → 336 B (blob 352 B = 4 ring chunks). The `aux[2]` slots remain for generic spare-relay devices.
+
+### 11.5 Per-shelf PWM pollination vibrators (added 2026-09-01)
+
+Every shelf gets its own pollination vibrator, **PWM-controlled for intensity**, on **PCA9685 channels 8–11** (shelf 1–4). Consequences: the vibrators sit behind the same hardware OE kill line as the lights (dead through boot/crash/rescue); PCF8575 **P8 is freed** — the zone expander now carries 4 pumps + 4 fans + 8 spare relay pins; PCA channels **12–15 remain reserved** for future fan PWM. Data model: `vib_ch` joins the per-shelf hardware map, and a per-shelf `VIB` config group replaces the old zone-level pollination aux device — `MODE OFF|PULSE · INTENSITY 20–100 % · PULSE_S 1–30 · INTERVAL_MIN 5–1440 · START/END window`; safety class VIB applies per shelf (pulse ≤ 10 s default/30 cap, 60 s gap, 600 s/day per shelf). Struct sizes change: `hg_shelf_cfg_t` 56 → 72 B, `hg_zone_cfg_t` 272 → 336 B (blob 352 B = 4 ring chunks). The `aux[2]` slots remain for generic spare-relay devices.
 
 Master GPIO after these allocations: free 35/36/39 (input-only ADC1) + 0 (with care); GPIO5 taken by the HX711 SCK. Further Master I/O grows on the buses (PCF8575 9 spare pins, more I²C devices, PCA9685 option).
 
