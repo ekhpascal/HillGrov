@@ -21,7 +21,7 @@
 | PCA9685 OE | 23 | active-low output-enable; **external 10 kΩ pull-up to 3.3 V** |
 | Soil ADC1 ch A1..A6 | 32, 33, 34, 35, 36, 39 | ADC1_CH4/5/6/7/0/3; 34–39 are input-only |
 | Soil ADC2 ch A7..A8 | 25, 26 | ADC2_CH8/9 — valid **only** because `zone.bin` never starts Wi-Fi |
-| Spare | 4, 5, 13, 14 | 5 is high at reset (strapping) |
+| Spare | 4, 5, 13, 14, 27 | 5 is high at reset (strapping) |
 
 ### Zone I²C devices
 
@@ -35,7 +35,7 @@
 | Addr | Device | Notes |
 |---|---|---|
 | 0x68 | DS3231 RTC | time authority; AT24C32 EEPROM at 0x57 unused in V1 |
-| 0x20 | PCF8575 | relays: main fan, 3 dampers, shutter, refill solenoid — map fixed in SP5 |
+| 0x20 | PCF8575 | relays (7 used, 9 spare): main fan, 3 dampers, shutter, refill solenoid, overall grow light — pin map fixed in SP5 |
 | 0x44 | SHT31 (optional) | room temperature/humidity |
 
 Reserved I²C: 0x70 (PCA9685 all-call — never use) · 0x48/0x49 (future ADS1115).

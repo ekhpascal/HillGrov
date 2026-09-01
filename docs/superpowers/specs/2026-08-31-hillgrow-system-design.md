@@ -17,7 +17,7 @@ Three IDF apps in one repository share `components/`:
 
 | Image | Runs on | Contains | Never contains |
 |---|---|---|---|
-| `master.bin` | 1 × DevKitC-V4 (8 MB, 16 MB optional) | Wi-Fi APSTA (AP `192.168.7.7` + STA to house Wi-Fi), web UI + HTTP API, ring master / node manager, zone & shelf model, global control (ventilation, dampers, reservoir, shutter, alarms), DS3231 time authority, CLI on UART0 | shelf hardware control |
+| `master.bin` | 1 × DevKitC-V4 (8 MB, 16 MB optional) | Wi-Fi APSTA (AP `192.168.7.7` + STA to house Wi-Fi), web UI + HTTP API, ring master / node manager, zone & shelf model, global control (ventilation, dampers, reservoir, shutter, overall grow light, alarms), DS3231 time authority, CLI on UART0 | shelf hardware control |
 | `zone.bin` | N × DevKitC-V4 (4 MB WROOM OK) | 1–4 Shelf objects, PCA9685 / PCF8575 / soil-ADC drivers, lighting / watering / fan / actuator controllers, safety manager, ring node, CLI on UART0 | Wi-Fi, HTTP |
 | `rescue.bin` | every node, `factory` partition | Wi-Fi + one upload page (manual mode) or pull-from-Master (fleet OTA) + OTA write | CLI, control logic, API |
 
@@ -28,7 +28,7 @@ Zone identity is the eFuse MAC; the Master maps MAC → zone id / name / shelf c
 ```
  house Wi-Fi ──STA──┐                      phone/PC ──AP 192.168.7.7──┐
                     └──► MASTER (DevKitC-V4) ◄───────────────────────┘
-       I²C: DS3231 0x68 · PCF8575 0x20 (relays: fan, 3 dampers, shutter, refill) · [SHT31 0x44]
+       I²C: DS3231 0x68 · PCF8575 0x20 (relays: fan, 3 dampers, shutter, refill, overall grow light) · [SHT31 0x44]
        UART2 TX ──► ZONE 1 RX     ZONE 1 TX ──► ZONE 2 RX  …  ZONE N TX ──► MASTER UART2 RX
                      │ I²C: PCA9685 0x40 (8 LED ch WHITE/RED × 4 shelves, OE → GPIO23)
                      │      PCF8575 0x20 (4 pumps, 4 fans, vibrator, spare)
@@ -192,6 +192,7 @@ CRC vector + bit-flip; COBS round-trip 0..128 incl. resync and oversize; frame e
 | DAMPER (M) | per type (SP5) | — | — | open+close never together; closing last exhaust refused while fan ON |
 | FAN_MAIN (M) | — | 30 s | — | intake OPEN and ≥1 exhaust OPEN, re-checked every tick |
 | SHUTTER (M) | 60 s (120) | 5 s | — | — |
+| LIGHT_MAIN (M) | — | 30 s | 20 h (24 = unlimited) | overall grow light relay: own on/off schedule + duration-bounded manual override; coordinated with the blackout shutter (SP5) |
 
 ### 3.3 Safe boot sequence
 
@@ -236,7 +237,7 @@ Only when the slot is `PENDING_VERIFY`. Criteria are firmware-attributable (conf
 
 ### 3.11 Master global safety (details in SP5 feature spec)
 
-Refill valve: level valid ∧ not HIGH ∧ below target; HIGH while filling → off within one tick + latched fault; no rise in 120 s → latched fault; LOW float → `inhibit_mask |= PUMPS`. Recommended hardware backstop: NC high-level float in series with the solenoid coil. Ventilation: per-damper position model (CLOSED/OPENING/OPEN/CLOSING/UNKNOWN via end switches or travel time); fan path interlock every tick. `SET SAFE ON` → `inhibit_mask = ALL` (fleet dark ≤ 2 s, self-releasing after 600 s if the Master dies). Damper/reservoir hardware variants deferred to SP5 (decision, brainstorm).
+Refill valve: level valid ∧ not HIGH ∧ below target; HIGH while filling → off within one tick + latched fault; no rise in 120 s → latched fault; LOW float → `inhibit_mask |= PUMPS`. Recommended hardware backstop: NC high-level float in series with the solenoid coil. Ventilation: per-damper position model (CLOSED/OPENING/OPEN/CLOSING/UNKNOWN via end switches or travel time); fan path interlock every tick. `SET SAFE ON` → `inhibit_mask = ALL` (fleet dark ≤ 2 s, self-releasing after 600 s if the Master dies). **Overall grow light** (owner addition 2026-09-01): a room-wide supplemental light on a PCF8575 relay, class LIGHT_MAIN — photoperiod schedule of its own, daily-hours budget, duration-bounded manual override (`SET OUT`/web), included in `SET SAFE ON` and in blackout-shutter coordination. Damper/reservoir hardware variants deferred to SP5 (decision, brainstorm).
 
 ### 3.12 Status LED (GPIO2) and console
 
@@ -400,7 +401,7 @@ RAM: zone free heap ≈ 220 KB after boot; Master ≈ 95–110 KB (Wi-Fi buffer 
 | 2 | Zone shelf control | `safety`/`fault`/`soil_*`/`act_hal`/`pca9685`/`pcf8575`/controllers/`shelf` + zone rows | A standalone zone grows a shelf from its CLI: calibrated soil readings, scheduled light with caps, hysteresis watering with all limits, manual overrides, faults latching/clearing; `uart_test.py --suite full` passes on hardware |
 | 3 | Ring link | `ring_proto`/`ring_link`/`node_mgr` + forwarding + enrolment + config push + TIME_SYNC + FW_UPDATE handshake | Master + 2 zones: discovery, `SET ZONE 2 …` round-trips, heartbeats drive the node table, break blame correct when a node is unplugged, config pushed and reverted per §4.4, fleet OTA of one zone end-to-end via rescue pull |
 | 4 | Master web UI | `wifi_mgr`/`http_srv`/`hg_json`/`hg_fs`/`alarm_mgr`/`history` + pages (gzipped `EMBED_FILES` assets, vanilla JS) | Phone on the AP at 192.168.7.7: dashboard of all zones/shelves, config editing, alarms, history plots + text export, both firmware uploads, zone fleet update button |
-| 5 | Master global control | `time_svc`/`ds3231`/`sht31`/`psychro`/`vent_ctrl`/`reservoir_ctrl`/`shutter_ctrl` + Master pin map | Ventilation strategy on dew point with damper interlocks, reservoir refill with all guards, blackout shutter, `inhibit_mask` propagation — hardware details fixed in the SP5 feature spec first |
+| 5 | Master global control | `time_svc`/`ds3231`/`sht31`/`psychro`/`vent_ctrl`/`reservoir_ctrl`/`shutter_ctrl` + Master pin map | Ventilation strategy on dew point with damper interlocks, reservoir refill with all guards, blackout shutter, overall-grow-light schedule, `inhibit_mask` propagation — hardware details fixed in the SP5 feature spec first |
 
 Each sub-project gets its own dated feature spec (where §-level detail is still open: SP2 controller state machines + optional DLI; SP4 page inventory; SP5 hardware) and implementation plan. **First milestone** = SP1 done criteria; first hardware smoke test: two DevKitCs, `HELP` on both consoles, rescue upload page reachable.
 
