@@ -4,8 +4,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 include(FetchContent)
 FetchContent_Declare(unity
-  URL https://github.com/ThrowTheSwitch/Unity/archive/refs/tags/v2.6.0.tar.gz
-  DOWNLOAD_EXTRACT_TIMESTAMP ON)
+  URL https://github.com/ThrowTheSwitch/Unity/archive/refs/tags/v2.6.0.tar.gz)
 FetchContent_MakeAvailable(unity)
 if(MSVC)
   add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
@@ -25,3 +24,4 @@ endfunction()
 
 hg_test(test_app_version ${COMP}/app_version/app_version.c)
 hg_test(test_hg_blob ${COMP}/hg_blob/hg_blob.c)
+hg_test(test_hg_cfg_types ${COMP}/hg_cfg/hg_cfg_defaults.c)
