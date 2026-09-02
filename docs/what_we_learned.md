@@ -24,3 +24,29 @@ Entries inherited from sibling projects (verified during design, 2026-08):
 **Root cause:** quasi-bidirectional outputs default high; the chip keeps its last word across an MCU-only reset.
 **Fix:** all loads active-low; first boot I²C transaction writes `0xFFFF` and reads it back; 1 s read-back audit (spec §3.1/§3.3).
 **Rule:** every expander-driven load must be safe with the expander's power-on state.
+
+## 2026-09-02 — SP1 execution notes (subagent-driven; whole-branch review shipped)
+
+Three genuine plan-code defects were caught only by adversarial review — record the rules:
+
+**Bootloader RWDT vs long button holds.** The 2nd-stage bootloader arms the RTC watchdog at `CONFIG_BOOTLOADER_WDT_TIME_MS` (default 9000) and never feeds it; any boot-path wait ≥ 9 s (our 10 s rescue hold) resets the chip in a loop. Fix: `CONFIG_BOOTLOADER_WDT_TIME_MS=30000` in every app's sdkconfig.defaults. **Rule:** any bootloader-time wait must be budgeted against the boot WDT — and a defaults change needs the generated sdkconfig deleted to take effect.
+
+**Blank otadata + factory partition boots factory forever.** `ota_data_initial.bin` is all-0xFF; with a factory partition present the bootloader then selects FACTORY and nothing ever repairs otadata — once a real rescue image occupies factory, every fresh flash boots rescue permanently. Fix: `tools/hg_otadata.py` generates a valid otadata (seq=1 → ota_0, state UNDEFINED, CRC per IDF otatool) and both flash tools write it. **Rule:** never flash blank otadata on a layout that has both factory and OTA slots; `idf.py flash` is unsanctioned here (it puts the app at 0x30000/factory) — use `tools/flash_all.py` / `flash_app.py` only.
+
+**RTC retain `custom[]` is CRC-excluded and word-cast-unsafe.** The rescue flag must be memcpy'd (LE) both sides, checked by value (never gated on `is_retain_mem_valid()`), and zeroed after consumption or the node boots to rescue forever. First-power-on garbage is neutralized because `bootloader_common_update_rtc_retain_mem(NULL, true)` zeroes the whole struct on invalid CRC — call it before reading.
+
+### Hardware bench session — outstanding SP1 verification (no DevKitC was available; a DevKitC-V4 enumerates as Silicon Labs CP210x, not FTDI)
+- Flash with `tools/flash_all.py --board zone --port COMx` ONLY (never `idf.py flash`). Verify normal boot → zone app from ota_0 (not rescue).
+- GPIO15 hold 1–9 s → `erase nvs` log, defaults on boot; hold ≥ 10 s → factory/rescue boot **without a watchdog reset** (proves the 30 s WDT fix).
+- Rescue: manual AP `HillGrow-Rescue-xxxxxx` / `hillgrow1` / 192.168.7.7 upload page → upload zone.bin → boots from OTA slot, `GET FW` shows VALID after auto-mark.
+- **Specifically exercise the pull-fails→AP transition** (wrong URL in `SET FW UPDATE`, 3 attempts, then AP) — this path was reworked in review and has never run on silicon.
+- Bench pull mode per Task 17 brief; `uart_test.py` green on both roles (`--allow-reboot`); TWDT probe (temporary `while(1);` in cli0 → panic ≤ 8 s); tick pin-mapping bring-up boxes; only then claim "SP1 hardware verified".
+
+### SP2 entry checklist (from the final whole-branch review)
+1. **Design decision first:** actuator-override grammar (`SET LIGHT <s> <w> <r> <minutes>`) collides with the 3-arg config rows on the same nouns — the static per-position arg typing cannot express both; decide (variable-arity rows vs renamed nouns) before writing SP2 rows.
+2. Consolidate the duplicated app_if glue (zone/master `log_set`/`time_*`/`fw_*` are byte-identical) before adding callbacks.
+3. Harden cmd_task before a second caller (httpd): abandoned-slot resp/ses lifetime — HTTP handlers must use static/per-session response buffers until then.
+4. Wire `F_NVS` (hg_store 3-strike log placeholder) to the real fault store.
+5. Add offsetof cross-check asserts to the hg_cfg field table before growing it.
+6. Real §3.10 OTA trial criteria replace the SP1 `esp_ota_mark_app_valid_cancel_rollback()` boot placeholder.
+7. Smaller ledgered items: hw-gen regression on MIGRATED rewrite (live once SP3 sync reads gens); hg_store_set_zid sync-write (SP3); MIN_OK/MAX_OK have no SET row (cal_dump_line fallback non-replayable if one is added); reboot_counter advances 2/boot.
