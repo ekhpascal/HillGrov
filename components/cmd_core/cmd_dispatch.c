@@ -50,6 +50,12 @@ static int enum_index(const char *enums, const char *val, long *out) {
         if (!bar) break;
         p = bar + 1; idx++;
     }
+    /* idx is now the highest valid index (entry count - 1). A single-entry
+     * enum -- e.g. REBOOT's A_CONF {"CONFIRM"} -- must reject the numeric
+     * fallback entirely: "REBOOT 0" is not a confirmation, and index 0 is
+     * both the only and the default-looking value, so letting it through
+     * defeats the destructive-row confirm gate. */
+    if (idx == 0) return -1;
     long v;
     if (parse_int_arg(val, &v) == 0 && v >= 0 && v <= idx) { *out = v; return 0; }
     return -1;

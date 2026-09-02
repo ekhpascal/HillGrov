@@ -68,6 +68,12 @@ static void test_arity_and_ranges(void) {
     TEST_ASSERT_EQUAL_INT(0,  run("REBOOT CONFIRM"));      TEST_ASSERT_EQUAL_STRING("OK REBOOT\n", resp);
     TEST_ASSERT_EQUAL_INT(-1, run("REBOOT"));              TEST_ASSERT_EQUAL_STRING("ERR BAD_ARGS\n", resp);
     TEST_ASSERT_EQUAL_INT(-1, run("REBOOT YES"));          TEST_ASSERT_EQUAL_STRING("ERR BAD_ARGS\n", resp);
+    /* Regression: enum_index's numeric fallback must not let index 0 satisfy
+     * a single-entry enum ("CONFIRM") -- REBOOT 0 is not a confirmation. */
+    TEST_ASSERT_EQUAL_INT(-1, run("REBOOT 0"));            TEST_ASSERT_EQUAL_STRING("ERR BAD_ARGS\n", resp);
+    /* Multi-entry enums (A_MODE: OFF|ON) must keep accepting numeric indices. */
+    ses.unlock_until_ms = fake_clock_now() + 1000;
+    TEST_ASSERT_EQUAL_INT(0,  run("SET POKE 1"));           TEST_ASSERT_EQUAL_STRING("OK POKE\n", resp);
 }
 
 static void test_gates(void) {

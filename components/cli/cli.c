@@ -22,7 +22,8 @@ _Static_assert(CONFIG_LOG_VERSION == 1, "pin log v1");
 #endif
 
 static const char *TAG = "cli";
-#define MUTEX_MS     50
+#define MUTEX_MS       50    /* log/notify writes: best-effort, drop under contention */
+#define REPLY_MUTEX_MS 2000  /* command replies: must not be dropped just because a log line raced it */
 #define VPRINTF_BUF  256
 #define UART_READ_SZ 64
 /* cli_line_feed's echo_out can emit "\r\x1b[2K" (4) + a full recalled line:
@@ -68,12 +69,17 @@ static void write_verbatim(const char *s, size_t n) {
     xSemaphoreGiveRecursive(s_mux);
 }
 
-static void cli_write(const char *s) {
+/* timeout_ms lets callers pick the console mutex wait: short + drop-counted
+ * for best-effort log/notify traffic, long for command replies that must not
+ * be dropped just because a log line happened to be mid-write. */
+static void cli_write_to(const char *s, uint32_t timeout_ms) {
     size_t n = strlen(s);
-    if (xSemaphoreTakeRecursive(s_mux, pdMS_TO_TICKS(MUTEX_MS)) != pdTRUE) { s_log_drops++; return; }
+    if (xSemaphoreTakeRecursive(s_mux, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) { s_log_drops++; return; }
     write_raw(s, n);
     xSemaphoreGiveRecursive(s_mux);
 }
+
+static void cli_write(const char *s) { cli_write_to(s, MUTEX_MS); }
 
 static void cli_notify_sink(void *ctx, const char *line) {
     (void)ctx;
@@ -111,7 +117,9 @@ static int cli_vprintf(const char *fmt, va_list ap) {
 }
 
 void cli_init(void) {
-    uart_driver_install(UART_NUM_0, 512, 2048, 0, NULL, 0);
+    /* spec 4.6 paste-import path: a pasted GET CONFIG dump replayed at
+     * 115200 baud overruns the old 512 B RX ring while echo/replies drain. */
+    uart_driver_install(UART_NUM_0, 4096, 2048, 0, NULL, 0);
     uart_config_t cfg = {
         .baud_rate = HG_CONSOLE_BAUD,
         .data_bits = UART_DATA_8_BITS,
@@ -148,10 +156,10 @@ static void cli_task(void *arg) {
             if (ev == CLI_EVT_LINE) {
                 const char *line = cli_line_take(&s_line);
                 cmd_task_execute(&s_cli_ses, line, s_resp, sizeof s_resp, 3500);
-                cli_write(s_resp);
+                cli_write_to(s_resp, REPLY_MUTEX_MS);
                 esp_task_wdt_reset();   /* a pasted burst of many lines must not starve the TWDT */
             } else if (ev == CLI_EVT_TOO_LONG) {
-                cli_write("ERR TOO_LONG\r\n");
+                cli_write_to("ERR TOO_LONG\r\n", REPLY_MUTEX_MS);
             }
         }
     }

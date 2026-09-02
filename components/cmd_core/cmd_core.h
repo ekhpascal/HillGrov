@@ -69,7 +69,8 @@ struct cmd_core {
     const cmd_entry_t *table;
     int                table_len;
     uint8_t            role;             /* CMD_ROLE_* */
-    uint8_t            zone_id;          /* own ring id; 0 on master/unassigned */
+    uint8_t            zone_id;          /* own ring id: 0 = master; zone: 1..8 once assigned,
+                                           * HG_NODE_UNASSIGNED (254) until enrolled */
     uint32_t         (*now_ms)(void);
     cmd_forward_fn     forward;          /* master only; NULL elsewhere */
     void              *forward_ctx;

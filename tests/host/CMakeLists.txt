@@ -34,6 +34,7 @@ hg_test(test_notify ${COMP}/notify/notify.c)
 set(CMD_CORE_SRC ${COMP}/cmd_core/cmd_tok.c ${COMP}/cmd_core/cmd_resp.c ${COMP}/cmd_core/cmd_dispatch.c ${COMP}/cmd_core/cmd_help.c)
 hg_test(test_cmd_core ${CMD_CORE_SRC})
 hg_test(test_cmd_help ${CMD_CORE_SRC})
-hg_test(test_zone_cmds ${COMP}/zone_cmds/zone_cmds.c ${CMD_CORE_SRC} ${HG_CFG_SRC} ${COMP}/hg_model/hg_model.c)
+hg_test(test_zone_cmds ${COMP}/zone_cmds/zone_cmds.c ${CMD_CORE_SRC} ${HG_CFG_SRC} ${COMP}/hg_model/hg_model.c
+        ${COMP}/cmd_common/cmd_common.c ${COMP}/notify/notify.c)
 hg_test(test_cmd_common ${COMP}/cmd_common/cmd_common.c ${CMD_CORE_SRC} ${COMP}/notify/notify.c fakes/fake_app_if.c)
 hg_test(test_handover ${COMP}/rescue_handover/rescue_handover.c ${COMP}/hg_blob/hg_blob.c)

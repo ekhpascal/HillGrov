@@ -90,7 +90,12 @@ static int zone_time_get(char *buf, size_t n) {
 }
 
 static int zone_time_set(int y, int mo, int d, int h, int mi, int s) {
-    if (mo < 1 || mo > 12 || d < 1 || d > 31 || h < 0 || h > 23 || mi < 0 || mi > 59 || s < 0 || s > 59)
+    /* days-in-month, index 0 = January; Feb bumped to 29 below on a leap year */
+    static const uint8_t days_in_month[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    if (y < 2020 || y > 2099 || mo < 1 || mo > 12) return -1;
+    int leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    int dmax = days_in_month[mo - 1] + ((mo == 2 && leap) ? 1 : 0);
+    if (d < 1 || d > dmax || h < 0 || h > 23 || mi < 0 || mi > 59 || s < 0 || s > 59)
         return -1;
     struct tm tmv;
     memset(&tmv, 0, sizeof tmv);
@@ -117,6 +122,14 @@ static int zone_fw_info(char *buf, size_t n) {
     return 0;
 }
 
+/* spec 4.3: flush before every restart. factory_reset (hg_store_factory_reset)
+ * is unaffected -- it erases the "hg" NVS namespace outright, so there is
+ * nothing worth flushing first. */
+static void zone_reboot(void) {
+    hg_store_flush(2000);
+    esp_restart();
+}
+
 static int zone_fw_rollback(void) {
     esp_err_t err = esp_ota_mark_app_invalid_rollback_and_reboot();
     /* only reached on failure -- success reboots inside the call above */
@@ -125,6 +138,9 @@ static int zone_fw_rollback(void) {
 }
 
 static int zone_fw_update(const char *ssid, const char *pass, const char *url) {
+    /* spec 4.3: flush before every restart -- this call reboots into rescue
+     * on success, so any dirty config must hit NVS before the handover write. */
+    hg_store_flush(2000);
     hg_handover_t h;
     memset(&h, 0, sizeof h);
     /* Belt-and-braces: cmd_common's A_FWUP arg maxes already reject an
@@ -158,7 +174,7 @@ const app_if_t APP_IF_ZONE = {
     .fw_info       = zone_fw_info,
     .fw_rollback   = zone_fw_rollback,
     .fw_update     = zone_fw_update,
-    .reboot        = esp_restart,
+    .reboot        = zone_reboot,
     .factory_reset = hg_store_factory_reset,
 };
 

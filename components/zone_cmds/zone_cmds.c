@@ -161,18 +161,27 @@ static int h_cal(cmd_req_t *q, char *r, int l) {
 
 /* ---- GET CONFIG -- replayable dump of every field that differs from default ---- */
 
-static int cal_dump_line(int idx, const char *key, const char *val, char *r, int l) {
-    if      (cmd_ci_eq(key, "DRY_A")) return cmd_linef(r, l, "  SET CAL %d A DRY %s", idx + 1, val);
-    else if (cmd_ci_eq(key, "DRY_B")) return cmd_linef(r, l, "  SET CAL %d B DRY %s", idx + 1, val);
-    else if (cmd_ci_eq(key, "WET_A")) return cmd_linef(r, l, "  SET CAL %d A WET %s", idx + 1, val);
-    else if (cmd_ci_eq(key, "WET_B")) return cmd_linef(r, l, "  SET CAL %d B WET %s", idx + 1, val);
-    return cmd_linef(r, l, "  SET CAL %d %s %s", idx + 1, key, val); /* MIN_OK/MAX_OK: no SET row */
+/* Longest possible dump line, e.g. "  SET HWSHELF 4 PUMP_MAX_DAILY_S 3600" --
+ * group name <= 7 ("HWSHELF"), key <= 17 ("PUMP_MAX_DAILY_S"), value buffers
+ * are 24 B (hg_field_get_text's out param). Sized with a generous margin. */
+#define CFG_DUMP_LINE_MAX 96
+/* "  MORE : <count>\n" -- count is bounded by HG_FIELD_COUNT * HG_MAX_SHELVES,
+ * comfortably under four digits; this reserve is intentionally generous so
+ * the trailer is guaranteed to fit once a line stops fitting. */
+#define CFG_DUMP_TRAILER_MAX 32
+
+static int cal_dump_fmt(int idx, const char *key, const char *val, char *out, size_t cap) {
+    if      (cmd_ci_eq(key, "DRY_A")) return snprintf(out, cap, "  SET CAL %d A DRY %s", idx + 1, val);
+    else if (cmd_ci_eq(key, "DRY_B")) return snprintf(out, cap, "  SET CAL %d B DRY %s", idx + 1, val);
+    else if (cmd_ci_eq(key, "WET_A")) return snprintf(out, cap, "  SET CAL %d A WET %s", idx + 1, val);
+    else if (cmd_ci_eq(key, "WET_B")) return snprintf(out, cap, "  SET CAL %d B WET %s", idx + 1, val);
+    return snprintf(out, cap, "  SET CAL %d %s %s", idx + 1, key, val); /* MIN_OK/MAX_OK: no SET row */
 }
 
-static void dump_line(uint8_t group, int idx, const char *key, const char *val, char *r, int l) {
-    if (group == HG_G_CAL) { cal_dump_line(idx, key, val, r, l); return; }
-    if (hg_group_scope(group) == 0) cmd_linef(r, l, "  SET %s %s %s", HG_GROUP_NAMES[group], key, val);
-    else cmd_linef(r, l, "  SET %s %d %s %s", HG_GROUP_NAMES[group], idx + 1, key, val);
+static int dump_fmt(uint8_t group, int idx, const char *key, const char *val, char *out, size_t cap) {
+    if (group == HG_G_CAL) return cal_dump_fmt(idx, key, val, out, cap);
+    if (hg_group_scope(group) == 0) return snprintf(out, cap, "  SET %s %s %s", HG_GROUP_NAMES[group], key, val);
+    return snprintf(out, cap, "  SET %s %d %s %s", HG_GROUP_NAMES[group], idx + 1, key, val);
 }
 
 static int h_config_dump(cmd_req_t *q, char *r, int l) {
@@ -183,6 +192,9 @@ static int h_config_dump(cmd_req_t *q, char *r, int l) {
     hg_defaults_hw(&dhw);
     hg_defaults_cfg(&dcfg);
 
+    /* Pass 1: count every field that differs from default -- this is the
+     * TOTAL n reported in the header, independent of how much of the dump
+     * actually fits below it. */
     int n = 0;
     for (int i = 0; i < HG_FIELD_COUNT; i++) {
         const hg_field_t *f = &HG_FIELDS[i];
@@ -196,6 +208,16 @@ static int h_config_dump(cmd_req_t *q, char *r, int l) {
         }
     }
     cmd_okf(r, l, "CONFIG %d", n);
+
+    /* Pass 2: walk the same differing fields again, formatting each candidate
+     * line into a scratch buffer first to get its exact byte count before
+     * committing it to the response. cmd_linef() would otherwise happily
+     * write a truncated, garbled line if it ran out of room mid-format --
+     * the fit decision has to happen before the call, not after. Room for
+     * one trailer continuation ("  MORE : <n>") is reserved on every line so
+     * that trailer is guaranteed to fit once truncation starts. */
+    int not_emitted = 0;
+    int stopped = 0;
     for (int i = 0; i < HG_FIELD_COUNT; i++) {
         const hg_field_t *f = &HG_FIELDS[i];
         int scope = hg_group_scope(f->group);
@@ -205,8 +227,20 @@ static int h_config_dump(cmd_req_t *q, char *r, int l) {
             hg_field_get_text(&hw, &cfg, f->group, idx, f->key, a, sizeof a);
             hg_field_get_text(&dhw, &dcfg, f->group, idx, f->key, b, sizeof b);
             if (strcmp(a, b) == 0) continue;
-            dump_line(f->group, idx, f->key, a, r, l);
+
+            if (stopped) { not_emitted++; continue; }
+
+            char line[CFG_DUMP_LINE_MAX];
+            int w = dump_fmt(f->group, idx, f->key, a, line, sizeof line);
+            if (w < 0) w = 0;
+            size_t need = strlen(r) + (size_t)w + 1 /* '\n' cmd_linef appends */;
+            if (need + CFG_DUMP_TRAILER_MAX > (size_t)l) { stopped = 1; not_emitted++; continue; }
+
+            if (cmd_linef(r, l, "%s", line) != 0) { stopped = 1; not_emitted++; continue; }
         }
+    }
+    if (not_emitted > 0 && cmd_linef(r, l, "  MORE : %d", not_emitted) != 0) {
+        /* unreachable: CFG_DUMP_TRAILER_MAX reserved room for exactly this line */
     }
     return 0;
 }

@@ -79,7 +79,12 @@ static int master_time_get(char *buf, size_t n) {
 }
 
 static int master_time_set(int y, int mo, int d, int h, int mi, int s) {
-    if (mo < 1 || mo > 12 || d < 1 || d > 31 || h < 0 || h > 23 || mi < 0 || mi > 59 || s < 0 || s > 59)
+    /* days-in-month, index 0 = January; Feb bumped to 29 below on a leap year */
+    static const uint8_t days_in_month[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    if (y < 2020 || y > 2099 || mo < 1 || mo > 12) return -1;
+    int leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    int dmax = days_in_month[mo - 1] + ((mo == 2 && leap) ? 1 : 0);
+    if (d < 1 || d > dmax || h < 0 || h > 23 || mi < 0 || mi > 59 || s < 0 || s > 59)
         return -1;
     struct tm tmv;
     memset(&tmv, 0, sizeof tmv);

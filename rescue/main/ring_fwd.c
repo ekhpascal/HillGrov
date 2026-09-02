@@ -1,6 +1,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/uart.h"
+#include "driver/gpio.h"
 #include "esp_task_wdt.h"
 #include "board.h"
 #include "rescue.h"   /* ring_fwd_start() prototype now lives here (review fix) */
@@ -33,5 +34,8 @@ void ring_fwd_start(void) {
     };
     uart_param_config(UART_NUM_2, &cfg);
     uart_set_pin(UART_NUM_2, HG_GPIO_RING_TX, HG_GPIO_RING_RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    /* IDF doesn't enable RX pulls on its own; without this, an unpowered
+     * upstream node leaves the pin floating and feeds garbage into the ring. */
+    gpio_set_pull_mode(HG_GPIO_RING_RX, GPIO_PULLUP_ONLY);
     xTaskCreatePinnedToCore(ring_fwd_task, "ring_fwd", 2048, NULL, 5, NULL, 0);
 }
