@@ -36,10 +36,10 @@
 |---|---|---|
 | 0x68 | DS3231 RTC | time authority; AT24C32 EEPROM at 0x57 unused in V1 |
 | 0x20 | PCF8575 | relays (9 used, 7 spare): main fan, 3 dampers, blind open (P8) + blind close (P9), refill solenoid, overall grow light, heater — pin map fixed in SP5 |
-| 0x44 | SHT31 | growth-room temperature/humidity |
-| 0x45 | SHT31 #2 (optional) | workshop/“inside” temperature/humidity |
-| 0x62 | SCD41 | CO₂ (growth room) |
-| 0x4D | SC16IS752 | I²C→UART bridge → RS-485 Modbus field bus: PAR sensor (400–700 nm) + remote/outdoor T/RH transmitters; 2nd UART spare |
+| 0x64 | STCC4 (DFRobot Gravity) | growth-room CO₂ 400–5000 ppm + T/RH via the module's companion SHT4x (typ. 0x44 — verify in scan) |
+| 0x38 | AHT20 | workshop/“inside” temperature/humidity (AHT20+BMP280 combo module) |
+| 0x76/0x77 | BMP280 | air pressure (same combo module; address per SDO strap — verify in scan); feeds STCC4 pressure compensation |
+| 0x4D | SC16IS752 | I²C→UART bridge → RS-485 Modbus field bus: PAR sensor (400–700 nm); optional far T/RH transmitters later; 2nd UART spare |
 
 ### Master pin assignments (owner extensions 2026-09-01)
 
@@ -51,9 +51,10 @@
 | Reservoir level (strain gauge) | 34 (HX711 DOUT / analog in) · 5 (HX711 SCK) | GPIO5 high at reset = HX711 power-down (benign); no float switches — manual fill stop |
 | Room presence sensor | 39 (digital in, input-only) | PIR / mmWave OUT; external pull per module if open-collector |
 | Blind end-stops | 35 (closed) · 36 (open) | input-only — **external pull-ups required** |
-| Spare | 0 with care only — master GPIO fully allocated | further master I/O goes on the buses |
+| Outdoor temperature (DS18B20) | 0 (1-Wire) | strapping pin — the 4.7 kΩ pull-up to 3.3 V that 1-Wire needs is exactly what the boot strap wants (idle-high = boot-safe); powered 3-wire hookup, no parasite mode |
+| Spare | none — master GPIO fully allocated | further master I/O goes on the buses |
 
-Reserved I²C: 0x70 (PCA9685 all-call — never use) · 0x48/0x49 (future ADS1115).
+Reserved I²C: 0x70 (PCA9685 all-call — never use) · 0x48–0x4B (future ADS1115 — optional; no current sensor needs an ADC: the DS18B20 is 1-Wire digital, not analog).
 
 ## Reserved / Unavailable
 
@@ -62,7 +63,7 @@ Reserved I²C: 0x70 (PCA9685 all-call — never use) · 0x48/0x49 (future ADS111
 | 6–11 | internal SPI flash — **NEVER USE** |
 | 1, 3 | UART0 console/flashing |
 | 12 | MTDI strapping — a pull-up selects 1.8 V flash and bricks boot; leave alone |
-| 0 | boot strap (on-board BOOT button) |
+| 0 | boot strap (on-board BOOT button) — Master: shared with DS18B20 1-Wire (idle-high, boot-safe; see checklist) |
 | 2 | strapping + on-board LED — status LED only, no external load |
 | 5, 15 | strapping, high at reset (15 doubles as rescue button to GND) |
 | 16, 17 | PSRAM on WROVER modules — kept free so either module works |
@@ -75,7 +76,7 @@ Reserved I²C: 0x70 (PCA9685 all-call — never use) · 0x48/0x49 (future ADS111
 - [ ] LED MOSFET gate drivers are non-inverting (gate low = LED off).
 - [ ] 10 kΩ pull-up on every ring **RX** (GPIO18) so an unpowered upstream reads idle-high; twisted pair + GND per link; 3.3 V TTL point-to-point.
 - [ ] 100 kΩ pull-down on **every soil ADC input** — an unplugged SEN0193 must read ≈ 0 (open-sensor detection depends on it).
-- [ ] 4.7 kΩ I²C pull-ups on GPIO21/22 (once per bus).
+- [ ] 4.7 kΩ I²C pull-ups on GPIO21/22 (once per bus). Master: audit every breakout's onboard pull-ups (DS3231, STCC4, AHT20/BMP280, SC16IS752 boards all ship their own) — strip extras so the parallel total stays ≈ 2.2–4.7 kΩ; run 100 kHz; keep total SDA/SCL wiring < ~1 m (far sensors belong on the field bus).
 - [ ] Rescue button: momentary switch GPIO15 → GND.
 - [ ] 12 V supply sized for **all zones dosing simultaneously** (pump serialization is per-zone only) plus LED load.
 - [ ] Refill is operator-supervised (no floats): verify at SP5 bring-up that the valve's max-run timeout closes it even when unattended.
@@ -86,6 +87,8 @@ Reserved I²C: 0x70 (PCA9685 all-call — never use) · 0x48/0x49 (future ADS111
 - [ ] RS-485 field bus: isolated TTL↔RS-485 module with automatic flow direction (no DE/RE line — pairs with the SC16IS752 TX/RX directly, 3.3 V logic side); A/B twisted pair, 120 Ω termination at both ends; Modbus RTU 9600 8N1; unique slave addresses noted here when assigned.
 - [ ] Heater: mechanical thermal cutout/thermostat **in series** with the relay-switched line — mandatory before first power-on (§11.8).
 - [ ] Blind: external pull-ups on end-stop inputs GPIO35/36; motor stall-safe or fused; open/close relays verified never simultaneously closed (drive both = firmware bug → report).
+- [ ] I²C scan at first boot must match the address map exactly (incl. the STCC4 module's second device, the SHT4x, and the BMP280's strap-dependent 0x76/0x77) — any surprise address = stop and resolve before drivers load.
+- [ ] DS18B20: 4.7 kΩ pull-up GPIO0 → 3.3 V; powered 3-wire wiring (VDD/GND/DQ, parasite mode off); BOOT button still usable (pressing it during a read only corrupts that one read); verify auto-flash still triggers with the probe connected.
 
 ## Power
 

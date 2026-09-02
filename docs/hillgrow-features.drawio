@@ -25,7 +25,7 @@
                 <mxCell id="pmasterg1r3" value="• Wi-Fi APSTA: AP 192.168.7.7 (phone/PC → web UI, WPA2) + STA → house Wi-Fi (NTP, future cloud)" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg1" vertex="1">
                     <mxGeometry x="4" y="136" width="482" height="40" as="geometry"/>
                 </mxCell>
-                <mxCell id="pmasterg1r4" value="• I²C (GPIO21/22): DS3231 RTC @0x68 · SHT31 @0x44 growth room T/RH · SHT31 @0x45 workshop T/RH (opt) · SCD41 @0x62 CO₂ · SC16IS752 @0x4D UART bridge" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg1" vertex="1">
+                <mxCell id="pmasterg1r4" value="• I²C (GPIO21/22): DS3231 RTC @0x68 · STCC4 @0x64 room CO₂+T/RH (companion SHT4x @0x44 on module) · AHT20 @0x38 + BMP280 @0x76/77 workshop T/RH/P · SC16IS752 @0x4D UART bridge" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg1" vertex="1">
                     <mxGeometry x="4" y="176" width="482" height="40" as="geometry"/>
                 </mxCell>
                 <mxCell id="pmasterg1r5" value="• PCF8575 @0x20, active-low relays: DUKA TT125 fan · intake damper · exhaust→workshop · exhaust→outside · BLIND open+close (DC motor) · refill solenoid · OVERALL GROW LIGHT · HEATER (thermal cutout in series!) — 9 used, 7 spare" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg1" vertex="1">
@@ -73,10 +73,10 @@
                 <mxCell id="pmasterg2a0" value="0" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;spacingLeft=4;strokeColor=#bbbbbb;" parent="pmasterg2" vertex="1">
                     <mxGeometry x="4" y="54" width="64" height="20" as="geometry"/>
                 </mxCell>
-                <mxCell id="pmasterg2b0" value="BOOT strap / on-board button" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;spacingLeft=4;strokeColor=#bbbbbb;" parent="pmasterg2" vertex="1">
+                <mxCell id="pmasterg2b0" value="BOOT strap / on-board button · DS18B20 outdoor T (1-Wire, 4.7 kΩ pull-up = boot-safe)" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;spacingLeft=4;strokeColor=#bbbbbb;" parent="pmasterg2" vertex="1">
                     <mxGeometry x="68" y="54" width="340" height="20" as="geometry"/>
                 </mxCell>
-                <mxCell id="pmasterg2c0" value="free*" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;spacingLeft=4;strokeColor=#bbbbbb;fillColor=#ffe6cc;align=center;" parent="pmasterg2" vertex="1">
+                <mxCell id="pmasterg2c0" value="USED" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;spacingLeft=4;strokeColor=#bbbbbb;align=center;" parent="pmasterg2" vertex="1">
                     <mxGeometry x="408" y="54" width="78" height="20" as="geometry"/>
                 </mxCell>
                 <mxCell id="pmasterg2a1" value="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;spacingLeft=4;strokeColor=#bbbbbb;" parent="pmasterg2" vertex="1">
@@ -313,7 +313,7 @@
                 <mxCell id="pmasterg2c26" value="used" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;spacingLeft=4;strokeColor=#bbbbbb;fillColor=#dae8fc;align=center;" parent="pmasterg2" vertex="1">
                     <mxGeometry x="408" y="574" width="78" height="20" as="geometry"/>
                 </mxCell>
-                <mxCell id="pmasterg2ft" value="Master GPIO is now FULLY allocated — only GPIO0 (strapping, with care) remains. Further master I/O grows on the buses: PCF8575 9 spare pins, more I²C devices, optional PCA9685." style="text;html=1;whiteSpace=wrap;align=left;spacingLeft=4;fontSize=10;fontColor=#666666;" parent="pmasterg2" vertex="1">
+                <mxCell id="pmasterg2ft" value="Master GPIO is FULLY allocated — none free (GPIO0 = DS18B20 1-Wire outdoor probe, boot-strap compatible). Further master I/O grows on the buses: PCF8575 7 spare pins, more I²C devices, optional PCA9685." style="text;html=1;whiteSpace=wrap;align=left;spacingLeft=4;fontSize=10;fontColor=#666666;" parent="pmasterg2" vertex="1">
                     <mxGeometry x="4" y="594" width="482" height="56" as="geometry"/>
                 </mxCell>
                 <mxCell id="pmasterg3" value="Legend" style="swimlane;rounded=1;startSize=30;fontSize=13;fontStyle=1;fillColor=#f5f5f5;strokeColor=#999999;swimlaneFillColor=#ffffff;horizontal=1;arcSize=6;" parent="1" vertex="1">
@@ -457,10 +457,10 @@
                 <mxCell id="pmasterg11" value="Global climate &amp; water — SP5" style="swimlane;rounded=1;startSize=30;fontSize=13;fontStyle=1;fillColor=#f8cecc;strokeColor=#b85450;swimlaneFillColor=#ffffff;horizontal=1;arcSize=6;" parent="1" vertex="1">
                     <mxGeometry x="1080" y="606" width="490" height="454" as="geometry"/>
                 </mxCell>
-                <mxCell id="pmasterg11r0" value="• Ventilation strategy on dew point / absolute humidity from 3-point T/RH (room · workshop · outdoor) — not simple RH; chooses exhaust path workshop vs outside" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg11" vertex="1">
+                <mxCell id="pmasterg11r0" value="• Ventilation strategy on dew point / absolute humidity (room + workshop T/RH · outdoor T; outdoor RH optional later via field bus) — not simple RH; chooses exhaust path workshop vs outside" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg11" vertex="1">
                     <mxGeometry x="4" y="32" width="482" height="56" as="geometry"/>
                 </mxCell>
-                <mxCell id="pmasterg11r1" value="• CO₂ (SCD41) and PAR (RS-485, 400–700 nm) readings: dashboards, DLI cross-check, ventilation/lighting strategy inputs" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg11" vertex="1">
+                <mxCell id="pmasterg11r1" value="• CO₂/T/RH (STCC4 Gravity), workshop T/RH/P (AHT20+BMP280), outdoor T (DS18B20 1-Wire GPIO0) and PAR (RS-485, 400–700 nm): dashboards, DLI cross-check, ventilation/lighting strategy inputs" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg11" vertex="1">
                     <mxGeometry x="4" y="88" width="482" height="40" as="geometry"/>
                 </mxCell>
                 <mxCell id="pmasterg11r2" value="• Heater: setpoint + hysteresis, valid-temp interlock, high-limit latch, min-off 60 s — mechanical thermal cutout in series (hardware rule)" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg11" vertex="1">

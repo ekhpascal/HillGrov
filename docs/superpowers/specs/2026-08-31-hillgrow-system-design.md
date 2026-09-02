@@ -28,8 +28,8 @@ Zone identity is the eFuse MAC; the Master maps MAC → zone id / name / shelf c
 ```
  house Wi-Fi ──STA──┐                      phone/PC ──AP 192.168.7.7──┐
                     └──► MASTER (DevKitC-V4) ◄───────────────────────┘
-       I²C: DS3231 0x68 · PCF8575 0x20 (relays ×9: fan, 3 dampers, blind open/close, refill, overall grow light, heater) · SHT31 0x44 room + [0x45 workshop]
-       SCD41 0x62 CO₂ · SC16IS752 0x4D → RS-485 Modbus field bus (PAR sensor, remote T/RH)
+       I²C: DS3231 0x68 · PCF8575 0x20 (relays ×9: fan, 3 dampers, blind open/close, refill, overall grow light, heater) · STCC4 0x64 (+SHT4x) room CO₂/T/RH
+       AHT20 0x38 + BMP280 0x76/77 workshop T/RH/P · SC16IS752 0x4D → RS-485 Modbus field bus (PAR sensor) · DS18B20 1-Wire GPIO0 outdoor T
        UART1 ↔ ESP32-S3 touch display (optional) · SPI2 → microSD · I²S → PCM5102A DAC · strain-gauge level (HX711: DOUT 34, SCK 5)
        UART2 TX ──► ZONE 1 RX     ZONE 1 TX ──► ZONE 2 RX  …  ZONE N TX ──► MASTER UART2 RX
                      │ I²C: PCA9685 0x40 (ch 0–7 LED W/R × 4 shelves · ch 8–11 vibrator PWM × 4 · OE → GPIO23)
@@ -361,7 +361,7 @@ Rules: every app task is created with `xTaskCreatePinnedToCore`, subscribes to t
 
 **Zone** — `ring_rx` 0/6/4096 (UART2 events; decode, CRC, forward; consumed frames → `cmd_q` by value; TIME_SYNC/ASSIGN → `hg_link_t` under a critical section; never runs app code) · `cmd_task` 0/5/6144 (§5.3) · `cli0` 0/4/4096 (line editor, replies, log mutex) · `store` 0/2/3072 (sole NVS writer) · `ctrl` 1/5/6144 (100 ms: cfg/hw snapshot, soil sampling one shelf per tick @1 Hz/sensor, light/water/fan/pollination controllers, `safety_tick`, PCA/PCF writes, heartbeat 2 s + fault-edge, RTC daily counters, `rt` publish; sole I²C+ADC caller). Stacks ≈ 23.5 KB.
 
-**Master** — as zone (its `ctrl` drives DS3231 60 s / SHT31 10 s / reservoir inputs / vent-reservoir-shutter controllers / PCF relays) plus `node_mgr` 1/4/6144 (50 ms: ring tracker + TIME_SYNC broadcast; 1 s: health + break analysis, sync decisions, enrolment, fleet-OTA sequencer, alarm diff, history sampler) and `store` 0/2/6144 (NVS + LittleFS alarms/history/retention); IDF `httpd` 8192/core 0 (handlers only enqueue commands or copy snapshots). Stacks ≈ 41 KB.
+**Master** — as zone (its `ctrl` drives DS3231 60 s / climate sensors (STCC4·AHT20·BMP280·DS18B20) 10 s / reservoir inputs / vent-reservoir-shutter controllers / PCF relays) plus `node_mgr` 1/4/6144 (50 ms: ring tracker + TIME_SYNC broadcast; 1 s: health + break analysis, sync decisions, enrolment, fleet-OTA sequencer, alarm diff, history sampler) and `store` 0/2/6144 (NVS + LittleFS alarms/history/retention); IDF `httpd` 8192/core 0 (handlers only enqueue commands or copy snapshots). Stacks ≈ 41 KB.
 
 **Rescue** — `main` (pull: read+erase handover → STA join 20 s → `esp_http_client` GET → `esp_ota_begin/write/end` → set boot → restart; 3 failures or no handover → manual AP `HillGrow-Rescue-<MAC6>` @192.168.7.7 with one upload page) · `ring_fwd` (UART2 byte repeater) · LED patterns via esp_timer. TWDT 30 s here.
 
@@ -410,7 +410,7 @@ RAM: zone free heap ≈ 220 KB after boot; Master ≈ 95–110 KB (Wi-Fi buffer 
 | 2 | Zone shelf control | `safety`/`fault`/`soil_*`/`act_hal`/`pca9685`/`pcf8575`/controllers/`shelf` + zone rows | A standalone zone grows a shelf from its CLI: calibrated soil readings, scheduled light with caps, hysteresis watering with all limits, manual overrides, faults latching/clearing; `uart_test.py --suite full` passes on hardware |
 | 3 | Ring link | `ring_proto`/`ring_link`/`node_mgr` + forwarding + enrolment + config push + TIME_SYNC + FW_UPDATE handshake | Master + 2 zones: discovery, `SET ZONE 2 …` round-trips, heartbeats drive the node table, break blame correct when a node is unplugged, config pushed and reverted per §4.4, fleet OTA of one zone end-to-end via rescue pull |
 | 4 | Master web UI | `wifi_mgr`/`http_srv`/`hg_json`/`hg_fs`/`alarm_mgr`/`history` + pages (gzipped `EMBED_FILES` assets, vanilla JS) | Phone on the AP at 192.168.7.7: dashboard of all zones/shelves, config editing, alarms, history plots + text export, both firmware uploads, zone fleet update button |
-| 5 | Master global control | `time_svc`/`ds3231`/`sht31`/`psychro`/`vent_ctrl`/`reservoir_ctrl`/`shutter_ctrl` + Master pin map | Ventilation strategy on dew point (3-point T/RH: room/workshop/outdoor) with damper interlocks, CO₂ + PAR sensing (I²C + RS-485 Modbus field bus, §11.7), heater control (§11.8), reservoir refill with all guards, blackout shutter, overall-grow-light schedule, `inhibit_mask` propagation — hardware details fixed in the SP5 feature spec first |
+| 5 | Master global control | `time_svc`/`ds3231`/`stcc4`/`aht20`/`bmp280`/`ds18b20`/`psychro`/`vent_ctrl`/`reservoir_ctrl`/`shutter_ctrl` + Master pin map | Ventilation strategy on dew point (room + workshop T/RH/P, outdoor T — outdoor RH optional later via field bus) with damper interlocks, CO₂ + PAR sensing (I²C + RS-485 Modbus field bus, §11.7), heater control (§11.8), reservoir refill with all guards, blackout shutter, overall-grow-light schedule, `inhibit_mask` propagation — hardware details fixed in the SP5 feature spec first |
 | 6 | Display node | `display/` app: ESP32-S3-DevKitC-1 + ST7796S 480×320 touch (HillBT-s3 hardware), LVGL 9, UART API client; Master gains a UART1 machine-mode CLI session + NOTIFY sink | One-screen touch panel shows live status and runs API commands; Master unaffected when the display is absent (§11.1) |
 | 7 | Media & storage | microSD (SPI2, FAT) + I²S → PCM5102A + audio player component | WAV playback from SD controlled via CLI/web/display without disturbing control loops (§11.2–11.3) |
 
@@ -436,7 +436,7 @@ C (C11/gnu23 as compiled by IDF 6, `-Wall -Werror -Wextra`); one `.h`/`.c` pair 
 
 - SP2 spec: light/watering/pollination state machines (tables + timers), ramp semantics across time steps, optional DLI accounting (per-shelf PPFD constant, early-off at target).
 - SP4 spec: page inventory, asset pipeline (default: gzipped `EMBED_FILES`, vanilla JS, no bundler), `/api/history` query shape and the text-export format.
-- SP5 spec: damper type (2-/3-wire, end switches), reservoir sensing (floats vs load cell), climate sensor (SHT31 default), Master PCF8575 relay map + `docs/pin-mapping.md` Master section, NC high-level float backstop.
+- SP5 spec: damper type (2-/3-wire, end switches), reservoir sensing (floats vs load cell), climate sensors (STCC4 + AHT20/BMP280 + DS18B20, §11.7), Master PCF8575 relay map + `docs/pin-mapping.md` Master section, NC high-level float backstop.
 - Hardware bring-up checklist lives in `docs/pin-mapping.md` (active-low PCF loads, OE pull-up, ring RX pull-ups, soil pull-downs, I²C pull-ups, measure before connecting).
 - Pump limit defaults (60 s/600 s) are safe-direction placeholders — re-derive from measured peristaltic flow and pot volume during SP2 bring-up.
 
@@ -472,18 +472,17 @@ Every shelf gets its own pollination vibrator, **PWM-controlled for intensity**,
 
 Every shelf gets its own pollination vibrator, **PWM-controlled for intensity**, on **PCA9685 channels 8–11** (shelf 1–4). Consequences: the vibrators sit behind the same hardware OE kill line as the lights (dead through boot/crash/rescue); PCF8575 **P8 is freed** — the zone expander now carries 4 pumps + 4 fans + 8 spare relay pins; PCA channels **12–15 remain reserved** for future fan PWM. Data model: `vib_ch` joins the per-shelf hardware map, and a per-shelf `VIB` config group replaces the old zone-level pollination aux device — `MODE OFF|PULSE · INTENSITY 20–100 % · PULSE_S 1–30 · INTERVAL_MIN 5–1440 · START/END window`; safety class VIB applies per shelf (pulse ≤ 10 s default/30 cap, 60 s gap, 600 s/day per shelf). Struct sizes change: `hg_shelf_cfg_t` 56 → 72 B, `hg_zone_cfg_t` 272 → 336 B (blob 352 B = 4 ring chunks). The `aux[2]` slots remain for generic spare-relay devices.
 
-### 11.7 Environment sensing: CO₂, PAR, multi-point T/RH — the field bus (added 2026-09-01)
+### 11.7 Environment sensing: CO₂, T/RH/P, PAR — I²C sensors + the field bus (updated 2026-09-02)
 
-All new sensing rides the buses; no ESP32 pins are consumed (GPIO35/36 remain the last spares).
+All climate sensing rides the buses plus one 1-Wire pin (GPIO0); Master GPIO is otherwise untouched.
 
-- **CO₂:** Sensirion SCD41 on I²C @0x62 (growth room; periodic measurement, CLI/web/display readout, input to the SP5 ventilation strategy).
-- **RS-485 Modbus field bus:** an SC16IS752 I²C→dual-UART bridge @0x4D drives an RS-485 transceiver (auto-direction via the bridge's RTS). The bus is Modbus RTU (9600 8N1 default), multi-drop over one twisted pair — the natural carrier for agricultural transmitters:
-  - **PAR sensor** (Photosynthetically Active Radiation, 400–700 nm, RS-485) — canopy light level, DLI cross-check, input to lighting strategy;
-  - **remote T/RH transmitters** — outdoor unit (intake decisions) and any further points; the bridge's second UART stays spare.
-- **Temperature/humidity, three points** for the dew-point ventilation strategy (requirements §2): growth room = SHT31 @0x44 (I²C); “inside”/workshop = SHT31 @0x45 (I²C, master is nearby) or a field-bus unit; outside = field-bus T/RH unit.
-- Driver shape (SP5): `sc16is752` (register codec pure / I²C glue), `modbus_rtu` (pure framing + CRC16, host-tested), `par_sensor` + `mb_th_sensor` register maps as data; all readings enter the same climate model with per-sensor validity rules (§3.6 style: stale/out-of-range → W_CLIMATE_SENSOR, strategy falls back).
+- **Growth room — CO₂ + T/RH in one module:** DFRobot Gravity **STCC4** @0x64 (Sensirion, 400–5000 ppm; replaces the SCD41). The module carries a companion **SHT4x** for the compensation the STCC4 needs — expect a second device (typ. 0x44) in the bus scan; the driver reads the SHT4x and feeds RH/T (plus BMP280 pressure) into the STCC4 compensation inputs. One module supplies room CO₂, temperature and humidity (replaces the room SHT31).
+- **Workshop/“inside” — T/RH + pressure:** **AHT20+BMP280** combo module — AHT20 @0x38 (T/RH), BMP280 @0x76/0x77 (pressure; also the pressure-compensation source for the STCC4). Replaces the SHT31 #2.
+- **Outdoor — temperature only:** waterproof **DS18B20** probe on **GPIO0, 1-Wire** (NOT analog — no ADC involved; RMT-based `onewire_bus` driver). 4.7 kΩ pull-up to 3.3 V, powered 3-wire hookup (no parasite mode). The pull-up and idle-high bus are exactly what the GPIO0 boot strap wants — boot-safe by construction; bring-up rules in `docs/pin-mapping.md`. *Strategy note:* outdoor RH is no longer measured — the SP5 dew-point intake decision degrades to outdoor-temperature rules unless an RS-485 outdoor T/RH transmitter is added later (the field bus keeps that door open).
+- **RS-485 Modbus field bus:** an SC16IS752 I²C→dual-UART bridge @0x4D drives an RS-485 transceiver (auto-direction via the bridge's RTS). The bus is Modbus RTU (9600 8N1 default), multi-drop over one twisted pair: **PAR sensor** (Photosynthetically Active Radiation, 400–700 nm) now; optional far-away transmitters (e.g. outdoor T/RH) later; the bridge's second UART stays spare.
+- Driver shape (SP5): `stcc4`, `aht20`, `bmp280` (register codecs pure / I²C glue), `ds18b20` over `onewire_bus`, `sc16is752` (register codec pure / I²C glue), `modbus_rtu` (pure framing + CRC16, host-tested), `par_sensor` register map as data; all readings enter the same climate model with per-sensor validity rules (§3.6 style: stale/out-of-range → W_CLIMATE_SENSOR, strategy falls back).
 
-I²C address map after this: 0x20 PCF8575 · 0x40 PCA9685 (option) · 0x44/0x45 SHT31 ×2 · 0x48–0x4B ADS1115 (future) · 0x4D SC16IS752 · 0x57 AT24C32 (unused) · 0x62 SCD41 · 0x68 DS3231. No collisions.
+I²C address map after this: 0x20 PCF8575 · 0x38 AHT20 · 0x40 PCA9685 (option) · 0x44 SHT4x (on the STCC4 module — verify in scan) · 0x48–0x4B ADS1115 (future/optional — no current sensor needs an ADC; everything new here is digital) · 0x4D SC16IS752 · 0x57 AT24C32 (unused) · 0x64 STCC4 · 0x68 DS3231 · 0x76/0x77 BMP280. No collisions. Bus discipline: run 100 kHz; audit breakout pull-ups (each module ships its own — strip extras so the parallel total stays ≈ 2.2–4.7 kΩ); keep total SDA/SCL wiring short (< ~1 m) — anything that must sit far away belongs on the field bus, not on I²C.
 
 ### 11.8 Heater control (added 2026-09-01 — promoted from out-of-scope)
 
@@ -493,13 +492,13 @@ A heater element on **PCF8575 relay P7** (the 8th relay; 8 spare pins remain). S
 
 The window blackout device is a **DC-motor-driven blind with end-stops**, replacing the single pulse relay. Drive: **two PCF8575 relays (P8 open / P9 close)** — reversing pair, never energised together (same hardware-interlock rule as the dampers). Position: **end-stop switches on GPIO35 (closed) and GPIO36 (open)** — input-only pins, external pull-ups required; position model CLOSED/OPENING/OPEN/CLOSING/UNKNOWN driven by the end-stops. Safety class SHUTTER becomes: drive stops the instant the target end-stop closes; travel timeout (default 60 s, cap 120 s) without reaching the end-stop → drive off + latched `F_SHUTTER_STUCK`; min-off 5 s between direction changes. Automation (SP5): close/open on schedule and as part of the photoperiod/blackout strategy (coordinated with the overall grow light); manual `SET OUT`-style commands remain duration-bounded. Bring-up rules: end-stop pull-ups; verify the motor is stall-safe or fused; verify relay rating vs motor stall current.
 
-With the end-stops on 35/36, **every directly usable Master GPIO is now allocated** — GPIO0 (strapping, with care) is the only remainder; all future Master I/O lives on the buses.
+With the end-stops on 35/36 and GPIO0 carrying the outdoor 1-Wire probe (§11.7), **every Master GPIO is now allocated**; all future Master I/O lives on the buses.
 
 ### 11.6 Room presence sensor (added 2026-09-01)
 
 A **room occupancy input on GPIO39** (input-only): PIR or mmWave radar module with a 3.3 V digital OUT. Firmware (SP5): debounce + configurable occupancy-hold timer; state in telemetry (`GET ROOM`), web UI and display node; `NOTIFY ROOM ENTER|EMPTY` edges; available as a condition for SP5 strategies (e.g. pause audio when the room empties, courtesy behaviour on entry) — never a safety input. If the module output is open-collector, an external pull resistor per its datasheet (GPIO39 has no internal pulls).
 
-Master GPIO after these allocations: fully assigned — GPIO0 (with care) is the only remainder (GPIO5 = HX711 SCK, 34 = level, 35/36 = blind end-stops, 39 = presence). Further Master I/O grows on the buses (PCF8575 9 spare pins, more I²C devices, PCA9685 option).
+Master GPIO after these allocations: fully assigned — none free (GPIO0 = outdoor 1-Wire §11.7, GPIO5 = HX711 SCK, 34 = level, 35/36 = blind end-stops, 39 = presence). Further Master I/O grows on the buses (PCF8575 7 spare pins, more I²C devices, PCA9685 option).
 
 ---
 
