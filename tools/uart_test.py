@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """HillGrow serial CLI smoke/regression harness.
 
-Drives one board's console over UART and checks it against the live
-command grammar (cmd_core/cmd_common/zone_cmds); the regression gate
-used from SP2 onward. Exit code = number of failed checks.
+Drives one board's console over UART and checks it against the live command
+grammar (cmd_core/cmd_common/zone_cmds); the regression gate used from SP2
+onward. "smoke" (default, only suite) auto-skips zone-only checks on role
+MASTER; --role is asserted against GET ID, not a mode switch. Exit code is
+the number of failed checks.
 
 Usage:
     C:\\Python311\\python tools/uart_test.py COM5 --role ZONE --allow-reboot
     C:\\Python311\\python tools/uart_test.py --selftest   # offline, no hardware/pyserial
-
-"smoke" (default, only suite) auto-skips zone-only checks when GET ID
-reports role MASTER; --role is asserted against GET ID, not a mode switch.
 """
 import argparse
 import json
@@ -19,8 +18,11 @@ import sys
 import time
 
 LOG_RE = re.compile(r'^[IWEDV] \(\d+\)')
+# Adjacent two-word nouns only ("SET FW ROLLBACK"); extend when a split-shape
+# row ("SET NODE <z> NAME <v>") lands in the master/ring tables.
 ROW_RE = re.compile(r'^\+ (SET|GET) ([A-Z][A-Z0-9_]*)(?: ([A-Z][A-Z0-9_]*))?(?=[ \[]|$)')
 VERSION_RE = re.compile(r'\d+\.\d+\.\d+')
+MASK_TOK_RE = re.compile(r'^[A-Z_]+=[01]$')
 
 class Reply:
     """One Node.send() result: ok/err/timeout, the OK line's payload text,
@@ -94,6 +96,9 @@ class Node:
         self.role = parts[1] if r.ok and len(parts) > 1 else None
         return r
 
+    def close(self):
+        self.transport.close()
+
 class SerialTransport:
     """Real pyserial transport; import is lazy so --selftest needs no pyserial."""
     def __init__(self, port, baud=115200):
@@ -112,6 +117,9 @@ class SerialTransport:
         if not raw:
             return None
         return raw.decode("utf-8", "replace").rstrip("\r\n")
+
+    def close(self):
+        self.ser.close()
 
 def open_node(port, baud=115200):
     return Node(SerialTransport(port, baud))
@@ -171,7 +179,7 @@ def suite_config(node, role, results):
     r = node.send("SET SHELF 1 CROP Basil")
     check(results, "CONFIG: SHELF CROP echo preserved", r.ok and "Basil" in r.text, r.text)
 
-def suite_persist(node, role, args, results):
+def suite_persist(node, role, args, results, reconnect=None):
     if role != "ZONE":
         return
     r = node.send("SAVE")
@@ -179,8 +187,9 @@ def suite_persist(node, role, args, results):
     if not args.allow_reboot:
         return
     node.send("REBOOT CONFIRM", timeout=1.0)
+    node.close()  # Windows opens COM ports exclusively: close before reopen
     time.sleep(3.0)
-    node2 = open_node(args.port, args.baud)
+    node2 = (reconnect or (lambda: open_node(args.port, args.baud)))()
     node2.prologue()
     r = node2.send("GET WATER 1")
     check(results, "PERSIST: WATER TARGET survives reboot", r.ok and "Target : 61" in r.lines, r.lines)
@@ -189,7 +198,12 @@ def suite_session(node, results):
     r = node.send("SET LOG DEBUG")
     check(results, "SESSION: LOG DEBUG echo", r.ok and "DEBUG" in r.text, r.text)
     r = node.send("GET NOTIFY")
-    check(results, "SESSION: NOTIFY mask lines", r.ok and r.text.startswith("NOTIFY"), r.text)
+    # notify_mask_str() (cmd_common.c): space-joined "NAME=0|1" tokens.
+    toks = r.text.split()
+    mask_ok = (r.ok and toks[:1] == ["NOTIFY"] and len(toks) > 1
+               and all(MASK_TOK_RE.match(t) for t in toks[1:])
+               and any(t.startswith("BOOT=") for t in toks[1:]))
+    check(results, "SESSION: NOTIFY mask shape", mask_ok, r.text)
 
 def run_smoke(node, args, results):
     node.prologue()
@@ -205,15 +219,23 @@ def run_smoke(node, args, results):
 
 class FakeTransport:
     """Offline replay for --selftest: write_line() is a no-op; read_line()
-    pops the next canned line regardless of deadline (fully scripted)."""
-    def __init__(self, lines):
+    pops the next canned line regardless of deadline (fully scripted).
+    on_close, if given, fires from close() -- lets selftest observe ordering."""
+    def __init__(self, lines, on_close=None):
         self.lines = list(lines)
+        self.closed = False
+        self._on_close = on_close
 
     def write_line(self, line):
         pass
 
     def read_line(self, deadline):
         return self.lines.pop(0) if self.lines else None
+
+    def close(self):
+        self.closed = True
+        if self._on_close:
+            self._on_close()
 
 # Real cmd_help.c render_usage() format: "+ " SET/GET noun1[ noun2] args
 # (each " <name>"/" [<name>]") [unlock]; GET rows show only n_key args.
@@ -258,11 +280,28 @@ def selftest():
     # (f) HELP row-parsing regex against the real cmd_help.c output format
     rows = parse_help_rows(HELP_BLOCK)
     expect("f: help rows", rows == ["SET WATER", "GET WATER", "SET HW", "SET FW ROLLBACK", "GET ID"])
+    # (g) PERSIST: close() before reopen (Windows COM ports are exclusive).
+    # An on_close hook and an injected reconnect() record ordering offline.
+    events = []
+
+    def fake_reconnect():
+        events.append("reopen")
+        return Node(FakeTransport([]))
+
+    p_node = Node(FakeTransport(["OK SAVE"], on_close=lambda: events.append("close")))
+    p_args = argparse.Namespace(allow_reboot=True, port="FAKE", baud=115200)
+    orig_sleep, time.sleep = time.sleep, lambda s: None
+    try:
+        suite_persist(p_node, "ZONE", p_args, [], reconnect=fake_reconnect)
+    finally:
+        time.sleep = orig_sleep
+    expect("g: close before reopen", events == ["close", "reopen"])
+    expect("g: transport closed", p_node.transport.closed)
 
     if fails:
         print("SELFTEST FAIL:", ", ".join(fails))
         return 1
-    print("SELFTEST OK (6 assertion groups)")
+    print("SELFTEST OK (7 assertion groups)")
     return 0
 
 def main():
