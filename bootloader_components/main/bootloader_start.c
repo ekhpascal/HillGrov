@@ -35,6 +35,10 @@ static const char *TAG = "hg_boot";
 #define HG_HOLD_FACTORY_MS 10000u
 #define HG_HOLD_ERASE_MS   1000u
 
+/* This fully replaces the stock call_start_cpu0(), so the stock bootloader's
+ * weak bootloader_before_init()/bootloader_after_init() hooks (bootloader_hooks.h)
+ * are intentionally not called here -- that hook mechanism only fires from
+ * the stock implementation we are overriding. */
 void __attribute__((noreturn)) call_start_cpu0(void) {
     if (bootloader_init() != ESP_OK) bootloader_reset();
     bootloader_state_t bs = {0};
