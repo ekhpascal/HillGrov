@@ -93,11 +93,27 @@ static void stage_dirty(int force) {
     }
 }
 
+static int settled(void) {
+    return hg_model_dirty_mask() == 0 && !s_plane[PLANE_HW].pending && !s_plane[PLANE_CFG].pending;
+}
+
 static void store_pass(void) {
     int force = s_force;
-    s_force = 0;
     stage_dirty(force);
     for (int i = 0; i < PLANE_N; i++) attempt_write(i, force);
+    if (force) {
+        /* A plane that was pending AND freshly dirty needs its outstanding
+         * write to clear before the new edit can be staged -- retry once
+         * more within this same forced pass rather than leaving it stuck
+         * behind a throttle window for a whole extra store_task wake. */
+        stage_dirty(force);
+        for (int i = 0; i < PLANE_N; i++) attempt_write(i, force);
+        /* Only release the latch once nothing is left outstanding, so a
+         * concurrent hg_store_flush() (which re-arms it every poll tick,
+         * see below) never sees it drop out from under a still-pending
+         * write purely due to preemption timing. */
+        if (settled()) s_force = 0;
+    }
 }
 
 static void store_task(void *arg) {
@@ -116,12 +132,15 @@ void hg_store_start(void) {
 }
 
 int hg_store_flush(uint32_t timeout_ms) {
-    s_force = 1;
-    if (s_flush_sem) xSemaphoreGive(s_flush_sem);
     uint32_t start = now_ms();
     for (;;) {
-        if (hg_model_dirty_mask() == 0 && !s_plane[PLANE_HW].pending && !s_plane[PLANE_CFG].pending)
-            return 0;
+        if (settled()) return 0;
+        /* Re-arm on every poll tick (not just once): a single give racing
+         * against store_task's own 1000 ms idle wake, or against a
+         * background pass that clears the latch one plane early, must not
+         * strand a caller with a plane still outstanding. */
+        s_force = 1;
+        if (s_flush_sem) xSemaphoreGive(s_flush_sem);
         if (now_ms() - start >= timeout_ms) return -1;
         vTaskDelay(pdMS_TO_TICKS(20));
     }

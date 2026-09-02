@@ -13,7 +13,7 @@ function(hillgrow_host_test_gate ELF)
         return()
     endif()
     set(REPO ${CMAKE_CURRENT_LIST_DIR}/..)
-    file(GLOB_RECURSE HG_TEST_DEPS ${REPO}/components/*.c ${REPO}/components/*.h ${REPO}/tests/host/*.c ${REPO}/tests/host/*.h)
+    file(GLOB_RECURSE HG_TEST_DEPS CONFIGURE_DEPENDS ${REPO}/components/*.c ${REPO}/components/*.h ${REPO}/tests/host/*.c ${REPO}/tests/host/*.h)
     add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/host_tests_passed.stamp
         COMMAND ${CMAKE_COMMAND} -S ${REPO}/tests/host -B ${CMAKE_BINARY_DIR}/host_tests -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl
         COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR}/host_tests --config Release --parallel

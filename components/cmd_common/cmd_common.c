@@ -186,8 +186,11 @@ static const cmd_arg_t A_LOG[]   = { { "level", ARG_ENUM, 0, 5, "NONE|ERROR|WARN
 static const cmd_arg_t A_KEY[]   = { { "key", ARG_STR, 0, 31, NULL } };
 static const cmd_arg_t A_TIME[]  = { { "date", ARG_STR, 0, 10, NULL }, { "time", ARG_STR, 0, 8, NULL } };
 static const cmd_arg_t A_CONF[]  = { { "confirm", ARG_ENUM, 0, 0, "CONFIRM" } };
+/* Maxes mirror hg_handover_t's field capacities (ssid[33]/pass[65]/url[64] --
+ * one byte reserved for the NUL in each) so a value that fits ARG_STR's bound
+ * always fits the handover record; url was 96 and silently truncated. */
 static const cmd_arg_t A_FWUP[]  = { { "ssid", ARG_STR, 0, 32, NULL }, { "pass", ARG_STR, 0, 64, NULL },
-                                      { "url", ARG_STR, 0, 96, NULL } };
+                                      { "url", ARG_STR, 0, 63, NULL } };
 
 const cmd_entry_t CMD_COMMON_ROWS[] = {
   { CMDV_GET,          CMD_AREA_SYSTEM, "ID",      NULL,      NULL,   0, 0, 0, 0,                                  h_id,            NULL },

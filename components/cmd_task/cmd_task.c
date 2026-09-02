@@ -11,6 +11,7 @@ static const char *TAG = "cmd_task";
 
 typedef struct {
     volatile int  used;
+    volatile int  done;        /* worker has finished dispatch and decided this slot's fate */
     cmd_session_t *ses;
     char           line[CMD_LINE_MAX];
     char          *resp;
@@ -21,6 +22,10 @@ typedef struct {
 static slot_t s_pool[POOL_N];
 static QueueHandle_t s_q;                  /* items: slot_t* */
 static const cmd_core_t *s_core;
+/* Guards slot claim/done/waiter/used bookkeeping so exactly one side (caller
+ * on timeout, or the worker on completion) ever frees a slot, and the worker
+ * only ever notifies a task that has not already given up on it. */
+static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static void cmd_task_main(void *arg) {
     (void)arg;
@@ -30,9 +35,12 @@ static void cmd_task_main(void *arg) {
         esp_task_wdt_reset();
         if (xQueueReceive(s_q, &s, pdMS_TO_TICKS(100)) != pdTRUE) continue;
         s->rc = cmd_dispatch(s_core, s->ses, s->line, s->resp, s->resp_len);
+        taskENTER_CRITICAL(&s_mux);
+        s->done = 1;
         TaskHandle_t w = s->waiter;
+        if (!w) s->used = 0;                /* caller already gave up: free here */
+        taskEXIT_CRITICAL(&s_mux);
         if (w) xTaskNotifyGive(w);
-        else s->used = 0;                  /* orphaned: free here */
     }
 }
 
@@ -47,8 +55,10 @@ void cmd_task_start(const cmd_core_t *core) {
 int cmd_task_execute(cmd_session_t *ses, const char *line, char *resp, int resp_len, uint32_t timeout_ms) {
     slot_t *s = NULL;
     for (int tries = 0; tries < 10 && !s; tries++) {          /* ~100 ms pool wait */
+        taskENTER_CRITICAL(&s_mux);
         for (int i = 0; i < POOL_N; i++)
-            if (!s_pool[i].used) { s_pool[i].used = 1; s = &s_pool[i]; break; }
+            if (!s_pool[i].used) { s_pool[i].used = 1; s_pool[i].done = 0; s = &s_pool[i]; break; }
+        taskEXIT_CRITICAL(&s_mux);
         if (!s) vTaskDelay(pdMS_TO_TICKS(10));
     }
     if (!s) return cmd_err(resp, resp_len, "BUSY");
@@ -61,8 +71,20 @@ int cmd_task_execute(cmd_session_t *ses, const char *line, char *resp, int resp_
         return cmd_err(resp, resp_len, "BUSY");
     }
     if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(timeout_ms)) == 0) {
-        s->waiter = NULL;                  /* orphan; cmd_task frees it on completion */
-        return cmd_err(resp, resp_len, "INTERNAL");
+        taskENTER_CRITICAL(&s_mux);
+        if (!s->done) {
+            s->waiter = NULL;                /* orphan; cmd_task frees the slot on completion */
+            taskEXIT_CRITICAL(&s_mux);
+            return cmd_err(resp, resp_len, "INTERNAL");
+        }
+        taskEXIT_CRITICAL(&s_mux);
+        /* done was already set: the worker read a non-NULL waiter under the
+         * same critical section and has committed to (or already did) give
+         * our notification -- it is guaranteed imminent. */
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+        int rc = s->rc;
+        s->used = 0;
+        return rc;
     }
     int rc = s->rc;
     s->used = 0;

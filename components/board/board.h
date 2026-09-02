@@ -1,4 +1,5 @@
 #pragma once
+#include "sdkconfig.h"   /* an undefined CONFIG_HG_ROLE_MASTER silently evaluates to 0 in #if below */
 #define HG_GPIO_RING_RX    18
 #define HG_GPIO_RING_TX    19
 #define HG_GPIO_I2C_SDA    21

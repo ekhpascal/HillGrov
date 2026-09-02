@@ -215,6 +215,20 @@ static void test_fw_update(void) {
     TEST_ASSERT_EQUAL_STRING("ERR INTERNAL\n", resp);
 }
 
+/* url's ARG_STR max mirrors hg_handover_t.url[64]'s capacity (63 chars +
+ * NUL); a 64-char url must be rejected at dispatch, not silently truncated
+ * into an unfetchable rescue-handover record. */
+static void test_fw_update_url_too_long(void) {
+    ses.unlock_until_ms = fake_clock_now() + 1000;
+    char url[65];
+    memset(url, 'x', 64);
+    url[64] = '\0';
+    char line[256];
+    snprintf(line, sizeof line, "SET FW UPDATE ssid1 pass1 %s", url);
+    TEST_ASSERT_EQUAL_INT(-1, run(line));
+    TEST_ASSERT_EQUAL_STRING("ERR BAD_ARGS\n", resp);
+}
+
 int main(void) { UNITY_BEGIN();
     RUN_TEST(test_table_valid);
     RUN_TEST(test_get_id);
@@ -231,4 +245,5 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_reboot);
     RUN_TEST(test_factory_reset);
     RUN_TEST(test_fw_update);
+    RUN_TEST(test_fw_update_url_too_long);
     return UNITY_END(); }

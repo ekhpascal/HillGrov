@@ -9,7 +9,7 @@ typedef struct {
     uint32_t  (*uptime_s)(void);
     int       (*status_lines)(char *resp, int len); /* append "  Label : value" lines; 0 ok */
     int       (*log_set)(const char *level, const char *tag, char *eff, size_t n);
-    int       (*time_get)(char *buf, size_t n);     /* "YYYY-MM-DD HH:MM:SS <RTC|NTP|RING|NONE> <age_s>" */
+    int       (*time_get)(char *buf, size_t n);     /* "YYYY-MM-DD HH:MM:SS <RTC|NTP|RING|SET|NONE> <age_s>" */
     int       (*time_set)(int y, int mo, int d, int h, int mi, int s);
     int       (*save_flush)(uint32_t timeout_ms);   /* 0 ok / -1 */
     int       (*fw_info)(char *buf, size_t n);      /* "<ver> <ota_0|ota_1> <VALID|PENDING> <other|NONE>" */

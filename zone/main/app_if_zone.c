@@ -90,6 +90,8 @@ static int zone_time_get(char *buf, size_t n) {
 }
 
 static int zone_time_set(int y, int mo, int d, int h, int mi, int s) {
+    if (mo < 1 || mo > 12 || d < 1 || d > 31 || h < 0 || h > 23 || mi < 0 || mi > 59 || s < 0 || s > 59)
+        return -1;
     struct tm tmv;
     memset(&tmv, 0, sizeof tmv);
     tmv.tm_year = y - 1900; tmv.tm_mon = mo - 1; tmv.tm_mday = d;
@@ -125,10 +127,16 @@ static int zone_fw_rollback(void) {
 static int zone_fw_update(const char *ssid, const char *pass, const char *url) {
     hg_handover_t h;
     memset(&h, 0, sizeof h);
+    /* Belt-and-braces: cmd_common's A_FWUP arg maxes already reject an
+     * oversized field at dispatch, but never silently truncate here too --
+     * a truncated URL would reboot the node into rescue with an unfetchable
+     * address. */
+    if (strlen(ssid) >= sizeof h.ssid || strlen(pass) >= sizeof h.pass || strlen(url) >= sizeof h.url)
+        return -1;
     h.expect_link = 0;
-    snprintf(h.ssid, sizeof h.ssid, "%s", ssid);
-    snprintf(h.pass, sizeof h.pass, "%s", pass);
-    snprintf(h.url,  sizeof h.url,  "%s", url);
+    memcpy(h.ssid, ssid, strlen(ssid) + 1);
+    memcpy(h.pass, pass, strlen(pass) + 1);
+    memcpy(h.url,  url,  strlen(url)  + 1);
     if (hg_handover_write(&h) != 0) return -1;
     hg_reboot_to_rescue();
     return -1; /* unreachable: hg_reboot_to_rescue() reboots */

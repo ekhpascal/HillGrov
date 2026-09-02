@@ -25,23 +25,37 @@ static const char *TAG = "cli";
 #define MUTEX_MS     50
 #define VPRINTF_BUF  256
 #define UART_READ_SZ 64
+/* cli_line_feed's echo_out can emit "\r\x1b[2K" (4) + a full recalled line:
+ * either a history entry (<= CLI_HIST_LEN-1 chars) or, on ESC[B past the
+ * newest entry, the pre-browse partial line restored from cli_line_t.saved
+ * (<= CLI_LINE_MAX-1 chars). Size from both real bounds so neither truncates. */
+#define ECHO_BUF_LEN (4 + (CLI_LINE_MAX > CLI_HIST_LEN ? CLI_LINE_MAX : CLI_HIST_LEN))
 
 static SemaphoreHandle_t s_mux;
 static cli_line_t        s_line;
 static char              s_resp[CMD_RESP_MAX];
 static cmd_session_t     s_cli_ses = { .source = CMD_SRC_CLI, .echo = 1, .notify_mask = NTF_DEFAULT_CLI_MASK };
 static uint32_t          s_log_drops;
+static int               s_notify_sink = -1;
+static uint16_t          s_synced_notify_mask = NTF_DEFAULT_CLI_MASK;
 
 static uint32_t now_ms(void) { return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS); }
 
-/* Writes bytes to UART0, expanding every '\n' to "\r\n"; caller must hold s_mux. */
+/* Writes bytes to UART0, expanding a bare '\n' to "\r\n"; caller must hold
+ * s_mux. A '\n' immediately after a '\r' (already-correct "\r\n" content,
+ * e.g. the boot banner or "ERR TOO_LONG\r\n") is passed through as-is so it
+ * doesn't become "\r\r\n". */
 static void write_raw(const char *s, size_t n) {
     size_t i = 0;
     while (i < n) {
         size_t start = i;
         while (i < n && s[i] != '\n') i++;
         if (i > start) uart_write_bytes(UART_NUM_0, s + start, i - start);
-        if (i < n && s[i] == '\n') { uart_write_bytes(UART_NUM_0, "\r\n", 2); i++; }
+        if (i < n && s[i] == '\n') {
+            if (i > 0 && s[i - 1] == '\r') uart_write_bytes(UART_NUM_0, "\n", 1);
+            else uart_write_bytes(UART_NUM_0, "\r\n", 2);
+            i++;
+        }
     }
 }
 
@@ -49,14 +63,14 @@ static void write_raw(const char *s, size_t n) {
  * so they go straight to the wire without the \n->\r\n rewrite above. */
 static void write_verbatim(const char *s, size_t n) {
     if (!n) return;
-    if (xSemaphoreTakeRecursive(s_mux, pdMS_TO_TICKS(MUTEX_MS)) != pdTRUE) return;
+    if (xSemaphoreTakeRecursive(s_mux, pdMS_TO_TICKS(MUTEX_MS)) != pdTRUE) { s_log_drops++; return; }
     uart_write_bytes(UART_NUM_0, s, n);
     xSemaphoreGiveRecursive(s_mux);
 }
 
 static void cli_write(const char *s) {
     size_t n = strlen(s);
-    if (xSemaphoreTakeRecursive(s_mux, pdMS_TO_TICKS(MUTEX_MS)) != pdTRUE) return;
+    if (xSemaphoreTakeRecursive(s_mux, pdMS_TO_TICKS(MUTEX_MS)) != pdTRUE) { s_log_drops++; return; }
     write_raw(s, n);
     xSemaphoreGiveRecursive(s_mux);
 }
@@ -73,7 +87,11 @@ static int cli_vprintf(const char *fmt, va_list ap) {
     int n = vsnprintf(buf, sizeof buf, fmt, ap);
     if (n < 0) return 0;
     if ((size_t)n >= sizeof buf) {
-        buf[sizeof buf - 2] = '~';
+        /* vsnprintf's truncation cut the trailing '\n' along with whatever
+         * else didn't fit; force it back on so write_raw's \n->\r\n rewrite
+         * still fires and the next line doesn't run onto this one. */
+        buf[sizeof buf - 3] = '~';
+        buf[sizeof buf - 2] = '\n';
         buf[sizeof buf - 1] = '\0';
         n = (int)sizeof buf - 1;
     }
@@ -81,11 +99,13 @@ static int cli_vprintf(const char *fmt, va_list ap) {
         s_log_drops++;
         return n;
     }
-    const char *edit = cli_line_peek(&s_line);
-    int redraw = s_cli_ses.echo && edit[0] != '\0';
+    /* cli_line_peek's buffer holds the last-taken line's leftover bytes
+     * until the next keypress (its NUL truncation lags a byte), so gate the
+     * redraw on the live edit length rather than peek() being non-empty. */
+    int redraw = s_cli_ses.echo && s_line.len > 0;
     if (redraw) write_raw("\r\x1b[2K", 4);
     write_raw(buf, (size_t)n);
-    if (redraw) write_raw(edit, strlen(edit));
+    if (redraw) write_raw(cli_line_peek(&s_line), strlen(cli_line_peek(&s_line)));
     xSemaphoreGiveRecursive(s_mux);
     return n;
 }
@@ -105,17 +125,21 @@ void cli_init(void) {
     s_mux = xSemaphoreCreateRecursiveMutex();
     cli_line_init(&s_line, 1);
     esp_log_set_vprintf(cli_vprintf);
-    notify_add_sink(cli_notify_sink, NULL, NTF_DEFAULT_CLI_MASK);
+    s_notify_sink = notify_add_sink(cli_notify_sink, NULL, NTF_DEFAULT_CLI_MASK);
 }
 
 static void cli_task(void *arg) {
     (void)arg;
     esp_task_wdt_add(NULL);
     uint8_t buf[UART_READ_SZ];
-    char    echo[UART_READ_SZ];
+    char    echo[ECHO_BUF_LEN];
     for (;;) {
         esp_task_wdt_reset();
         cli_line_set_echo(&s_line, s_cli_ses.echo);
+        if (s_notify_sink >= 0 && s_cli_ses.notify_mask != s_synced_notify_mask) {
+            notify_set_sink_mask(s_notify_sink, s_cli_ses.notify_mask);
+            s_synced_notify_mask = s_cli_ses.notify_mask;
+        }
         int n = uart_read_bytes(UART_NUM_0, buf, sizeof buf, pdMS_TO_TICKS(100));
         for (int i = 0; i < n; i++) {
             size_t elen = 0;
@@ -125,6 +149,7 @@ static void cli_task(void *arg) {
                 const char *line = cli_line_take(&s_line);
                 cmd_task_execute(&s_cli_ses, line, s_resp, sizeof s_resp, 3500);
                 cli_write(s_resp);
+                esp_task_wdt_reset();   /* a pasted burst of many lines must not starve the TWDT */
             } else if (ev == CLI_EVT_TOO_LONG) {
                 cli_write("ERR TOO_LONG\r\n");
             }
