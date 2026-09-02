@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>HillGrow Rescue</title>
+<style>
+  body { font-family: sans-serif; max-width: 440px; margin: 2em auto; padding: 0 1em; }
+  h1 { font-size: 1.2em; }
+  progress { width: 100%; margin-top: .5em; }
+  #status { margin-top: 1em; white-space: pre-wrap; }
+  button { margin-top: .5em; }
+</style>
+</head>
+<body>
+<h1>HillGrow Rescue</h1>
+<p>Running: %RUNNING%</p>
+<p>Slots: %SLOTS%</p>
+<form id="f">
+  <input type="file" id="fw" required>
+  <button type="submit">Upload firmware</button>
+</form>
+<progress id="p" value="0" max="100" hidden></progress>
+<div id="status"></div>
+<button id="rb">Reboot without uploading</button>
+<script>
+var form = document.getElementById('f');
+var file = document.getElementById('fw');
+var bar = document.getElementById('p');
+var status = document.getElementById('status');
+
+form.addEventListener('submit', function (e) {
+  e.preventDefault();
+  var f = file.files[0];
+  if (!f) return;
+  bar.hidden = false;
+  bar.value = 0;
+  status.textContent = 'uploading ' + f.name + ' (' + f.size + ' bytes)...';
+
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', '/upload');
+  xhr.upload.onprogress = function (ev) {
+    if (ev.lengthComputable) bar.value = Math.round(ev.loaded / ev.total * 100);
+  };
+  xhr.onload = function () {
+    bar.hidden = true;
+    status.textContent = xhr.responseText;
+  };
+  xhr.onerror = function () {
+    bar.hidden = true;
+    status.textContent = 'upload failed (network error)';
+  };
+  xhr.send(f);
+});
+
+document.getElementById('rb').addEventListener('click', function () {
+  status.textContent = 'rebooting...';
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', '/reboot');
+  xhr.send();
+});
+</script>
+</body>
+</html>
