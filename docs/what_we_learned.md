@@ -35,12 +35,31 @@ Three genuine plan-code defects were caught only by adversarial review — recor
 
 **RTC retain `custom[]` is CRC-excluded and word-cast-unsafe.** The rescue flag must be memcpy'd (LE) both sides, checked by value (never gated on `is_retain_mem_valid()`), and zeroed after consumption or the node boots to rescue forever. First-power-on garbage is neutralized because `bootloader_common_update_rtc_retain_mem(NULL, true)` zeroes the whole struct on invalid CRC — call it before reading.
 
-### Hardware bench session — outstanding SP1 verification (no DevKitC was available; a DevKitC-V4 enumerates as Silicon Labs CP210x, not FTDI)
+### Hardware bench session — COMPLETED 2026-09-02 (all items below verified; original checklist retained for reference)
+
+Results: zone + master flashed via tools/flash_all.py, both boot their app from ota_0 (generated otadata verified live); uart_test.py 49/49 (zone, incl. reboot-persist) and 20/20 (master); GPIO15 3.6 s → NVS erase (saved Target 61 reverted to default 45) and 10 s → rescue with no WDT reset (`hg_boot: button held 10000 ms -> factory`); rescue manual AP + DHCP + upload page → upload boots ota_1 VALID; `SET FW UPDATE` → `hg_boot: rescue flag set -> factory` → pull 200/230848 B → boots ota_0 VALID (slot ping-pong proven both directions); pull-fails→AP fallback transition exercised (3 STA failures → AP up); master `SET ZONE 2 …` → `ERR ZONE_UNKNOWN`; TWDT probe: hung cli0 named + panic at 8.3 s + reboot. **SP1 hardware verified.**
 - Flash with `tools/flash_all.py --board zone --port COMx` ONLY (never `idf.py flash`). Verify normal boot → zone app from ota_0 (not rescue).
 - GPIO15 hold 1–9 s → `erase nvs` log, defaults on boot; hold ≥ 10 s → factory/rescue boot **without a watchdog reset** (proves the 30 s WDT fix).
 - Rescue: manual AP `HillGrow-Rescue-xxxxxx` / `hillgrow1` / 192.168.7.7 upload page → upload zone.bin → boots from OTA slot, `GET FW` shows VALID after auto-mark.
 - **Specifically exercise the pull-fails→AP transition** (wrong URL in `SET FW UPDATE`, 3 attempts, then AP) — this path was reworked in review and has never run on silicon.
 - Bench pull mode per Task 17 brief; `uart_test.py` green on both roles (`--allow-reboot`); TWDT probe (temporary `while(1);` in cli0 → panic ≤ 8 s); tick pin-mapping bring-up boxes; only then claim "SP1 hardware verified".
+
+## 2026-09-02 — ESP32 classic cannot see a 5 GHz AP (bench pull-mode failure)
+
+**Symptom:** rescue STA “connect failed/timed out” ×3 within seconds against a live Windows Mobile Hotspot with correct credentials; fell back to manual AP.
+**Root cause:** the hotspot band was “Auto” → 5 GHz on this Wi-Fi 6E adapter; ESP32 classic is 2.4 GHz-only.
+**Fix:** force the hotspot to 2.4 GHz (TetheringWiFiBand.TwoPointFourGigahertz); pull then succeeded first try.
+**Rule:** every AP a node must reach (master AP in SP4, any bench hotspot) must be pinned to 2.4 GHz — and a fast STA failure (≪ the 20 s timeout) usually means “AP not visible”, not “wrong password”.
+
+## 2026-09-02 — CLI-entered Wi-Fi credentials cannot contain spaces
+
+**Symptom:** default Windows hotspot SSID (“LAP-… 1233”) is un-enterable via `SET FW UPDATE <ssid> <pass> <url>` — the tokenizer splits on whitespace.
+**Root cause:** the CLI grammar has no quoting; by design (spec §5).
+**Rule:** SSIDs/passwords with spaces are only usable through the SP4 web UI (JSON body); document the limitation in the web UI help, don’t add CLI quoting.
+
+## 2026-09-02 — Windows bench quirks worth remembering
+
+Windows drops no-internet Wi-Fi APs after a few seconds when Ethernet is up — reconnect immediately before each HTTP interaction (or expect one mid-test drop). COM ports open exclusively (CreateFile dwShareMode=0) — one owner at a time; close before reopen (this killed the first uart_test PERSIST run). pyserial resets a DevKitC on open unless RTS/DTR are deasserted before `open()`.
 
 ### SP2 entry checklist (from the final whole-branch review)
 1. **Design decision first:** actuator-override grammar (`SET LIGHT <s> <w> <r> <minutes>`) collides with the 3-arg config rows on the same nouns — the static per-position arg typing cannot express both; decide (variable-arity rows vs renamed nouns) before writing SP2 rows.

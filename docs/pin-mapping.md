@@ -77,7 +77,7 @@ Reserved I²C: 0x70 (PCA9685 all-call — never use) · 0x48–0x4B (future ADS1
 - [ ] 10 kΩ pull-up on every ring **RX** (GPIO18) so an unpowered upstream reads idle-high; twisted pair + GND per link; 3.3 V TTL point-to-point.
 - [ ] 100 kΩ pull-down on **every soil ADC input** — an unplugged SEN0193 must read ≈ 0 (open-sensor detection depends on it).
 - [ ] 4.7 kΩ I²C pull-ups on GPIO21/22 (once per bus). Master: audit every breakout's onboard pull-ups (DS3231, STCC4, AHT20/BMP280, SC16IS752 boards all ship their own) — strip extras so the parallel total stays ≈ 2.2–4.7 kΩ; run 100 kHz; keep total SDA/SCL wiring < ~1 m (far sensors belong on the field bus).
-- [ ] Rescue button: momentary switch GPIO15 → GND.
+- [x] Rescue button: momentary switch GPIO15 → GND. — **bench-verified 2026-09-02**: 3.6 s hold → `erase nvs` + defaults; 10 s hold → rescue boot with no WDT reset; ROM-log silence during the hold confirmed (MTDO).
 - [ ] GPIO15 rescue button: holding it low at reset silences the ROM bootloader's UART log output (MTDO strap) — the console stays blank until `hg_boot` prints, which is expected, not a fault. JTAG probes on GPIO12–15 fight the button pull — disconnect JTAG before testing the button.
 - [ ] 12 V supply sized for **all zones dosing simultaneously** (pump serialization is per-zone only) plus LED load.
 - [ ] Refill is operator-supervised (no floats): verify at SP5 bring-up that the valve's max-run timeout closes it even when unattended.
