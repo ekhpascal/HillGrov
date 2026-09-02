@@ -1,0 +1,36 @@
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "esp_ota_ops.h"
+#include "board.h"
+#include "notify.h"
+#include "cmd_task.h"
+#include "cmd_common.h"
+#include "cli.h"
+#include "esp_timer.h"
+
+static const char *TAG = "hg_main";
+extern const app_if_t APP_IF_MASTER;
+extern const cmd_entry_t *master_table(int *n);
+static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+
+void app_main(void) {
+    ESP_LOGI(TAG, "HillGrow master %s boot", esp_app_get_description()->version);
+
+    notify_init(now_ms, 0);
+    cmd_common_init(&APP_IF_MASTER);
+    int n;
+    static cmd_core_t core;
+    core.table = master_table(&n); core.table_len = n;
+    core.role = CMD_ROLE_MASTER; core.zone_id = 0;
+    core.now_ms = now_ms;
+    core.debug_key = CONFIG_HILLGROW_DEBUG_KEY;
+    cmd_task_start(&core);
+    cli_init();
+    cli_start();
+
+    /* SP1 placeholder for the SP2 OTA trial (spec 3.10) */
+    esp_ota_mark_app_valid_cancel_rollback();
+    notify_emit(NTF_BOOT, 0, "%s POWERON", esp_app_get_description()->version);
+    vTaskDelete(NULL);
+}
