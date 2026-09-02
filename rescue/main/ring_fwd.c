@@ -3,6 +3,7 @@
 #include "driver/uart.h"
 #include "esp_task_wdt.h"
 #include "board.h"
+#include "rescue.h"   /* ring_fwd_start() prototype now lives here (review fix) */
 
 #define RING_RD_SZ 128
 

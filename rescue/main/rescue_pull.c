@@ -24,7 +24,15 @@ int rescue_pull(const char *url) {
     if (!cli) return -1;
     int rc = -1;
     esp_ota_handle_t ota = 0;
+    /* review-round deviation from the verbatim brief (fix round 1, IMPORTANT
+     * 3b): esp_http_client_open()+fetch_headers() can together block up to
+     * ~20 s on a marginal AP, on top of the ~20 s rescue_wifi_sta() connect
+     * this runs after -- against a 30 s TWDT with PANIC=y that risks a panic
+     * mid-retry before the read loop's own reset below ever runs, losing an
+     * already-consumed handover record silently. Two resets, no other change. */
+    esp_task_wdt_reset();
     if (esp_http_client_open(cli, 0) == ESP_OK) {
+        esp_task_wdt_reset();
         int64_t len = esp_http_client_fetch_headers(cli);
         int status = esp_http_client_get_status_code(cli);
         ESP_LOGW(TAG, "GET %s -> %d, %lld bytes -> %s", url, status, (long long)len, dst->label);

@@ -11,8 +11,6 @@
 
 static const char *TAG = "rescue_main";
 
-extern void ring_fwd_start(void);
-
 /* ---- status LED: esp_timer periodic toggle on GPIO2 -------------------- */
 
 typedef enum { LED_BLINK, LED_ERROR } led_mode_t;
@@ -24,18 +22,26 @@ static int                s_led_burst_left;
 
 static void led_cb(void *arg) {
     (void)arg;
-    if (s_led_mode == LED_ERROR) {
-        if (s_led_burst_left > 0) {
-            s_led_level ^= 1;
-            s_led_burst_left--;
-        } else {
-            s_led_level = 0;
-            esp_timer_stop(s_led_timer);
-        }
+    if (s_led_mode == LED_ERROR && s_led_burst_left > 0) {
+        s_led_level ^= 1;
+        s_led_burst_left--;
+        gpio_set_level(HG_GPIO_STATUS_LED, s_led_level);
+    } else if (s_led_mode == LED_ERROR) {
+        /* Burst finished. Re-checking s_led_mode here (not just in the outer
+         * condition) closes a freeze window: this callback can be preempted
+         * between that check and here by led_blink()/led_error_burst() on
+         * app_main's task, which stops-and-restarts s_led_timer for a new
+         * mode/period. Without the re-check, this stale callback would then
+         * call esp_timer_stop() on the *new* timer instance and silently
+         * freeze the LED -- rescue's only feedback channel -- in whatever
+         * state the new mode left it. */
+        s_led_level = 0;
+        gpio_set_level(HG_GPIO_STATUS_LED, s_led_level);
+        esp_timer_stop(s_led_timer);
     } else {
         s_led_level ^= 1;
+        gpio_set_level(HG_GPIO_STATUS_LED, s_led_level);
     }
-    gpio_set_level(HG_GPIO_STATUS_LED, s_led_level);
 }
 
 static void led_init(void) {
@@ -65,7 +71,10 @@ static void led_error_burst(void) {
     s_led_burst_left = 6;   /* 6 toggles == 3 on/off blinks */
     gpio_set_level(HG_GPIO_STATUS_LED, 0);
     esp_timer_start_periodic(s_led_timer, 150000);
-    vTaskDelay(pdMS_TO_TICKS(150 * 6 + 50));
+    /* 6 toggle callbacks + 1 final "burst done, stop" callback = 7 periods;
+     * the delay must cover all 7 so led_cb's stale-callback guard above
+     * isn't the only thing standing between this and the freeze window. */
+    vTaskDelay(pdMS_TO_TICKS(150 * 7 + 50));
 }
 
 /* ---- boot sequence (spec 1.4/6.1): pull mode, then manual-AP fallback -- */
@@ -103,8 +112,12 @@ void app_main(void) {
         led_error_burst();
     }
 
-    rescue_wifi_ap();
-    led_manual();
+    if (rescue_wifi_ap() == 0) {
+        led_manual();
+    } else {
+        ESP_LOGE(TAG, "rescue_wifi_ap failed: the recovery AP may be unreachable");
+        led_error_burst();
+    }
     rescue_http_start();
 
     for (;;) {

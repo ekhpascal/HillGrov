@@ -61,9 +61,13 @@ static int render_page(const char *src, char *dst, size_t cap, const char *runni
 #define SLOT_LINE_MAX 56
 
 static void slot_describe(char *out, size_t cap, const esp_partition_t *p) {
-    esp_app_desc_t desc;
+    /* Zero-initialized so a failed/skipped read leaves desc.version as an
+     * empty string rather than uninitialized stack bytes; %.31s bounds the
+     * read to the field's declared size regardless, since char[32] read
+     * back from flash is not guaranteed to contain a NUL. */
+    esp_app_desc_t desc = { 0 };
     if (p && esp_ota_get_partition_description(p, &desc) == ESP_OK) {
-        snprintf(out, cap, "%s: %s", p->label, desc.version);
+        snprintf(out, cap, "%s: %.31s", p->label, desc.version);
     } else {
         snprintf(out, cap, "%s: empty", p ? p->label : "?");
     }
@@ -91,6 +95,15 @@ static esp_err_t root_get(httpd_req_t *req) {
     return ESP_OK;
 }
 
+/* httpd's default recv_wait_timeout is 5 s (HTTPD_DEFAULT_CONFIG); this many
+ * *consecutive* timeouts (~60 s of no data at all) gives up rather than
+ * retrying forever. httpd is single-threaded: a client that vanishes
+ * without a FIN (e.g. a phone walking out of AP range mid-upload) would
+ * otherwise wedge the entire recovery server -- including /reboot -- with
+ * the OTA handle open on a half-written slot, recoverable only by a power
+ * cycle. (review-round fix, IMPORTANT 2) */
+#define UPLOAD_MAX_CONSECUTIVE_TIMEOUTS 12
+
 static esp_err_t upload_post(httpd_req_t *req) {
     const esp_partition_t *dst = rescue_target_slot();
     if (!dst || req->content_len == 0 || req->content_len > dst->size) {
@@ -98,17 +111,33 @@ static esp_err_t upload_post(httpd_req_t *req) {
         return ESP_OK;
     }
 
+    /* The httpd worker task isn't TWDT-subscribed by default, so without
+     * this the esp_task_wdt_reset() below is a silent no-op (review-round
+     * fix, minor 4). Deleted again below on every path out of this
+     * function past this point. */
+    esp_task_wdt_add(NULL);
+
     esp_ota_handle_t ota = 0;
     int rc = -1;
     if (esp_ota_begin(dst, req->content_len, &ota) == ESP_OK) {
         static char buf[4096];
         int remaining = (int)req->content_len;
+        int timeouts = 0;
         rc = 0;
         while (remaining > 0) {
             esp_task_wdt_reset();
             int chunk = remaining < (int)sizeof buf ? remaining : (int)sizeof buf;
             int n = httpd_req_recv(req, buf, chunk);
-            if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            if (n == HTTPD_SOCK_ERR_TIMEOUT) {
+                if (++timeouts > UPLOAD_MAX_CONSECUTIVE_TIMEOUTS) {
+                    ESP_LOGW(TAG, "upload stalled (no data for ~%d s), aborting",
+                             UPLOAD_MAX_CONSECUTIVE_TIMEOUTS * 5);
+                    rc = -1;
+                    break;
+                }
+                continue;
+            }
+            timeouts = 0;
             if (n <= 0 || esp_ota_write(ota, buf, (size_t)n) != ESP_OK) { rc = -1; break; }
             remaining -= n;
         }
@@ -117,18 +146,25 @@ static esp_err_t upload_post(httpd_req_t *req) {
         if (rc == 0 && esp_ota_set_boot_partition(dst) != ESP_OK) rc = -1;
     }
 
+    esp_task_wdt_delete(NULL);
+
     if (rc != 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "flash write failed");
         return ESP_OK;
     }
 
-    esp_app_desc_t desc;
-    esp_ota_get_partition_description(dst, &desc);
+    /* Zero-initialized + %.31s bounded: see slot_describe's comment above --
+     * a failed read (checked here, unlike before) leaves desc.version as an
+     * empty string instead of stack garbage or an unbounded read. */
+    esp_app_desc_t desc = { 0 };
+    if (esp_ota_get_partition_description(dst, &desc) != ESP_OK) {
+        ESP_LOGW(TAG, "esp_ota_get_partition_description failed after a successful write to %s", dst->label);
+    }
     char resp[64];
-    int rl = snprintf(resp, sizeof resp, "OK %s \xe2\x80\x94 rebooting\n", desc.version);
+    int rl = snprintf(resp, sizeof resp, "OK %.31s \xe2\x80\x94 rebooting\n", desc.version);
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_send(req, resp, rl);
-    ESP_LOGW(TAG, "upload -> %s (%s), rebooting", dst->label, desc.version);
+    ESP_LOGW(TAG, "upload -> %s (%.31s), rebooting", dst->label, desc.version);
     schedule_reboot();
     return ESP_OK;
 }
@@ -144,6 +180,7 @@ void rescue_http_start(void) {
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
+    config.lru_purge_enable = true;
 
     if (httpd_start(&server, &config) != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed");
