@@ -141,7 +141,14 @@ int hg_store_flush(uint32_t timeout_ms) {
          * strand a caller with a plane still outstanding. */
         s_force = 1;
         if (s_flush_sem) xSemaphoreGive(s_flush_sem);
-        if (now_ms() - start >= timeout_ms) return -1;
+        if (now_ms() - start >= timeout_ms) {
+            /* Giving up: release the latch so a genuinely failing NVS falls
+             * back to attempt_write's normal throttle/backoff instead of
+             * every subsequent background pass running forced forever
+             * (bypassing the 30 s backoff and spamming F_NVS every ~3 s). */
+            s_force = 0;
+            return -1;
+        }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
