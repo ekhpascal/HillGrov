@@ -341,7 +341,7 @@ UART0 115200 (bootloader baud, never switched), driver-installed, one recursive 
 
 ### 5.8 Debug unlock (decisions, brainstorm)
 
-`DEBUG ENABLE <key>` — key from `CONFIG_HILLGROW_DEBUG_KEY` (default `hill`; release builds override in sdkconfig.defaults); per-session, 600 s idle expiry, never HTTP. **May be forwarded to a zone over the ring** (`SET ZONE 2 DEBUG ENABLE <key>` — the ring is inside the enclosure). Master relay outputs (`SET OUT`) are **not** unlock-gated (duration-bounded, safety-gated, needed by the web UI). AP password default `hillgrow1` (`SET WIFI AP`), same default on the rescue AP.
+`DEBUG ENABLE <key>` — key from `CONFIG_HILLGROW_DEBUG_KEY` (default `hill`; release builds override in sdkconfig.defaults); per-session, 600 s idle expiry, never HTTP. **May be forwarded to a zone over the ring** — the ring is inside the enclosure. Forwarding grammar (as implemented, SP1): the ZONE prefix follows the verb, `<VERB> ZONE <z> <tail>` — e.g. `DEBUG ZONE 2 ENABLE <key>`, `SET ZONE 2 WATER 1 TARGET 60`. No-argument BARE rows (`SAVE`) are not forwardable in the SP1 dispatcher; SP3's forwarding layer decides whether to lift that. Master relay outputs (`SET OUT`) are **not** unlock-gated (duration-bounded, safety-gated, needed by the web UI). AP password default `hillgrow1` (`SET WIFI AP`), same default on the rescue AP.
 
 ### 5.9 tools/uart_test.py
 
