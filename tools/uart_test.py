@@ -41,6 +41,12 @@ class Node:
         self._pending = None
         self.role = None
 
+    def adopt(self, transport):
+        """Swap in a fresh transport (post-reboot reconnect) so callers keep
+        using this Node object; drops any stale pending line."""
+        self.transport = transport
+        self._pending = None
+
     def _readline(self, deadline):
         if self._pending is not None:
             line, self._pending = self._pending, None
@@ -190,8 +196,9 @@ def suite_persist(node, role, args, results, reconnect=None):
     node.close()  # Windows opens COM ports exclusively: close before reopen
     time.sleep(3.0)
     node2 = (reconnect or (lambda: open_node(args.port, args.baud)))()
-    node2.prologue()
-    r = node2.send("GET WATER 1")
+    node.adopt(node2.transport)  # later suites keep using the caller's node
+    node.prologue()
+    r = node.send("GET WATER 1")
     check(results, "PERSIST: WATER TARGET survives reboot", r.ok and "Target : 61" in r.lines, r.lines)
 
 def suite_session(node, results):
@@ -289,6 +296,7 @@ def selftest():
         return Node(FakeTransport([]))
 
     p_node = Node(FakeTransport(["OK SAVE"], on_close=lambda: events.append("close")))
+    old_transport = p_node.transport
     p_args = argparse.Namespace(allow_reboot=True, port="FAKE", baud=115200)
     orig_sleep, time.sleep = time.sleep, lambda s: None
     try:
@@ -296,7 +304,9 @@ def selftest():
     finally:
         time.sleep = orig_sleep
     expect("g: close before reopen", events == ["close", "reopen"])
-    expect("g: transport closed", p_node.transport.closed)
+    expect("g: old transport closed", old_transport.closed)
+    expect("g: reconnect adopted", p_node.transport is not old_transport
+           and not p_node.transport.closed)
 
     if fails:
         print("SELFTEST FAIL:", ", ".join(fails))
