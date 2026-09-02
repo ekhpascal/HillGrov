@@ -1,6 +1,6 @@
 <mxfile host="65bd71144e">
     <diagram id="master" name="Master Controller">
-        <mxGraphModel dx="914" dy="1129" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1750" math="0" shadow="0">
+        <mxGraphModel dx="711" dy="1129" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1750" math="0" shadow="0">
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
@@ -1231,6 +1231,493 @@
                 </mxCell>
                 <mxCell id="pzoneg10r3" value="• While a zone sits in rescue, its UART repeater keeps the ring closed for everyone downstream" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pzoneg10" vertex="1">
                     <mxGeometry x="4" y="136" width="482" height="40" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="topo_master" name="Master HW Topology">
+        <mxGraphModel dx="914" dy="1129" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1650" pageHeight="1626" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="tm1" value="Master — hardware topology" style="text;html=1;fontSize=22;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="16" width="900" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm2" value="Every expansion board on the Master and what hangs off each one. Companion to docs/pin-mapping.md (that file wins for pins). Updated 2026-09-02." style="text;html=1;fontSize=11;fontColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="48" width="1100" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm3" value="expansion board" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="76" width="120" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm4" value="sensor" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="752" y="76" width="120" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm5" value="actuator / load" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="884" y="76" width="120" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm6" value="future / option" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#fafafa;strokeColor=#999999;fontColor=#666666;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="1016" y="76" width="120" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm7" value="RTC — time authority (battery-backed)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="110" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm8" value="AT24C32 EEPROM @0x57 — unused in V1" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="148" width="300" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm9" value="DS3231 RTC module @0x68" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="123" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm9" target="tm7" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm9" target="tm8" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm10" value="main exhaust fan — DUKA TT125" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="186" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm11" value="intake damper" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="224" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm12" value="exhaust → workshop damper" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="262" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm13" value="exhaust → outside damper" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="300" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm14" value="reservoir refill solenoid" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="338" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm15" value="overall grow light relay" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="376" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm16" value="heater (P7) — mechanical thermal cutout in series (mandatory)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="414" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm17" value="blind motor OPEN (P8) / CLOSE (P9) — interlocked pair" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="452" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm18" value="7 relays spare — pin map fixed in SP5" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="490" width="300" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm19" value="PCF8575 relay expander @0x20 — 16 relays, active-low" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="332" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm19" target="tm10" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm19" target="tm11" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm19" target="tm12" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm19" target="tm13" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm19" target="tm14" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm19" target="tm15" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm19" target="tm16" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm19" target="tm17" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme11" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm19" target="tm18" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm20" value="CO₂ 400–5000 ppm — growth room" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="528" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm21" value="room T/RH (SHT4x) — also STCC4 compensation input" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="566" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm22" value="DFRobot Gravity STCC4 module @0x64 (+ SHT4x @0x44 on board)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="543" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm22" target="tm20" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm22" target="tm21" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm23" value="workshop T/RH (AHT20)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="612" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm24" value="air pressure (BMP280) — feeds STCC4 pressure comp." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="650" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm25" value="AHT20 + BMP280 combo module @0x38 · @0x76/77" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="627" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm25" target="tm23" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme15" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm25" target="tm24" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm26" value="PAR sensor 400–700 nm — canopy light / DLI" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="1290" y="696" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm27" value="outdoor / far T/RH transmitters — future" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#fafafa;strokeColor=#999999;fontColor=#666666;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="1290" y="734" width="300" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm28" value="isolated RS-485 transceiver (auto-dir) — Modbus RTU field bus" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="711" width="300" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme16" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm28" target="tm26" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme17" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm28" target="tm27" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm29" value="UART B spare" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="774" width="300" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm30" value="SC16IS752 I²C→dual-UART bridge @0x4D" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="738" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme18" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm30" target="tm28" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme19" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm30" target="tm29" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm31" value="PCA9685 — option (future, address TBD)" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#fafafa;strokeColor=#999999;fontColor=#666666;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="812" width="290" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm32" value="ADS1115 @0x48–4B — future; no current sensor needs an ADC" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#fafafa;strokeColor=#999999;fontColor=#666666;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="860" width="290" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm33" value="I²C bus — GPIO21 SDA · GPIO22 SCL
+100 kHz · net pull-up ≈ 2.2–4.7 kΩ" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="488" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme20" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm33" target="tm9" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme21" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm33" target="tm19" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme22" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm33" target="tm22" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme23" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm33" target="tm25" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme24" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm33" target="tm30" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme25" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm33" target="tm31" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme26" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm33" target="tm32" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm34" value="DS18B20 waterproof probe — outdoor temperature" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="930" width="290" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm35" value="1-Wire — GPIO0 · 4.7 kΩ pull-up (boot-strap safe)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="924" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme27" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm35" target="tm34" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm36" value="media only — alarms/history stay on internal flash" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="1010" width="300" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm37" value="microSD card module (FAT)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="1002" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme28" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm37" target="tm36" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm38" value="SPI2 — 14 SCK · 13 MOSI · 27 MISO · 4 CS" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="1000" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme29" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm38" target="tm37" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm39" value="audio out → amp / speaker" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="1082" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm40" value="PCM5102A DAC board (SCK pin → GND)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="1078" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme30" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm40" target="tm39" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm41" value="I²S — 33 BCK · 32 WS · 23 DOUT" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="1076" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme31" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm41" target="tm40" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm42" value="load cell under reservoir — water level by weight" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="1158" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm43" value="HX711 24-bit load-cell ADC board" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="1154" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme32" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm43" target="tm42" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm44" value="HX711 2-wire — 34 DOUT · 5 SCK" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="1152" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme33" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm44" target="tm43" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm45" value="ESP32-S3 display node — API client (see Display page)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="1230" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm46" value="UART1 display link — 26 TX → S3 · 25 RX ← S3 · 115200" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="1228" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme34" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm46" target="tm45" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm47" value="CLI + logs — bring-up / standalone operation" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="1314" width="290" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm48" value="UART0 console — GPIO1 TX / GPIO3 RX · USB-UART 115200" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="1304" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme35" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm48" target="tm47" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm49" value="Zone 1…N controllers — COBS + CRC-16 per hop" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="1390" width="290" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm50" value="UART2 ring — 19 TX ↓ · 18 RX ↑ (10 kΩ pull-up)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="1380" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme36" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm50" target="tm49" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm51" value="room presence PIR/mmWave — GPIO39" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="1454" width="290" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm52" value="blind end-stop CLOSED GPIO35 · OPEN GPIO36 (pull-ups)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="1500" width="290" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm53" value="rescue button GPIO15 → GND · status LED GPIO2" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="1546" width="290" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm54" value="direct GPIO" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="1492" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme37" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm54" target="tm51" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme38" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm54" target="tm52" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme39" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm54" target="tm53" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tm55" value="ESP32-DevKitC-V4 — MASTER
+8 MB flash · Wi-Fi AP 192.168.7.7 + STA" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;fontStyle=1;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="975" width="220" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme40" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm55" target="tm33" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme41" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm55" target="tm35" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme42" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm55" target="tm38" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme43" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm55" target="tm41" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme44" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm55" target="tm44" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme45" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm55" target="tm46" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme46" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm55" target="tm48" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme47" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm55" target="tm50" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tme48" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tm55" target="tm54" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="topo_zone" name="Zone HW Topology">
+        <mxGraphModel dx="914" dy="1129" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1650" pageHeight="918" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="tz1" value="Zone — hardware topology" style="text;html=1;fontSize=22;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="16" width="900" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz2" value="Every expansion board on a Zone controller and what hangs off each one. Identical for all zones; shelf count 1–4 per config. Updated 2026-09-02." style="text;html=1;fontSize=11;fontColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="48" width="1100" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz3" value="expansion board" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="76" width="120" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz4" value="sensor" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="752" y="76" width="120" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz5" value="actuator / load" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="884" y="76" width="120" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz6" value="future / option" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#fafafa;strokeColor=#999999;fontColor=#666666;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="1016" y="76" width="120" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz7" value="ch0/1 · shelf 1 LED White + Red (MOSFET drivers)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="110" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz8" value="ch2/3 · shelf 2 LED White + Red" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="148" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz9" value="ch4/5 · shelf 3 LED White + Red" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="186" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz10" value="ch6/7 · shelf 4 LED White + Red" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="224" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz11" value="ch8–11 · pollination vibrators shelf 1–4 (PWM intensity)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="262" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz12" value="ch12–15 spare — future fan PWM" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="300" width="300" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz13" value="PCA9685 16-ch PWM @0x40 · ~1017 Hz — OE GPIO23 (10 kΩ pull-up)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="199" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz13" target="tz7" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz13" target="tz8" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz13" target="tz9" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz13" target="tz10" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz13" target="tz11" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz13" target="tz12" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz14" value="P0–P3 · water pumps shelf 1–4 (dosing serialized)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="338" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz15" value="P4–P7 · fans shelf 1–4" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="376" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz16" value="P8–P15 spare" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="414" width="300" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz17" value="PCF8575 expander @0x20 — active-low drivers" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="370" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz17" target="tz14" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz17" target="tz15" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz17" target="tz16" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz18" value="I²C — GPIO21 SDA · GPIO22 SCL · 400 kHz · 4.7 kΩ pull-ups" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="282" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz18" target="tz13" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze11" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz18" target="tz17" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz19" value="shelf 1 · probe A GPIO32 · probe B GPIO33 (ADC1)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="466" width="290" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz20" value="shelf 2 · probe A GPIO34 · probe B GPIO35 (ADC1)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="512" width="290" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz21" value="shelf 3 · probe A GPIO36 · probe B GPIO39 (ADC1)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="558" width="290" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz22" value="shelf 4 · probe A GPIO25 · probe B GPIO26 (ADC2 — OK: no Wi-Fi)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="604" width="290" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz23" value="soil ADC — direct GPIO (SEN0193 capacitive ×8, 100 kΩ pull-downs)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="529" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz23" target="tz19" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz23" target="tz20" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz23" target="tz21" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze15" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz23" target="tz22" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz24" value="CLI + logs — bring-up / standalone operation" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="676" width="290" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz25" value="UART0 console — GPIO1 TX / GPIO3 RX · USB-UART 115200" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="666" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze16" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz25" target="tz24" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz26" value="upstream / downstream neighbours — COBS + CRC-16 per hop" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="752" width="290" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz27" value="UART2 ring — 19 TX ↓ · 18 RX ↑ (10 kΩ pull-up)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="742" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze17" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz27" target="tz26" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz28" value="rescue button GPIO15 → GND · status LED GPIO2 · spare 4/5/13/14/27" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="828" width="290" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz29" value="direct GPIO" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="818" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze18" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz29" target="tz28" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tz30" value="ESP32-DevKitC-V4 — ZONE n
+4 MB WROOM · no Wi-Fi ever" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;fontStyle=1;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="535" width="220" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze19" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz30" target="tz18" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze20" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz30" target="tz23" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze21" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz30" target="tz25" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze22" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz30" target="tz27" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tze23" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz30" target="tz29" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
             </root>
         </mxGraphModel>

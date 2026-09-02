@@ -10,7 +10,7 @@
 | UART0 console + CLI | 1 (TX), 3 (RX) | on-board USB-UART, 115200 |
 | Ring UART2 RX | 18 | from upstream node's TX; internal pull-up + external 10 kΩ |
 | Ring UART2 TX | 19 | to downstream node's RX |
-| I²C SDA / SCL | 21 / 22 | one bus, all expansion modules, 400 kHz |
+| I²C SDA / SCL | 21 / 22 | one bus, all expansion modules; 400 kHz (Zone) · 100 kHz (Master — larger bus, see checklist) |
 | Rescue button | 15 → GND | bootloader: hold ≥10 s = rescue, 1–9 s = NVS erase |
 | Status LED | 2 | on-board LED, driven only after boot |
 
@@ -35,7 +35,7 @@
 | Addr | Device | Notes |
 |---|---|---|
 | 0x68 | DS3231 RTC | time authority; AT24C32 EEPROM at 0x57 unused in V1 |
-| 0x20 | PCF8575 | relays (9 used, 7 spare): main fan, 3 dampers, blind open (P8) + blind close (P9), refill solenoid, overall grow light, heater — pin map fixed in SP5 |
+| 0x20 | PCF8575 | relays (9 used, 7 spare): main fan, 3 dampers, blind open (P8) + blind close (P9), refill solenoid, overall grow light, heater (P7, §11.8) — remaining pin map fixed in SP5 |
 | 0x64 | STCC4 (DFRobot Gravity) | growth-room CO₂ 400–5000 ppm + T/RH via the module's companion SHT4x (typ. 0x44 — verify in scan) |
 | 0x38 | AHT20 | workshop/“inside” temperature/humidity (AHT20+BMP280 combo module) |
 | 0x76/0x77 | BMP280 | air pressure (same combo module; address per SDO strap — verify in scan); feeds STCC4 pressure compensation |
