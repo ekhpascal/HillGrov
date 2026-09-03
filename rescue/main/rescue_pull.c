@@ -3,6 +3,7 @@
 #include "esp_http_client.h"
 #include "esp_ota_ops.h"
 #include "esp_task_wdt.h"
+#include "rescue_handover.h"
 #include "rescue.h"
 
 static const char *TAG = "pull";
@@ -16,7 +17,12 @@ const esp_partition_t *rescue_target_slot(void) {
     return ota0;   /* boot==ota_1, factory, or undefined -> ota_0 */
 }
 
-int rescue_pull(const char *url) {
+/* SP3 deviation from the Task-16(SP1) verbatim file -- the third, after the two
+ * TWDT-reset additions above: rescue_pull() gains an expect_link parameter so
+ * the trial breadcrumb (hg_trial_write below) can be written immediately after
+ * the boot partition is set. Rescue has no other channel back to the
+ * freshly-selected app once it reboots into it. */
+int rescue_pull(const char *url, uint8_t expect_link) {
     const esp_partition_t *dst = rescue_target_slot();
     if (!dst) return -1;
     esp_http_client_config_t cfg = { .url = url, .timeout_ms = 10000 };
@@ -49,6 +55,7 @@ int rescue_pull(const char *url) {
             if (rc == 0 && esp_ota_end(ota) != ESP_OK) rc = -1;
             else if (rc != 0) esp_ota_abort(ota);
             if (rc == 0 && esp_ota_set_boot_partition(dst) != ESP_OK) rc = -1;
+            if (rc == 0) hg_trial_write(expect_link);   /* best-effort: never fails the pull */
         }
     }
     esp_http_client_cleanup(cli);

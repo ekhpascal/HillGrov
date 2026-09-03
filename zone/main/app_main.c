@@ -11,6 +11,7 @@
 #include "cmd_common.h"
 #include "cli.h"
 #include "esp_timer.h"
+#include "ota_trial.h"
 
 static const char *TAG = "hg_main";
 extern const app_if_t APP_IF_ZONE;
@@ -40,8 +41,7 @@ void app_main(void) {
     cli_init();
     cli_start();
 
-    /* SP1 placeholder for the SP2 OTA trial (spec 3.10) */
-    esp_ota_mark_app_valid_cancel_rollback();
+    ota_trial_start(0);
     notify_emit(NTF_BOOT, 0, "%s POWERON", esp_app_get_description()->version);
     vTaskDelete(NULL);
 }

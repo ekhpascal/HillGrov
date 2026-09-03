@@ -13,7 +13,7 @@ set(COMP ${CMAKE_CURRENT_SOURCE_DIR}/../../components)
 include_directories(
   ${COMP}/app_version ${COMP}/hg_blob ${COMP}/hg_cfg ${COMP}/hg_model
   ${COMP}/cli_line ${COMP}/notify ${COMP}/cmd_core ${COMP}/cmd_common
-  ${COMP}/zone_cmds ${COMP}/rescue_handover ${COMP}/ring_proto ${COMP}/node_store ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
+  ${COMP}/zone_cmds ${COMP}/rescue_handover ${COMP}/ring_proto ${COMP}/node_store ${COMP}/ota_trial ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
 enable_testing()
 function(hg_test NAME)
   add_executable(${NAME} ${NAME}.c fakes/fake_clock.c ${ARGN})
@@ -35,7 +35,7 @@ set(CMD_CORE_SRC ${COMP}/cmd_core/cmd_tok.c ${COMP}/cmd_core/cmd_resp.c ${COMP}/
 hg_test(test_cmd_core ${CMD_CORE_SRC})
 hg_test(test_cmd_help ${CMD_CORE_SRC})
 hg_test(test_zone_cmds ${COMP}/zone_cmds/zone_cmds.c ${CMD_CORE_SRC} ${HG_CFG_SRC} ${COMP}/hg_model/hg_model.c
-        ${COMP}/cmd_common/cmd_common.c ${COMP}/notify/notify.c)
+        ${COMP}/cmd_common/cmd_common.c ${COMP}/notify/notify.c ${COMP}/ota_trial/trial_cmds.c)
 hg_test(test_cmd_common ${COMP}/cmd_common/cmd_common.c ${CMD_CORE_SRC} ${COMP}/notify/notify.c fakes/fake_app_if.c)
 hg_test(test_handover ${COMP}/rescue_handover/rescue_handover.c ${COMP}/hg_blob/hg_blob.c)
 hg_test(test_ring_frame ${COMP}/ring_proto/ring_crc.c ${COMP}/ring_proto/ring_cobs.c ${COMP}/ring_proto/ring_frame.c)
@@ -45,3 +45,4 @@ hg_test(test_ring_tlm ${COMP}/ring_proto/ring_tlm_hb.c ${COMP}/ring_proto/ring_t
 hg_test(test_ring_cfgx ${COMP}/ring_proto/ring_cfgx.c)
 hg_test(test_ring_health ${COMP}/ring_proto/ring_health.c ${COMP}/ring_proto/ring_tlm_hb.c ${COMP}/ring_proto/ring_tlm.c)
 hg_test(test_node_store ${COMP}/node_store/ztab.c ${COMP}/hg_blob/hg_blob.c)
+hg_test(test_ota_trial ${COMP}/ota_trial/trial_eval.c ${COMP}/ota_trial/trial_cmds.c ${CMD_CORE_SRC})

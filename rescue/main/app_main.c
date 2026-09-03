@@ -103,7 +103,7 @@ void app_main(void) {
         led_pull();
         for (int a = 0; a < 3; a++) {
             esp_task_wdt_reset();
-            if (rescue_wifi_sta(h.ssid, h.pass, 20000) == 0 && rescue_pull(h.url) == 0) {
+            if (rescue_wifi_sta(h.ssid, h.pass, 20000) == 0 && rescue_pull(h.url, h.expect_link) == 0) {
                 esp_restart();
             }
             vTaskDelay(pdMS_TO_TICKS(5000));

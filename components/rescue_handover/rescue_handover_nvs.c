@@ -86,3 +86,27 @@ int hg_handover_take(hg_handover_t *out) {
 
     return (err == ESP_OK) ? 0 : -1;
 }
+
+int hg_trial_write(uint8_t expect_link) {
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open("hg", NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "trial: nvs_open failed: %s", esp_err_to_name(err));
+        return -1;
+    }
+
+    err = nvs_set_u8(handle, "trial", expect_link);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "trial: nvs_set_u8 failed: %s", esp_err_to_name(err));
+        nvs_close(handle);
+        return -1;
+    }
+
+    err = nvs_commit(handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "trial: nvs_commit failed: %s", esp_err_to_name(err));
+    }
+    nvs_close(handle);
+
+    return (err == ESP_OK) ? 0 : -1;
+}

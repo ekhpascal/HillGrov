@@ -18,8 +18,10 @@ int rescue_wifi_sta(const char *ssid, const char *pass, uint32_t timeout_ms);
 int rescue_wifi_ap(void);
 
 /* Fetches url over HTTP into rescue_target_slot() and, on success, sets it
- * as the boot partition. 0 on success, -1 otherwise. */
-int rescue_pull(const char *url);
+ * as the boot partition (and, on that success, best-effort writes expect_link
+ * as the hg/"trial" breadcrumb for the newly-selected app's ota_trial to pick
+ * up on its first boot). 0 on success, -1 otherwise. */
+int rescue_pull(const char *url, uint8_t expect_link);
 
 /* Starts the GET/POST httpd (upload page, /upload, /reboot) on port 80. */
 void rescue_http_start(void);

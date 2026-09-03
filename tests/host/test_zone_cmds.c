@@ -5,7 +5,13 @@
 #include "hg_model.h"
 #include "zone_cmds.h"
 #include "cmd_common.h"
+#include "ota_trial.h"
 #include "fake_clock.h"
+
+/* trial_cmds.c (linked in below for OTA_TRIAL_ROWS/N in test_merged_table_valid)
+ * calls this from its handler; that test only runs cmd_table_check, never
+ * cmd_dispatch, on the OTA row, so this exists solely to satisfy the linker. */
+int ota_trial_confirm(void) { return -1; }
 
 static cmd_core_t    core;
 static cmd_session_t ses;
@@ -32,18 +38,20 @@ static void test_table_valid(void) {
     TEST_ASSERT_EQUAL_INT(-1, cmd_table_check(ZONE_CMD_ROWS, ZONE_CMD_ROWS_N));
 }
 
-/* zone/main/cmd_table_zone.c memcpy's CMD_COMMON_ROWS + ZONE_CMD_ROWS into one
- * production dispatch table; each set passes cmd_table_check on its own
- * (test_table_valid above, and test_cmd_common's own test_table_valid), but
- * neither of those catches a noun collision that only exists across the two
- * sets. Mirror the merge exactly so that gap is host-validated. */
+/* zone/main/cmd_table_zone.c memcpy's CMD_COMMON_ROWS + ZONE_CMD_ROWS + OTA_TRIAL_ROWS
+ * into one production dispatch table; each set passes cmd_table_check on its own
+ * (test_table_valid above, test_cmd_common's own test_table_valid, and
+ * test_ota_trial's), but none of those catch a noun collision that only exists
+ * across sets. Mirror the merge exactly so that gap is host-validated. */
 static void test_merged_table_valid(void) {
     cmd_entry_t merged[64];
-    int total = CMD_COMMON_ROWS_N + ZONE_CMD_ROWS_N;
+    int total = CMD_COMMON_ROWS_N + ZONE_CMD_ROWS_N + OTA_TRIAL_ROWS_N;
     TEST_ASSERT_TRUE(total <= 64);
     memcpy(merged, CMD_COMMON_ROWS, (size_t)CMD_COMMON_ROWS_N * sizeof(cmd_entry_t));
     memcpy(merged + CMD_COMMON_ROWS_N, ZONE_CMD_ROWS, (size_t)ZONE_CMD_ROWS_N * sizeof(cmd_entry_t));
-    TEST_ASSERT_EQUAL_INT(CMD_COMMON_ROWS_N + ZONE_CMD_ROWS_N, total);
+    memcpy(merged + CMD_COMMON_ROWS_N + ZONE_CMD_ROWS_N, OTA_TRIAL_ROWS,
+           (size_t)OTA_TRIAL_ROWS_N * sizeof(cmd_entry_t));
+    TEST_ASSERT_EQUAL_INT(CMD_COMMON_ROWS_N + ZONE_CMD_ROWS_N + OTA_TRIAL_ROWS_N, total);
     TEST_ASSERT_EQUAL_INT(-1, cmd_table_check(merged, total));
 }
 
