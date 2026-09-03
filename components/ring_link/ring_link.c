@@ -31,10 +31,18 @@ static volatile int      s_trace;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
-/* FORWARD/CONSUME_FWD: ring_route only returns these for ttl > 1, so ttl-1
+/* ring_route only ttl-guards its unicast forward path (ttl<=1 -> DROP); the
+ * broadcast (dst 0xFF -> CONSUME_FWD) and 0xFE-forward routes carry NO ttl
+ * guarantee at all. So a ttl==0 frame can still reach here on those paths --
+ * e.g. a mis-wired sub-loop that excludes the master lets a broadcast's ttl
+ * run to 0. Without this guard the uint8_t decrement below would wrap 0 to
+ * 255 and the frame would circulate forever, defeating spec §2.3's "drop at
+ * 0" backstop -- so a ttl==0 arrival is dropped here, not forwarded. Once
+ * past the guard, ring_route's own unicast check (or this one) means ttl-1
  * never underflows. Re-encodes fresh (own CRC per spec §2.2) rather than
  * patching the original wire bytes. */
 static void ring_link_forward(const ring_hdr_t *h, const uint8_t *payload) {
+    if (h->ttl == 0) { s_ctr.rx_drop++; return; }
     ring_hdr_t fh = *h;
     fh.ttl = (uint8_t)(fh.ttl - 1);
     uint8_t wire[RING_WIRE_MAX];
@@ -47,7 +55,10 @@ static void ring_link_forward(const ring_hdr_t *h, const uint8_t *payload) {
 static void ring_link_enqueue(const ring_hdr_t *h, const uint8_t *payload) {
     ring_frame_t f;
     f.hdr = *h;
-    memcpy(f.payload, payload, RING_MAX_PAYLOAD);
+    /* bound the copy to the validated payload length -- the rest of f.payload
+     * would otherwise carry indeterminate stack bytes across the task boundary. */
+    memcpy(f.payload, payload, h->len);
+    if (h->len < RING_MAX_PAYLOAD) memset(f.payload + h->len, 0, RING_MAX_PAYLOAD - h->len);
     if (xQueueSend(s_consume_q, &f, 0) != pdTRUE) s_ctr.rx_drop++;
 }
 
