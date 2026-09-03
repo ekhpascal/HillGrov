@@ -56,6 +56,22 @@
 
 Reserved I²C: 0x70 (PCA9685 all-call — never use) · 0x48–0x4B (future ADS1115 — optional; no current sensor needs an ADC: the DS18B20 is 1-Wire digital, not analog).
 
+## Master v2 — ESP32-P4-WIFI6-Touch-LCD-7B (reserved allocations, spec §11.10; effective at the migration sub-project)
+
+Onboard and therefore no longer external: 7" touch display · RTC + coin cell · RS-485 transceiver (own UART, 120 Ω jumpers, non-isolated) · microSD (SDMMC — expected on GPIO39–44, VERIFY no collision with the IO46–52 header at bring-up) · audio codec/PA (unused by us — see streamer) · ESP32-C6 Wi-Fi 6 (SDIO). Ring = the board's dedicated UART header (TX→zone1 RX, RX←zoneN TX). I²C header carries PCF8575 + STCC4 + AHT20/BMP280.
+
+| Function | P4 pin | Notes |
+|---|---|---|
+| Streamer I²S BCLK | IO46 | P4 I²S master TX → ESP32-DevKitC streamer (I²S slave RX); one ribbon: IO46–50 + GND |
+| Streamer I²S WS/LRCK | IO47 | |
+| Streamer I²S DOUT | IO48 | no MCLK — streamer's PCM5102A runs internal PLL (SCK→GND) |
+| Streamer control UART TX | IO49 | → streamer RX; source/volume/DSP commands (future streamer project) |
+| Streamer control UART RX | IO50 | ← streamer TX |
+| Spare (streamer header) | IO51, IO52 | |
+| Local I/O pool | IO28–31 (carefree), IO2–5 (JTAG-shared — fine once USB-JTAG is the debug path), IO34/36 (strapping — use last, prefer inputs) | for 1-Wire DS18B20, HX711 ×2, presence, blind end-stops ×2, rescue button, status LED (≈8 of 10) |
+
+The DevKitC master tables above remain the SP3-bench reality until the migration sub-project executes.
+
 ## Reserved / Unavailable
 
 | GPIO | Reason |
