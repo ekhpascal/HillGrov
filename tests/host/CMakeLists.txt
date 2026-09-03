@@ -13,7 +13,7 @@ set(COMP ${CMAKE_CURRENT_SOURCE_DIR}/../../components)
 include_directories(
   ${COMP}/app_version ${COMP}/hg_blob ${COMP}/hg_cfg ${COMP}/hg_model
   ${COMP}/cli_line ${COMP}/notify ${COMP}/cmd_core ${COMP}/cmd_common
-  ${COMP}/zone_cmds ${COMP}/rescue_handover ${COMP}/ring_proto ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
+  ${COMP}/zone_cmds ${COMP}/rescue_handover ${COMP}/ring_proto ${COMP}/node_store ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
 enable_testing()
 function(hg_test NAME)
   add_executable(${NAME} ${NAME}.c fakes/fake_clock.c ${ARGN})
@@ -44,3 +44,4 @@ hg_test(test_ring_trk ${COMP}/ring_proto/ring_trk.c ${COMP}/ring_proto/ring_fram
 hg_test(test_ring_tlm ${COMP}/ring_proto/ring_tlm_hb.c ${COMP}/ring_proto/ring_tlm.c)
 hg_test(test_ring_cfgx ${COMP}/ring_proto/ring_cfgx.c)
 hg_test(test_ring_health ${COMP}/ring_proto/ring_health.c ${COMP}/ring_proto/ring_tlm_hb.c ${COMP}/ring_proto/ring_tlm.c)
+hg_test(test_node_store ${COMP}/node_store/ztab.c ${COMP}/hg_blob/hg_blob.c)
