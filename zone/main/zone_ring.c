@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_task_wdt.h"
@@ -28,7 +27,6 @@ void hg_reboot_to_rescue(void);
 /* spec 5.5 edge default: what travels from this zone to the ring/master. */
 #define ZRING_NOTIFY_MASK (uint16_t)(NTF_MASK(NTF_BOOT) | NTF_MASK(NTF_ALARM) | NTF_MASK(NTF_SAFE) | \
                                       NTF_MASK(NTF_FW)   | NTF_MASK(NTF_NODE)  | NTF_MASK(NTF_RING))
-#define ZRING_LINK_MS 6000u   /* spec 2.7: zone link state LOST after 6000 ms without a frame */
 
 static cmd_core_t     *s_core;
 static cmd_session_t s_ring_ses = { .source = CMD_SRC_RING, .echo = 0, .notify_mask = ZRING_NOTIFY_MASK };
@@ -44,17 +42,12 @@ static uint16_t       s_synced_notify_mask = ZRING_NOTIFY_MASK;
 static uint32_t     s_last_hb_ms;
 static volatile int  s_hb_now = 1;             /* immediate-send flag: link start / ASSIGN_ID */
 
-static uint32_t s_last_rx_ms;                  /* any frame: proves the upstream leg is alive */
-static uint32_t s_last_master_ms;               /* master-sourced frame only */
-static uint8_t  s_link_lost;                    /* W_LINK_LOST edge latch, re-armed on recovery */
-
-static uint8_t  s_ring_size;                    /* last TIME_SYNC ring_size (stored; not yet reported anywhere) */
-static uint16_t s_online_mask;                  /* last TIME_SYNC (SP3: stores + reports in HB only) */
-static uint8_t  s_inhibit_mask;
-static uint32_t s_inhibit_ms;                   /* age-out clock for s_inhibit_mask, spec 2.7 (600 s) */
-static uint8_t  s_time_synced;                  /* sticky: a valid ring TIME_SYNC has been received */
-
 static uint32_t now_ms(void) { return s_core->now_ms(); }
+
+/* TIME_SYNC/ASSIGN_ID, link-state (W_LINK_LOST) and the inhibit-mask
+ * primitive live in zone_ring_sync.c (Task 12 line-cap split); ASSIGN_ID
+ * requests an immediate HB through this, since s_hb_now stays here. */
+void zring_request_immediate_hb(void) { s_hb_now = 1; }
 
 /* zring_next_seq is called from whatever task last called notify_emit() (the
  * ring NOTIFY sink runs inline on the emitting task, not on "zring") as well
@@ -141,35 +134,6 @@ static void handle_cmd(const ring_frame_t *f, uint32_t now) {
     zring_send_ack(f->hdr.src, f->hdr.seq, status, detail, dlen);
 }
 
-static void handle_time_sync(const ring_frame_t *f, uint32_t now) {
-    hg_ts_t t;
-    if (hg_ts_parse(f->payload, f->hdr.len, &t) != 0) return;
-    if (t.flags & 0x01) {                                   /* b0 time_valid */
-        s_time_synced = 1;   /* latch on receipt, regardless of |delta| -- the master has
-                               * already vouched for this time; the step below is only
-                               * about whether OUR clock needs correcting to match it */
-        int64_t delta = (int64_t)t.utc - (int64_t)time(NULL);
-        if (delta < 0) delta = -delta;
-        if (delta > 2) {
-            struct timeval tv = { .tv_sec = (time_t)t.utc, .tv_usec = 0 };
-            settimeofday(&tv, NULL);
-        }
-    }
-    s_ring_size     = t.ring_size;
-    s_online_mask   = t.online_mask;
-    s_inhibit_mask  = t.inhibit_mask;
-    s_inhibit_ms    = now;
-}
-
-static void handle_assign_id(const ring_frame_t *f) {
-    hg_assign_t a;
-    if (hg_assign_parse(f->payload, f->hdr.len, &a) != 0) return;
-    hg_store_set_zid(a.zone_id);
-    s_core->zone_id = a.zone_id;    /* live update: cmd_dispatch shares this exact struct with cmd_task */
-    notify_set_node_id(a.zone_id);
-    s_hb_now = 1;                                           /* confirmed by the next heartbeat */
-}
-
 static void handle_fw_update(const ring_frame_t *f) {
     hg_fwu_t fw;
     memset(&fw, 0, sizeof fw);
@@ -196,27 +160,6 @@ static void handle_fw_update(const ring_frame_t *f) {
     hg_reboot_to_rescue();
 }
 
-/* SYNCED once any valid (time_valid) ring TIME_SYNC has been received this
- * boot (sticky, latched on receipt regardless of whether a step was needed
- * -- see handle_time_sync); else COARSE if the wall clock looks plausibly
- * set by some other local means (console SET TIME -- app_if_common tracks
- * no exposed flag for this, so a post-2020 clock value is the signal); else
- * NONE. */
-static uint8_t time_quality_now(void) {
-    if (s_time_synced) return 2;
-    return time(NULL) > 1577836800 ? 1 : 0;
-}
-
-static void update_link_state(uint32_t now) {
-    uint8_t lost = s_last_master_ms != 0 && (now - s_last_master_ms) >= ZRING_LINK_MS;
-    if (lost && !s_link_lost) {
-        notify_emit(NTF_RING, 0, "W_LINK_LOST master silent %lu s", (unsigned long)((now - s_last_master_ms) / 1000));
-        s_link_lost = 1;
-    } else if (!lost && s_link_lost) {
-        s_link_lost = 0;                                    /* re-armed: next 6000 ms loss fires again */
-    }
-}
-
 static void build_hb(hg_hb_t *h, uint32_t now) {
     memset(h, 0, sizeof *h);                                /* SP2 fields (mode/faults/shelf/...) stay 0 */
     memcpy(h->mac, s_mac, 6);
@@ -236,14 +179,8 @@ static void build_hb(hg_hb_t *h, uint32_t now) {
     hg_model_hw_crc(&h->hw_crc);
     h->cfg_src       = hg_model_cfg_src();
     h->reset_reason  = s_reset_reason;
-    h->time_quality  = time_quality_now();
-
-    uint8_t zid = hg_store_zid();
-    uint8_t link = 0;
-    if (s_last_rx_ms     != 0 && (now - s_last_rx_ms)     < ZRING_LINK_MS) link |= 0x01;  /* upstream_alive */
-    if (s_last_master_ms != 0 && (now - s_last_master_ms) < ZRING_LINK_MS) link |= 0x02;  /* master_alive */
-    if (zid >= 1 && zid <= HG_MAX_ZONES && (s_online_mask & (1u << zid))) link |= 0x04;   /* heard_by_master */
-    h->link_flags = link;
+    h->time_quality  = zsync_time_quality();
+    h->link_flags    = zsync_link_flags(now, hg_store_zid());
 
     ring_counters_t cnt;
     ring_link_counters(&cnt);
@@ -274,8 +211,8 @@ static void ring_notify_sink(void *ctx, const char *line) {
 static void dispatch_frame(const ring_frame_t *f, uint32_t now) {
     switch (f->hdr.type) {
         case RING_T_CMD:        handle_cmd(f, now); break;
-        case RING_T_TIME_SYNC:  handle_time_sync(f, now); break;
-        case RING_T_ASSIGN_ID:  handle_assign_id(f); break;
+        case RING_T_TIME_SYNC:  zsync_time_sync(f, now); break;
+        case RING_T_ASSIGN_ID:  zsync_assign_id(f); break;
         case RING_T_CFG_CHUNK:  zone_ring_cfg_chunk(f, now); break;
         case RING_T_CFG_COMMIT: zone_ring_cfg_commit(f, now); break;
         case RING_T_CFG_GET:    zone_ring_cfg_get(f, now); break;
@@ -297,25 +234,20 @@ static void zone_ring_task(void *arg) {
         ring_frame_t f;
         if (ring_link_recv(&f, 100) == 0) {
             uint32_t now = now_ms();
-            s_last_rx_ms = now;
-            if (f.hdr.src == RING_ID_MASTER) { ota_trial_master_frame(); s_last_master_ms = now; }
+            zsync_note_rx(now);
+            if (f.hdr.src == RING_ID_MASTER) { ota_trial_master_frame(); zsync_note_master(now); }
             dispatch_frame(&f, now);
         }
         ota_trial_tick();
         uint32_t now = now_ms();
-        update_link_state(now);
+        zsync_link_tick(now);
         if (s_hb_now || (now - s_last_hb_ms) >= 2000) send_hb(now);
     }
 }
 
-uint8_t zone_ring_inhibit_mask(void) {
-    uint32_t now = now_ms();
-    if (s_inhibit_ms == 0 || (now - s_inhibit_ms) > 600000u) return 0;   /* never set, or stale */
-    return s_inhibit_mask;
-}
-
 void zone_ring_start(cmd_core_t *core) {
     s_core = core;
+    zone_ring_sync_init(core);
     ota_trial_drivers_ok();     /* ring_link_start() already returned by the time app_main calls us */
     /* Registered here (synchronously), not inside zone_ring_task: app_main's
      * once-per-boot NTF_BOOT emit follows this call immediately and must not

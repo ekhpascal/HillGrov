@@ -70,11 +70,15 @@ void zone_ring_cfg_commit(const ring_frame_t *f, uint32_t now) {
         hg_blob_rc_t rc = hg_blob_unwrap(HG_MAGIC_CFG, HG_CFG_VER, HG_CFG_VER_MIN,
                                           s_casm.buf, s_casm.total, &cfg, sizeof cfg, &env_gen);
         if (rc != HG_BLOB_OK && rc != HG_BLOB_MIGRATED) { commit_fail_unwrap(f, rc); return; }
-        /* Identity contract (controller ruling): the zone applies the payload
-         * verbatim, so the envelope's transfer-tracking generation and the
-         * payload's own embedded cfg.generation must agree -- a mismatch
-         * means a stale/racing transfer, not a real config. */
-        if (env_gen != cfg.generation) {
+        /* Full gen chain must agree before apply (identity contract, verbatim
+         * apply): COMMIT.gen == assembler gen (already tied above, since the
+         * completeness check above required s_casm.gen == gen), envelope gen
+         * == COMMIT/assembler gen, and envelope gen == the payload's own
+         * embedded cfg.generation. Without the middle tie, a push whose
+         * chunk/COMMIT headers carry one gen over a blob whose envelope+
+         * embedded fields agree on a *different* gen would pass every other
+         * check and silently re-open the spec 4.4 re-push loop. */
+        if (gen != env_gen || env_gen != cfg.generation) {
             commit_fail(f, "ERR INVALID_FIELD generation", (uint8_t)(sizeof("ERR INVALID_FIELD generation") - 1));
             return;
         }

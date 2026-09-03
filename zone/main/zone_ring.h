@@ -13,5 +13,7 @@ void zone_ring_start(cmd_core_t *core);
 /* SP2 pump-gate primitive: bit set = that channel is inhibited fleet-wide,
  * per the master's last TIME_SYNC inhibit_mask (b0 PUMPS b1 LIGHTS b2 ALL);
  * returns 0 once 600 s have passed without a fresh TIME_SYNC (spec 2.7 age-
- * out) or before any TIME_SYNC has ever been received. */
+ * out), before any TIME_SYNC has ever been received, or if called before
+ * zone_ring_start() has run at all (safe at any boot ordering relative to
+ * whatever SP2 task ends up calling this). */
 uint8_t zone_ring_inhibit_mask(void);
