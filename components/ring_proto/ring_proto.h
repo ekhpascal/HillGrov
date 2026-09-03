@@ -168,3 +168,31 @@ int  ring_casm_feed(ring_casm_t *a, const uint8_t *payload, size_t n, uint32_t n
         total>768, count>7).  gen/kind mismatch vs an active transfer RESTARTS with the new
         transfer (spec §2.9).  Duplicate idx overwrites idempotently. */
 int  ring_casm_idle_expired(const ring_casm_t *a, uint32_t now_ms);   /* active && now-last>2000 */
+
+/* Node health ladder + ring break analysis (ring_health.c) */
+
+typedef enum { NODE_H_EMPTY = 0, NODE_H_ONLINE, NODE_H_DEGRADED, NODE_H_OFFLINE, NODE_H_UPDATING } node_health_t;
+typedef struct {
+    uint8_t  used, id;                  /* id 1..8 */
+    uint8_t  mac[6]; char name[16]; uint8_t unconfigured;
+    node_health_t health; uint8_t fault_flag;            /* fault_flag = HB carried faults != 0 */
+    uint32_t last_hb_ms, updating_until_ms;
+    uint8_t  hops, link_flags, cmd_timeouts;
+    hg_hb_t  hb;                        /* last full heartbeat */
+} hg_node_t;
+
+typedef enum { RING_ST_IDLE = 0, RING_ST_OK, RING_ST_OPEN } ring_state_t;
+typedef struct { ring_state_t state; uint8_t size; uint16_t online_mask; char blame[48]; } ring_status_t;
+
+/* Pure evaluator: inputs are the table + clocks; outputs = new health values + events.  */
+typedef void (*ring_health_ev_cb)(void *ctx, const char *notify_line);   /* "RING OPEN Z2 dead or wire Z2->Z3" etc. */
+void ring_health_eval(hg_node_t *tab, int n_slots, uint32_t now_ms,
+                      uint32_t ts_last_returned_ms, ring_status_t *st,
+                      ring_health_ev_cb cb, void *ctx);
+/* Rules (spec §2.7): per node ONLINE -> DEGRADED after 5000 ms without HB (or cmd_timeouts>=3)
+   -> OFFLINE after 10000 ms (event once); UPDATING until updating_until_ms (no HB alarms).
+   Ring: no used nodes -> IDLE (no open alarm).  Used nodes and master's own TIME_SYNC not
+   returned for 5000 ms -> OPEN + blame; blame = first gap in the hop sequence: the node with
+   the smallest hops whose upstream_alive bit is clear, else the lowest-id silent node:
+   "Z<k> dead or wire Z<k-1|M>->Z<k>".  Events fire on TRANSITIONS only. */
+uint16_t ring_online_mask(const hg_node_t *tab, int n_slots, uint32_t now_ms);  /* HB within 5000 ms */

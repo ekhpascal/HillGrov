@@ -1,0 +1,141 @@
+#include <stdio.h>
+#include "ring_proto.h"
+
+#define LINK_UPSTREAM_ALIVE 0x01   /* hg_hb_t.link_flags b0, copied into hg_node_t.link_flags */
+
+static const char *health_name(node_health_t h) {
+    switch (h) {
+        case NODE_H_ONLINE:   return "ONLINE";
+        case NODE_H_DEGRADED: return "DEGRADED";
+        case NODE_H_OFFLINE:  return "OFFLINE";
+        case NODE_H_UPDATING: return "UPDATING";
+        default:              return "EMPTY";
+    }
+}
+
+/* Greatest used id strictly below k, or 0 (master) if none. */
+static uint8_t prev_used_id(const hg_node_t *tab, int n_slots, uint8_t k) {
+    uint8_t best = 0;
+    for (int i = 0; i < n_slots; i++) {
+        if (tab[i].used && tab[i].id < k && tab[i].id > best) best = tab[i].id;
+    }
+    return best;
+}
+
+static uint8_t highest_used_id(const hg_node_t *tab, int n_slots) {
+    uint8_t best = 0;
+    for (int i = 0; i < n_slots; i++) {
+        if (tab[i].used && tab[i].id > best) best = tab[i].id;
+    }
+    return best;
+}
+
+static void format_wire_blame(uint8_t k, uint8_t prev, char *out, size_t outsz) {
+    if (prev == 0) snprintf(out, outsz, "Z%u dead or wire M->Z%u", (unsigned)k, (unsigned)k);
+    else           snprintf(out, outsz, "Z%u dead or wire Z%u->Z%u", (unsigned)k, (unsigned)prev, (unsigned)k);
+}
+
+/* Priority order (spec §2.7): (1) smallest-hops FRESH node whose upstream_alive bit is clear;
+   (2) else lowest-id SILENT (stale HB) used node; (3) else every zone is alive and reporting
+   its upstream alive -> the break is the master's own RX leg, blamed on the last hop. */
+static void ring_blame(const hg_node_t *tab, int n_slots, uint32_t now_ms, char *out, size_t outsz) {
+    const hg_node_t *cand_a = NULL;
+    for (int i = 0; i < n_slots; i++) {
+        const hg_node_t *nd = &tab[i];
+        if (!nd->used) continue;
+        if (now_ms - nd->last_hb_ms >= 5000) continue;             /* stale: link_flags not trustworthy */
+        if (nd->link_flags & LINK_UPSTREAM_ALIVE) continue;
+        if (!cand_a || nd->hops < cand_a->hops) cand_a = nd;
+    }
+    if (cand_a) {
+        format_wire_blame(cand_a->id, prev_used_id(tab, n_slots, cand_a->id), out, outsz);
+        return;
+    }
+
+    const hg_node_t *cand_b = NULL;
+    for (int i = 0; i < n_slots; i++) {
+        const hg_node_t *nd = &tab[i];
+        if (!nd->used) continue;
+        if (now_ms - nd->last_hb_ms < 5000) continue;
+        if (!cand_b || nd->id < cand_b->id) cand_b = nd;
+    }
+    if (cand_b) {
+        format_wire_blame(cand_b->id, prev_used_id(tab, n_slots, cand_b->id), out, outsz);
+        return;
+    }
+
+    uint8_t last = highest_used_id(tab, n_slots);
+    snprintf(out, outsz, "Z%u dead or wire Z%u->M", (unsigned)last, (unsigned)last);
+}
+
+uint16_t ring_online_mask(const hg_node_t *tab, int n_slots, uint32_t now_ms) {
+    uint16_t mask = 0;
+    for (int i = 0; i < n_slots; i++) {
+        const hg_node_t *nd = &tab[i];
+        if (nd->used && (now_ms - nd->last_hb_ms) < 5000) mask |= (uint16_t)(1u << nd->id);
+    }
+    return mask;
+}
+
+void ring_health_eval(hg_node_t *tab, int n_slots, uint32_t now_ms,
+                      uint32_t ts_last_returned_ms, ring_status_t *st,
+                      ring_health_ev_cb cb, void *ctx) {
+    if (!tab || !st) return;
+
+    uint8_t used_count = 0;
+    for (int i = 0; i < n_slots; i++) {
+        hg_node_t *nd = &tab[i];
+        if (!nd->used) continue;
+        used_count++;
+
+        node_health_t prev = nd->health;
+        node_health_t nh;
+
+        if (now_ms < nd->updating_until_ms) {
+            nh = NODE_H_UPDATING;                                  /* frozen: no HB alarms while updating */
+        } else {
+            uint32_t since_hb = now_ms - nd->last_hb_ms;
+            if (since_hb >= 10000)                                  nh = NODE_H_OFFLINE;
+            else if (since_hb >= 5000 || nd->cmd_timeouts >= 3)      nh = NODE_H_DEGRADED;
+            else                                                    nh = NODE_H_ONLINE;
+        }
+
+        if (nh != prev) {
+            nd->health = nh;
+            /* first-ever observation (prev == EMPTY) is not a notify-worthy transition */
+            if (cb && prev != NODE_H_EMPTY) {
+                char line[32];
+                snprintf(line, sizeof line, "NODE %u %s", (unsigned)nd->id, health_name(nh));
+                cb(ctx, line);
+            }
+        }
+    }
+
+    st->size = used_count;
+    st->online_mask = ring_online_mask(tab, n_slots, now_ms);
+
+    if (used_count == 0) {
+        st->state = RING_ST_IDLE;
+        st->blame[0] = '\0';
+        return;
+    }
+
+    uint32_t since_ret = now_ms - ts_last_returned_ms;
+    if (since_ret >= 5000) {
+        if (st->state != RING_ST_OPEN) {
+            ring_blame(tab, n_slots, now_ms, st->blame, sizeof st->blame);
+            if (cb) {
+                char line[10 + sizeof st->blame];
+                snprintf(line, sizeof line, "RING OPEN %s", st->blame);
+                cb(ctx, line);
+            }
+        }
+        st->state = RING_ST_OPEN;
+    } else {
+        if (st->state == RING_ST_OPEN) {
+            if (cb) cb(ctx, "RING CLOSED");
+            st->blame[0] = '\0';
+        }
+        st->state = RING_ST_OK;
+    }
+}

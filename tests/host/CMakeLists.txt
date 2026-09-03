@@ -43,3 +43,4 @@ hg_test(test_ring_route ${COMP}/ring_proto/ring_route.c ${COMP}/ring_proto/ring_
 hg_test(test_ring_trk ${COMP}/ring_proto/ring_trk.c ${COMP}/ring_proto/ring_frame.c ${COMP}/ring_proto/ring_crc.c ${COMP}/ring_proto/ring_cobs.c)
 hg_test(test_ring_tlm ${COMP}/ring_proto/ring_tlm_hb.c ${COMP}/ring_proto/ring_tlm.c)
 hg_test(test_ring_cfgx ${COMP}/ring_proto/ring_cfgx.c)
+hg_test(test_ring_health ${COMP}/ring_proto/ring_health.c ${COMP}/ring_proto/ring_tlm_hb.c ${COMP}/ring_proto/ring_tlm.c)
