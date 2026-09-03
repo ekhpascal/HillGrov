@@ -54,3 +54,42 @@ int  ring_dup_check(ring_dup_t *c, uint16_t seq, uint32_t now_ms);
         / REPLAY (same seq, DONE, within window) */
 void ring_dup_start(ring_dup_t *c, uint16_t seq, uint32_t now_ms);   /* BEFORE dispatch (spec §2.6) */
 void ring_dup_done(ring_dup_t *c, uint16_t seq, uint8_t status, const char *detail);
+
+#define RING_TRK_DEPTH 8
+uint32_t ring_ack_timeout_ms(uint8_t ring_size);   /* clamp(200 + 40*ring_size, 400, 900) */
+
+typedef enum { RING_TRK_EV_NONE = 0, RING_TRK_EV_SEND, RING_TRK_EV_DONE, RING_TRK_EV_FAIL } ring_trk_ev_kind_t;
+typedef struct {
+    ring_trk_ev_kind_t kind;
+    uint16_t seq; uint8_t dst, type;
+    const uint8_t *wire; uint16_t wire_len;      /* EV_SEND: frame to transmit (valid until next call) */
+    uint8_t  status;  char detail[126];          /* EV_DONE: ACK status + verbatim reply line */
+    const char *fail_token;                      /* EV_FAIL: "ZONE_TIMEOUT" | "ZONE_UNKNOWN" */
+} ring_trk_ev_t;
+
+typedef struct {
+    uint16_t seq;
+    uint8_t  dst, type;
+    uint8_t  wire[RING_WIRE_MAX];   /* encoded once at submit(); retries replay the same bytes */
+    uint16_t wire_len;
+    uint8_t  attempts;              /* 0 = queued, not yet sent; 1..3 once in flight (send count) */
+    uint32_t last_send_ms;          /* timestamp of the most recent send, for timeout math */
+} ring_trk_slot_t;
+
+typedef struct ring_trk {
+    ring_trk_slot_t q[RING_TRK_DEPTH];   /* queue order; q[0] is head-of-line */
+    uint8_t n;                           /* entries in use, q[0..n-1] */
+} ring_trk_t;                            /* q[0] is in flight once its attempts > 0 -- at most
+                                             one in-flight entry ring-wide (stop-and-wait) */
+
+void ring_trk_init(ring_trk_t *t);
+int  ring_trk_submit(ring_trk_t *t, const ring_hdr_t *h, const uint8_t *payload, uint32_t now_ms);
+     /* encodes ONCE (byte-identical retries); CMD/FW_UPDATE insert ahead of CFG_COMMIT/CFG_GET
+        already queued but not in flight; returns -1 when full (caller answers BUSY) */
+int  ring_trk_tick(ring_trk_t *t, uint32_t now_ms, uint8_t ring_size, ring_trk_ev_t *ev);
+     /* returns 1 with ev when there is something to do: first send, timeout resend (attempt 2..3),
+        or FAIL after 3rd timeout; else 0. One outstanding in-flight frame ring-wide. */
+int  ring_trk_ack(ring_trk_t *t, uint16_t acked_seq, uint8_t status, const char *detail,
+                  uint8_t detail_len, ring_trk_ev_t *ev);   /* 1 = EV_DONE for the in-flight frame; late/unknown ACK -> 0 */
+int  ring_trk_unclaimed(ring_trk_t *t, const ring_hdr_t *returned, ring_trk_ev_t *ev);
+     /* master saw its own ACK_REQ unicast come back: immediate EV_FAIL ZONE_UNKNOWN */
