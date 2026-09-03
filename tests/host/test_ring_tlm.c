@@ -103,6 +103,11 @@ static void test_hb_pack_field_offsets(void) {
     h.rx_drop = 0x1122;
     h.fwd_count = 0x3344;
     h.min_free_heap_kb = 0x5566;
+    /* shelf_faults at [42..49] */
+    h.shelf_faults[0] = 0x2211;
+    h.shelf_faults[1] = 0x4433;
+    h.shelf_faults[2] = 0x6655;
+    h.shelf_faults[3] = 0x8877;
 
     uint8_t out[140];
     int result = hg_hb_pack(&h, out, sizeof out);
@@ -166,8 +171,15 @@ static void test_hb_pack_field_offsets(void) {
     TEST_ASSERT_EQUAL_HEX8(0x02, out[40]);
     TEST_ASSERT_EQUAL_HEX8(0x01, out[41]);
 
-    /* shelf_faults[0..3] at [42..49] LE (each u16) */
-    TEST_ASSERT_EQUAL_HEX8(0x00, out[42]); /* all zeros so far */
+    /* shelf_faults[0..3] at [42..49] LE (each u16) with distinct non-zero values */
+    TEST_ASSERT_EQUAL_HEX8(0x11, out[42]);  /* shelf_faults[0] LE */
+    TEST_ASSERT_EQUAL_HEX8(0x22, out[43]);
+    TEST_ASSERT_EQUAL_HEX8(0x33, out[44]);  /* shelf_faults[1] LE */
+    TEST_ASSERT_EQUAL_HEX8(0x44, out[45]);
+    TEST_ASSERT_EQUAL_HEX8(0x55, out[46]);  /* shelf_faults[2] LE */
+    TEST_ASSERT_EQUAL_HEX8(0x66, out[47]);
+    TEST_ASSERT_EQUAL_HEX8(0x77, out[48]);  /* shelf_faults[3] LE */
+    TEST_ASSERT_EQUAL_HEX8(0x88, out[49]);
 
     /* link_flags at [50], override_mask at [51] */
     TEST_ASSERT_EQUAL_HEX8(0xAA, out[50]);
@@ -192,6 +204,44 @@ static void test_hb_pack_field_offsets(void) {
     /* min_free_heap_kb at [60..61] LE: 0x5566 */
     TEST_ASSERT_EQUAL_HEX8(0x66, out[60]);
     TEST_ASSERT_EQUAL_HEX8(0x55, out[61]);
+}
+
+static void test_hb_pack_shelf_block_offsets(void) {
+    hg_hb_t h;
+    memset(&h, 0, sizeof h);
+    h.n_shelves = 1;
+    /* Set shelf[0] with distinct values for offset verification */
+    h.shelf[0].raw_a = 0x0102;
+    h.shelf[0].raw_b = 0x0304;
+    h.shelf[0].pct_a = 0x05;
+    h.shelf[0].pct_b = 0x06;
+    h.shelf[0].white = 0x07;
+    h.shelf[0].red = 0x08;
+    h.shelf[0].out_flags = 0x09;
+    h.shelf[0].light_state = 0x0A;
+    h.shelf[0].water_state = 0x0B;
+    h.shelf[0].rsvd = 0x0C;
+    h.shelf[0].pump_today_s = 0x0D0E;
+
+    uint8_t out[140];
+    int result = hg_hb_pack(&h, out, sizeof out);
+    TEST_ASSERT_EQUAL_INT(76, result);  /* 62 + 14 */
+
+    /* Verify shelf[0] at offset 62 with every byte checked */
+    TEST_ASSERT_EQUAL_HEX8(0x02, out[62]);  /* raw_a LE */
+    TEST_ASSERT_EQUAL_HEX8(0x01, out[63]);
+    TEST_ASSERT_EQUAL_HEX8(0x04, out[64]);  /* raw_b LE */
+    TEST_ASSERT_EQUAL_HEX8(0x03, out[65]);
+    TEST_ASSERT_EQUAL_HEX8(0x05, out[66]);  /* pct_a */
+    TEST_ASSERT_EQUAL_HEX8(0x06, out[67]);  /* pct_b */
+    TEST_ASSERT_EQUAL_HEX8(0x07, out[68]);  /* white */
+    TEST_ASSERT_EQUAL_HEX8(0x08, out[69]);  /* red */
+    TEST_ASSERT_EQUAL_HEX8(0x09, out[70]);  /* out_flags */
+    TEST_ASSERT_EQUAL_HEX8(0x0A, out[71]);  /* light_state */
+    TEST_ASSERT_EQUAL_HEX8(0x0B, out[72]);  /* water_state */
+    TEST_ASSERT_EQUAL_HEX8(0x0C, out[73]);  /* rsvd */
+    TEST_ASSERT_EQUAL_HEX8(0x0E, out[74]);  /* pump_today_s LE */
+    TEST_ASSERT_EQUAL_HEX8(0x0D, out[75]);
 }
 
 static void test_hb_parse_n0_succeeds(void) {
@@ -378,6 +428,13 @@ static void test_ts_parse_reject_short(void) {
     TEST_ASSERT_EQUAL_INT(-1, result);
 }
 
+static void test_ts_parse_reject_long(void) {
+    uint8_t buf[14];
+    hg_ts_t out;
+    int result = hg_ts_parse(buf, sizeof buf, &out);
+    TEST_ASSERT_EQUAL_INT(-1, result);  /* Reject if not exact 13 */
+}
+
 static void test_ts_roundtrip(void) {
     hg_ts_t orig;
     memset(&orig, 0, sizeof orig);
@@ -439,6 +496,13 @@ static void test_assign_parse_reject_short(void) {
     TEST_ASSERT_EQUAL_INT(-1, result);
 }
 
+static void test_assign_parse_reject_long(void) {
+    uint8_t buf[8];
+    hg_assign_t out;
+    int result = hg_assign_parse(buf, sizeof buf, &out);
+    TEST_ASSERT_EQUAL_INT(-1, result);  /* Reject if not exact 7 */
+}
+
 static void test_assign_roundtrip(void) {
     hg_assign_t orig;
     memcpy(orig.mac, "\xAA\xBB\xCC\xDD\xEE\xFF", 6);
@@ -478,16 +542,18 @@ static void test_fwu_pack_basic(void) {
     TEST_ASSERT_EQUAL_HEX8(8, out[2]);
     /* ssid at [3..] */
     TEST_ASSERT_EQUAL_MEMORY("TestSSID", out + 3, 8);
+    /* pass_len at [3+8] */
+    TEST_ASSERT_EQUAL_HEX8(11, out[3 + 8]);
+    /* pass at [3+8+1..] */
+    TEST_ASSERT_EQUAL_MEMORY("TestPass123", out + 3 + 8 + 1, 11);
 }
 
 static void test_fwu_pack_rejects_ssid_33_or_more(void) {
     hg_fwu_t f;
     memset(&f, 0, sizeof f);
     f.reboot_delay_ms = 0x0000;
-    /* Fill SSID with 32 chars (valid), then append one to make 33 */
-    memset(f.ssid, 'S', 32);
-    f.ssid[32] = 'x';  /* Make it 33 chars */
-    f.ssid[33] = '\0';
+    /* Fill SSID with non-NUL bytes throughout entire field */
+    memset(f.ssid, 'S', sizeof f.ssid);
     strcpy(f.pass, "short");
 
     uint8_t out[99];
@@ -508,18 +574,33 @@ static void test_fwu_pack_rejects_pass_65_or_more(void) {
     int result = hg_fwu_pack(&f, out, sizeof out);
     TEST_ASSERT_EQUAL_INT(2 + 1 + 4 + 1 + 64, result);  /* Should succeed at 64 */
 
-    /* Now test exactly 65 - need to use a separate buffer to avoid overflow */
+    /* Now test with 65 non-NUL bytes */
     hg_fwu_t f2;
     memset(&f2, 0, sizeof f2);
     f2.reboot_delay_ms = 0x0000;
     strcpy(f2.ssid, "test");
-    /* Set pass[0..63] to valid chars, then simulate strlen returning 65 */
-    for (int i = 0; i < 64; i++) f2.pass[i] = 'x';
-    f2.pass[64] = 'y';  /* This makes strlen return 65 */
-    f2.pass[65] = '\0';
+    /* Fill pass entirely with non-NUL bytes */
+    memset(f2.pass, 'x', sizeof f2.pass);
 
     result = hg_fwu_pack(&f2, out, sizeof out);
     TEST_ASSERT_EQUAL_INT(-1, result);  /* Should reject at 65+ */
+}
+
+static void test_fwu_pack_sum_cap_rejects_100(void) {
+    hg_fwu_t f;
+    memset(&f, 0, sizeof f);
+    f.reboot_delay_ms = 0x0000;
+    /* SSID 32 chars (valid individually) */
+    memset(f.ssid, 'A', 32);
+    f.ssid[32] = '\0';
+    /* Pass 64 chars (valid individually) */
+    memset(f.pass, 'B', 64);
+    f.pass[64] = '\0';
+    /* Total: 2 + 1 + 32 + 1 + 64 = 100 > 99 -> reject */
+
+    uint8_t out[99];
+    int result = hg_fwu_pack(&f, out, sizeof out);
+    TEST_ASSERT_EQUAL_INT(-1, result);
 }
 
 static void test_fwu_parse_succeeds(void) {
@@ -636,6 +717,18 @@ static void test_ack_parse_nul_terminates_detail(void) {
     TEST_ASSERT_EQUAL_HEX8(0x00, out.detail[5]);
 }
 
+static void test_ack_parse_reject_oversized(void) {
+    uint8_t buf[129];  /* Total length 129: 3 hdr + 126 detail = too much */
+    memset(buf, 0, sizeof buf);
+    buf[0] = 0x00;
+    buf[1] = 0x00;
+    buf[2] = 0x00;
+
+    hg_ack_t out;
+    int result = hg_ack_parse(buf, sizeof buf, &out);
+    TEST_ASSERT_EQUAL_INT(-1, result);  /* Reject if total > 128 */
+}
+
 static void test_ack_roundtrip(void) {
     hg_ack_t orig;
     memset(&orig, 0, sizeof orig);
@@ -664,6 +757,7 @@ int main(void) {
     RUN_TEST(test_hb_pack_n0_returns_62);
     RUN_TEST(test_hb_pack_n4_returns_118);
     RUN_TEST(test_hb_pack_field_offsets);
+    RUN_TEST(test_hb_pack_shelf_block_offsets);
     RUN_TEST(test_hb_parse_n0_succeeds);
     RUN_TEST(test_hb_parse_n_gt_4_rejected);
     RUN_TEST(test_hb_parse_len_mismatch_61_rejected);
@@ -673,14 +767,17 @@ int main(void) {
     RUN_TEST(test_ts_pack_fixed_13);
     RUN_TEST(test_ts_parse_succeeds);
     RUN_TEST(test_ts_parse_reject_short);
+    RUN_TEST(test_ts_parse_reject_long);
     RUN_TEST(test_ts_roundtrip);
     RUN_TEST(test_assign_pack_fixed_7);
     RUN_TEST(test_assign_parse_succeeds);
     RUN_TEST(test_assign_parse_reject_short);
+    RUN_TEST(test_assign_parse_reject_long);
     RUN_TEST(test_assign_roundtrip);
     RUN_TEST(test_fwu_pack_basic);
     RUN_TEST(test_fwu_pack_rejects_ssid_33_or_more);
     RUN_TEST(test_fwu_pack_rejects_pass_65_or_more);
+    RUN_TEST(test_fwu_pack_sum_cap_rejects_100);
     RUN_TEST(test_fwu_parse_succeeds);
     RUN_TEST(test_fwu_parse_nul_terminates);
     RUN_TEST(test_fwu_roundtrip);
@@ -688,6 +785,7 @@ int main(void) {
     RUN_TEST(test_ack_pack_max_detail_125);
     RUN_TEST(test_ack_parse_succeeds);
     RUN_TEST(test_ack_parse_nul_terminates_detail);
+    RUN_TEST(test_ack_parse_reject_oversized);
     RUN_TEST(test_ack_roundtrip);
     return UNITY_END();
 }
