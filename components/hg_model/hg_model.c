@@ -1,6 +1,7 @@
 #include <string.h>
 #include "hg_model.h"
 #include "hg_cfg.h"
+#include "hg_blob.h"
 
 #ifndef HOST_TEST
 #include "freertos/FreeRTOS.h"
@@ -114,4 +115,53 @@ uint8_t hg_model_dirty_mask(void) {
 
 int hg_model_restart_pending(void) {
     return s_restart_pending;
+}
+
+/* ---- SP3 ring glue (Task 12) ---- */
+
+void hg_model_apply_cfg(const hg_zone_cfg_t *cfg) {
+    LOCK_WAIT();
+    s_cfg = *cfg;
+    s_cfg.source = HG_SRC_MASTER;
+    s_dirty |= HG_CH_CFG;
+    s_seq++;
+    UNLOCK();
+}
+
+void hg_model_apply_hw(const hg_zone_hw_t *hw) {
+    LOCK_WAIT();
+    s_hw = *hw;
+    s_hw_gen++;
+    s_dirty |= HG_CH_HW;
+    s_restart_pending = 1;   /* a pushed wiring/pin change needs a reboot, same as a local HG_CH_HW edit */
+    s_seq++;
+    UNLOCK();
+}
+
+/* Reuses hg_store's envelope-wrap format (magic+ver+len+gen header, then
+ * payload, then the blob's own CRC-32) purely to derive a fingerprint for
+ * the heartbeat -- no NVS write, cap sized exactly for one plane. */
+void hg_model_cfg_info(uint32_t *gen, uint32_t *crc) {
+    LOCK_WAIT();
+    uint32_t g = s_cfg.generation;
+    uint8_t wire[HG_BLOB_HDR_LEN + sizeof(hg_zone_cfg_t)];
+    size_t n = hg_blob_wrap(HG_MAGIC_CFG, HG_CFG_VER, g, &s_cfg, (uint16_t)sizeof s_cfg, wire, sizeof wire);
+    UNLOCK();
+    if (gen) *gen = g;
+    if (crc) *crc = n ? hg_crc32(0, wire, n) : 0;
+}
+
+void hg_model_hw_crc(uint32_t *crc) {
+    LOCK_WAIT();
+    uint8_t wire[HG_BLOB_HDR_LEN + sizeof(hg_zone_hw_t)];
+    size_t n = hg_blob_wrap(HG_MAGIC_HW, HG_HW_VER, s_hw_gen, &s_hw, (uint16_t)sizeof s_hw, wire, sizeof wire);
+    UNLOCK();
+    if (crc) *crc = n ? hg_crc32(0, wire, n) : 0;
+}
+
+uint8_t hg_model_cfg_src(void) {
+    LOCK_WAIT();
+    uint8_t r = (s_cfg.generation == 0) ? 0 : (uint8_t)(s_cfg.source + 1);
+    UNLOCK();
+    return r;
 }

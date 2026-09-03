@@ -12,6 +12,9 @@
 #include "cli.h"
 #include "esp_timer.h"
 #include "ota_trial.h"
+#include "app_if_common.h"
+#include "ring_link.h"
+#include "zone_ring.h"
 
 static const char *TAG = "hg_main";
 extern const app_if_t APP_IF_ZONE;
@@ -41,7 +44,12 @@ void app_main(void) {
     cli_init();
     cli_start();
 
-    ota_trial_start(0);
+    ota_trial_start(0);   /* Task 10 ordering: before ring start -- zone_ring_start() below fires
+                            * ota_trial_drivers_ok() right after, so the probe is still set once */
+    uint8_t mac[6];
+    hg_app_get_mac(mac);
+    ring_link_start(0, hg_store_zid, mac);
+    zone_ring_start(&core);
     notify_emit(NTF_BOOT, 0, "%s POWERON", esp_app_get_description()->version);
     vTaskDelete(NULL);
 }

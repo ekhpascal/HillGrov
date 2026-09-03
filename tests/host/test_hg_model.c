@@ -81,6 +81,51 @@ static void test_take_dirty_hw(void) {
     TEST_ASSERT_EQUAL_UINT8(HG_CH_CFG, hg_model_dirty_mask()); /* CFG bit from interleaved edit untouched */
 }
 
+static void test_cfg_src_transitions(void) {
+    /* defaults: fresh init, generation still 0 -> DEFAULTS */
+    TEST_ASSERT_EQUAL_UINT8(0, hg_model_cfg_src());
+
+    /* local edit bumps generation via hg_model_edit -> LOCAL */
+    uint8_t v = 60;
+    TEST_ASSERT_EQUAL_INT(0, hg_model_edit(ed_set_target, &v, err, sizeof err));
+    TEST_ASSERT_EQUAL_UINT8(1, hg_model_cfg_src());
+
+    /* ring/master push (full-plane replace, gen adopted as-is) -> MASTER */
+    hg_zone_cfg_t pushed;
+    hg_defaults_cfg(&pushed);
+    pushed.generation = 42;
+    pushed.shelf[0].water.target_pct = 77;
+    hg_model_apply_cfg(&pushed);
+    TEST_ASSERT_EQUAL_UINT8(2, hg_model_cfg_src());
+
+    hg_zone_cfg_t out;
+    hg_model_snapshot_cfg(&out, NULL);
+    TEST_ASSERT_EQUAL_UINT32(42, out.generation);              /* adopted as-is, not gen_next()'d */
+    TEST_ASSERT_EQUAL_UINT8(77, out.shelf[0].water.target_pct);
+    TEST_ASSERT_EQUAL_UINT8(HG_CH_CFG, hg_model_dirty_mask());  /* marked dirty for hg_store */
+}
+
+static void test_cfg_info_and_hw_crc(void) {
+    uint32_t gen1 = 99, crc1 = 0, crc2 = 0;
+    hg_model_cfg_info(&gen1, &crc1);
+    TEST_ASSERT_EQUAL_UINT32(0, gen1);           /* fresh init: generation 0 */
+    TEST_ASSERT_NOT_EQUAL(0, crc1);              /* CRC of the wrapped defaults plane is non-zero */
+
+    uint8_t v = 60;
+    hg_model_edit(ed_set_target, &v, err, sizeof err);
+    uint32_t gen2;
+    hg_model_cfg_info(&gen2, &crc2);
+    TEST_ASSERT_EQUAL_UINT32(1, gen2);
+    TEST_ASSERT_NOT_EQUAL(crc1, crc2);           /* content changed -> different fingerprint */
+
+    uint32_t hwcrc1 = 0, hwcrc2 = 0;
+    hg_model_hw_crc(&hwcrc1);
+    uint8_t pin = 9;
+    hg_model_edit(ed_pump_pin, &pin, err, sizeof err);
+    hg_model_hw_crc(&hwcrc2);
+    TEST_ASSERT_NOT_EQUAL(hwcrc1, hwcrc2);
+}
+
 static void test_boot_load(void) {
     hg_zone_cfg_t c; hg_zone_hw_t h;
     hg_defaults_cfg(&c); hg_defaults_hw(&h);
@@ -98,5 +143,7 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_hw_edit_restart_pending_cal_not);
     RUN_TEST(test_take_dirty);
     RUN_TEST(test_take_dirty_hw);
+    RUN_TEST(test_cfg_src_transitions);
+    RUN_TEST(test_cfg_info_and_hw_crc);
     RUN_TEST(test_boot_load);
     return UNITY_END(); }
