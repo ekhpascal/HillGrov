@@ -340,6 +340,81 @@ static void test_unpack_short_buffer_rejects(void) {
     TEST_ASSERT_EQUAL_INT(-1, unpack_ret);
 }
 
+static void test_set_name_nul_padding(void) {
+    ztab_t t;
+    memset(&t, 0, sizeof(t));
+
+    uint8_t mac1[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x01};
+    int id = ztab_assign(&t, mac1);
+
+    const char *name = "abc";  /* 3 chars */
+    int ret = ztab_set_name(&t, id, name);
+    TEST_ASSERT_EQUAL_INT(0, ret);
+
+    /* Verify first 3 bytes are "abc" */
+    TEST_ASSERT_EQUAL_UINT8('a', t.e[0].name[0]);
+    TEST_ASSERT_EQUAL_UINT8('b', t.e[0].name[1]);
+    TEST_ASSERT_EQUAL_UINT8('c', t.e[0].name[2]);
+
+    /* Verify bytes 3..15 are NUL */
+    uint8_t expected_padding[13];
+    memset(expected_padding, 0, 13);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(expected_padding, (uint8_t *)&t.e[0].name[3], 13);
+}
+
+static void test_enrol_stale_vs_conflict_precedence(void) {
+    ztab_t t;
+    memset(&t, 0, sizeof(t));
+
+    uint8_t mac_a[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x01};
+    uint8_t mac_b[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x02};
+
+    /* Assign MAC A to id 1 */
+    int id_a = ztab_assign(&t, mac_a);
+    TEST_ASSERT_EQUAL_INT(1, id_a);
+
+    /* Assign MAC B to id 2 */
+    int id_b = ztab_assign(&t, mac_b);
+    TEST_ASSERT_EQUAL_INT(2, id_b);
+
+    /* MAC A claims id 2 (which is owned by B) */
+    /* This must return STALE (known MAC with wrong id), not CONFLICT */
+    /* Precedence: known-MAC check comes before claimed-id check */
+    uint8_t out_id = 0;
+    ztab_en_t verdict = ztab_enrol(&t, mac_a, 2, &out_id);
+    TEST_ASSERT_EQUAL_INT(ZTAB_EN_STALE, verdict);
+    TEST_ASSERT_EQUAL_UINT8(1, out_id);  /* Returns A's assigned id */
+
+    /* Verify table is unchanged - B still owns 2 */
+    int b_slot = ztab_find_id(&t, 2);
+    TEST_ASSERT_NOT_EQUAL(-1, b_slot);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(mac_b, t.e[b_slot].mac, 6);
+}
+
+static void test_enrol_claiming_free_id_gets_lowest_free(void) {
+    ztab_t t;
+    memset(&t, 0, sizeof(t));
+
+    uint8_t mac1[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x01};
+    uint8_t mac_new[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0xFF};
+
+    /* Assign first MAC to id 1 */
+    int id1 = ztab_assign(&t, mac1);
+    TEST_ASSERT_EQUAL_INT(1, id1);
+
+    /* Unknown MAC claims id 5 (which is free), but ids 2,3,4 are also free */
+    /* Must get lowest-free (id 2), not the claimed id */
+    uint8_t out_id = 0;
+    ztab_en_t verdict = ztab_enrol(&t, mac_new, 5, &out_id);
+    TEST_ASSERT_EQUAL_INT(ZTAB_EN_ASSIGNED, verdict);
+    TEST_ASSERT_EQUAL_UINT8(2, out_id);  /* Gets lowest-free, not claimed id 5 */
+
+    /* Verify MAC is assigned to id 2 */
+    int new_slot = ztab_find_mac(&t, mac_new);
+    TEST_ASSERT_EQUAL_INT(1, new_slot);  /* Should be in slot 1 (id 2) */
+    TEST_ASSERT_EQUAL_UINT8(2, t.e[new_slot].id);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_assign_fills_1_to_8_in_order);
@@ -363,5 +438,8 @@ int main(void) {
     RUN_TEST(test_unpack_flipped_byte_rejects);
     RUN_TEST(test_unpack_wrong_magic_rejects);
     RUN_TEST(test_unpack_short_buffer_rejects);
+    RUN_TEST(test_set_name_nul_padding);
+    RUN_TEST(test_enrol_stale_vs_conflict_precedence);
+    RUN_TEST(test_enrol_claiming_free_id_gets_lowest_free);
     return UNITY_END();
 }

@@ -116,7 +116,7 @@ ztab_en_t ztab_enrol(ztab_t *t, const uint8_t mac[6], uint8_t claimed_id, uint8_
 }
 
 int ztab_pack(const ztab_t *t, uint32_t gen, uint8_t *out, size_t cap) {
-    if (!t || !out || cap < (16 + sizeof(ztab_t))) return -1;
+    if (!t || !out || cap < (HG_BLOB_HDR_LEN + sizeof(ztab_t))) return -1;
 
     size_t ret = hg_blob_wrap(HG_MAGIC_ZTAB, 1, gen, (const void *)t, sizeof(ztab_t), out, cap);
     if (ret == 0) return -1;
@@ -125,7 +125,7 @@ int ztab_pack(const ztab_t *t, uint32_t gen, uint8_t *out, size_t cap) {
 }
 
 int ztab_unpack(const uint8_t *in, size_t n, ztab_t *t, uint32_t *gen) {
-    if (!in || !t || n < 16) return -1;
+    if (!in || !t || n < HG_BLOB_HDR_LEN) return -1;
 
     hg_blob_rc_t rc = hg_blob_unwrap(HG_MAGIC_ZTAB, 1, 1, in, n, (void *)t, sizeof(ztab_t), gen);
     if (rc != HG_BLOB_OK && rc != HG_BLOB_MIGRATED) {
