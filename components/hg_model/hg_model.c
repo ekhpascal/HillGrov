@@ -121,21 +121,23 @@ int hg_model_restart_pending(void) {
 
 void hg_model_apply_cfg(const hg_zone_cfg_t *cfg) {
     LOCK_WAIT();
-    s_cfg = *cfg;
-    s_cfg.source = HG_SRC_MASTER;
+    s_cfg = *cfg;                 /* verbatim: generation + source are whatever the payload carries */
     s_dirty |= HG_CH_CFG;
     s_seq++;
     UNLOCK();
 }
 
-void hg_model_apply_hw(const hg_zone_hw_t *hw) {
+int hg_model_apply_hw(const hg_zone_hw_t *hw, char *err, size_t errlen) {
     LOCK_WAIT();
+    if (hg_hw_validate(hw, err, errlen) != 0) { UNLOCK(); return -2; }
+    if (hg_cfg_validate(&s_cfg, hw, err, errlen) != 0) { UNLOCK(); return -2; }   /* cross-plane: current cfg vs new hw */
     s_hw = *hw;
     s_hw_gen++;
     s_dirty |= HG_CH_HW;
     s_restart_pending = 1;   /* a pushed wiring/pin change needs a reboot, same as a local HG_CH_HW edit */
     s_seq++;
     UNLOCK();
+    return 0;
 }
 
 /* CRC-32 over the raw plane payload only -- the packed struct as it goes on

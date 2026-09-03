@@ -90,10 +90,14 @@ static void test_cfg_src_transitions(void) {
     TEST_ASSERT_EQUAL_INT(0, hg_model_edit(ed_set_target, &v, err, sizeof err));
     TEST_ASSERT_EQUAL_UINT8(1, hg_model_cfg_src());
 
-    /* ring/master push (full-plane replace, gen adopted as-is) -> MASTER */
+    /* ring/master push: applied VERBATIM (controller ruling) -- the master
+       stamps source=MASTER + generation=push-gen into the struct before
+       wrapping it (Task 13's side); the zone does not force either field,
+       so the test supplies them the way a real push would. */
     hg_zone_cfg_t pushed;
     hg_defaults_cfg(&pushed);
     pushed.generation = 42;
+    pushed.source = HG_SRC_MASTER;
     pushed.shelf[0].water.target_pct = 77;
     hg_model_apply_cfg(&pushed);
     TEST_ASSERT_EQUAL_UINT8(2, hg_model_cfg_src());
@@ -109,7 +113,7 @@ static void test_cfg_info_and_hw_crc(void) {
     uint32_t gen1 = 99, crc1 = 0, crc2 = 0;
     hg_model_cfg_info(&gen1, &crc1);
     TEST_ASSERT_EQUAL_UINT32(0, gen1);           /* fresh init: generation 0 */
-    TEST_ASSERT_NOT_EQUAL(0, crc1);              /* CRC of the wrapped defaults plane is non-zero */
+    TEST_ASSERT_NOT_EQUAL(0, crc1);              /* CRC of the defaults plane content is non-zero */
 
     uint8_t v = 60;
     hg_model_edit(ed_set_target, &v, err, sizeof err);
@@ -151,6 +155,35 @@ static void test_hw_crc_payload_only_stable_across_reboot(void) {
     TEST_ASSERT_NOT_EQUAL(crc_after_reboot, crc_edited);
 }
 
+static void test_apply_hw_rejects_cross_plane_conflict(void) {
+    /* live cfg is still defaults: shelf[1].water.dose_s = 20 (hg_cfg_defaults),
+       validated at boot against the *current* hw's pump_max_run_s (60 default).
+       Pushing a new hw that lowers pump_max_run_s below that live dose_s must
+       be rejected atomically -- validate before any write. */
+    hg_zone_hw_t hw;
+    hg_model_snapshot_hw(&hw);
+    hg_zone_hw_t before = hw;
+    hw.shelf[1].pump_max_run_s = 10;   /* < live dose_s 20 */
+
+    char e[48];
+    TEST_ASSERT_EQUAL_INT(-2, hg_model_apply_hw(&hw, e, sizeof e));
+    TEST_ASSERT_EQUAL_STRING("shelf[1].water.dose_s", e);
+
+    hg_zone_hw_t out;
+    hg_model_snapshot_hw(&out);
+    TEST_ASSERT_EQUAL_UINT16(before.shelf[1].pump_max_run_s, out.shelf[1].pump_max_run_s); /* unchanged */
+    TEST_ASSERT_EQUAL_UINT8(0, hg_model_dirty_mask());
+    TEST_ASSERT_EQUAL_INT(0, hg_model_restart_pending());
+
+    /* A conforming push (pump_max_run_s left high enough) DOES apply. */
+    hw.shelf[1].pump_max_run_s = 60;
+    hw.shelf[0].pump_pin = 9;
+    TEST_ASSERT_EQUAL_INT(0, hg_model_apply_hw(&hw, e, sizeof e));
+    hg_model_snapshot_hw(&out);
+    TEST_ASSERT_EQUAL_UINT8(9, out.shelf[0].pump_pin);
+    TEST_ASSERT_EQUAL_UINT8(HG_CH_HW, hg_model_dirty_mask());
+}
+
 static void test_boot_load(void) {
     hg_zone_cfg_t c; hg_zone_hw_t h;
     hg_defaults_cfg(&c); hg_defaults_hw(&h);
@@ -171,5 +204,6 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_cfg_src_transitions);
     RUN_TEST(test_cfg_info_and_hw_crc);
     RUN_TEST(test_hw_crc_payload_only_stable_across_reboot);
+    RUN_TEST(test_apply_hw_rejects_cross_plane_conflict);
     RUN_TEST(test_boot_load);
     return UNITY_END(); }

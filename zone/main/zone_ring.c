@@ -30,13 +30,16 @@ void hg_reboot_to_rescue(void);
                                       NTF_MASK(NTF_FW)   | NTF_MASK(NTF_NODE)  | NTF_MASK(NTF_RING))
 #define ZRING_LINK_MS 6000u   /* spec 2.7: zone link state LOST after 6000 ms without a frame */
 
-static const cmd_core_t *s_core;
+static cmd_core_t     *s_core;
 static cmd_session_t s_ring_ses = { .source = CMD_SRC_RING, .echo = 0, .notify_mask = ZRING_NOTIFY_MASK };
 static char           s_resp[CMD_RESP_MAX];
 static ring_dup_t     s_dup;
 static uint16_t       s_tx_seq;
+static portMUX_TYPE   s_seq_mux = portMUX_INITIALIZER_UNLOCKED;
 static uint8_t        s_mac[6];
 static uint8_t        s_reset_reason;
+static int            s_notify_sink = -1;
+static uint16_t       s_synced_notify_mask = ZRING_NOTIFY_MASK;
 
 static uint32_t     s_last_hb_ms;
 static volatile int  s_hb_now = 1;             /* immediate-send flag: link start / ASSIGN_ID */
@@ -45,14 +48,23 @@ static uint32_t s_last_rx_ms;                  /* any frame: proves the upstream
 static uint32_t s_last_master_ms;               /* master-sourced frame only */
 static uint8_t  s_link_lost;                    /* W_LINK_LOST edge latch, re-armed on recovery */
 
+static uint8_t  s_ring_size;                    /* last TIME_SYNC ring_size (stored; not yet reported anywhere) */
 static uint16_t s_online_mask;                  /* last TIME_SYNC (SP3: stores + reports in HB only) */
 static uint8_t  s_inhibit_mask;
 static uint32_t s_inhibit_ms;                   /* age-out clock for s_inhibit_mask, spec 2.7 (600 s) */
-static uint8_t  s_time_synced;                  /* sticky: a ring TIME_SYNC actually stepped the clock */
+static uint8_t  s_time_synced;                  /* sticky: a valid ring TIME_SYNC has been received */
 
 static uint32_t now_ms(void) { return s_core->now_ms(); }
 
-uint16_t zring_next_seq(void) { return ++s_tx_seq; }
+/* zring_next_seq is called from whatever task last called notify_emit() (the
+ * ring NOTIFY sink runs inline on the emitting task, not on "zring") as well
+ * as from zone_ring_task itself -- a plain ++ would race across tasks. */
+uint16_t zring_next_seq(void) {
+    taskENTER_CRITICAL(&s_seq_mux);
+    uint16_t v = ++s_tx_seq;
+    taskEXIT_CRITICAL(&s_seq_mux);
+    return v;
+}
 
 static void zring_send(uint8_t dst, uint8_t type, const uint8_t *payload, uint8_t len) {
     ring_hdr_t h = { .src = hg_store_zid(), .dst = dst, .type = type, .flags = 0,
@@ -104,8 +116,25 @@ static void handle_cmd(const ring_frame_t *f, uint32_t now) {
     memcpy(line, f->payload, n);
     line[n] = '\0';
     int rc = cmd_task_execute(&s_ring_ses, line, s_resp, sizeof s_resp, 3500);
+    /* mirrors cli.c's own live sync: a ring-sourced "SET NOTIFY ..." mutates
+     * s_ring_ses.notify_mask (the calling session) via cmd_dispatch, but the
+     * ring NOTIFY sink's filter (registered once at start) only changes when
+     * told to -- push it here, right after the command that could have
+     * changed it. */
+    if (s_notify_sink >= 0 && s_ring_ses.notify_mask != s_synced_notify_mask) {
+        notify_set_sink_mask(s_notify_sink, s_ring_ses.notify_mask);
+        s_synced_notify_mask = s_ring_ses.notify_mask;
+    }
     uint8_t status = rc == 0 ? 0 : 1;
     char detail[126];
+    /* s_resp is static, not stack (cmd_task's abandoned-slot rule, spec/SP1):
+     * on a 3500 ms internal timeout, cmd_task_execute itself already wrote a
+     * synchronous "ERR INTERNAL" into s_resp before returning here, but the
+     * orphaned worker task can still be mid-cmd_dispatch and later overwrite
+     * s_resp with the *original* command's real output -- after this ACK has
+     * already gone out. That's a stale/racy content read on an already-rare
+     * timeout path, never a dangling pointer (the buffer is never freed) --
+     * an accepted SP1 tradeoff, not something this read needs to guard. */
     uint8_t dlen = build_ack_detail(s_resp, detail);
     detail[dlen] = '\0';
     ring_dup_done(&s_dup, f->hdr.seq, status, detail);
@@ -116,13 +145,17 @@ static void handle_time_sync(const ring_frame_t *f, uint32_t now) {
     hg_ts_t t;
     if (hg_ts_parse(f->payload, f->hdr.len, &t) != 0) return;
     if (t.flags & 0x01) {                                   /* b0 time_valid */
+        s_time_synced = 1;   /* latch on receipt, regardless of |delta| -- the master has
+                               * already vouched for this time; the step below is only
+                               * about whether OUR clock needs correcting to match it */
         int64_t delta = (int64_t)t.utc - (int64_t)time(NULL);
         if (delta < 0) delta = -delta;
         if (delta > 2) {
             struct timeval tv = { .tv_sec = (time_t)t.utc, .tv_usec = 0 };
-            if (settimeofday(&tv, NULL) == 0) s_time_synced = 1;
+            settimeofday(&tv, NULL);
         }
     }
+    s_ring_size     = t.ring_size;
     s_online_mask   = t.online_mask;
     s_inhibit_mask  = t.inhibit_mask;
     s_inhibit_ms    = now;
@@ -132,11 +165,14 @@ static void handle_assign_id(const ring_frame_t *f) {
     hg_assign_t a;
     if (hg_assign_parse(f->payload, f->hdr.len, &a) != 0) return;
     hg_store_set_zid(a.zone_id);
+    s_core->zone_id = a.zone_id;    /* live update: cmd_dispatch shares this exact struct with cmd_task */
+    notify_set_node_id(a.zone_id);
     s_hb_now = 1;                                           /* confirmed by the next heartbeat */
 }
 
 static void handle_fw_update(const ring_frame_t *f) {
     hg_fwu_t fw;
+    memset(&fw, 0, sizeof fw);
     if (hg_fwu_parse(f->payload, f->hdr.len, &fw) != 0) return;
     hg_store_flush(2000);
     hg_handover_t h;
@@ -151,14 +187,21 @@ static void handle_fw_update(const ring_frame_t *f) {
     }
     zring_send_ack(f->hdr.src, f->hdr.seq, 0, "OK", 2);
     uart_wait_tx_done(UART_NUM_2, pdMS_TO_TICKS(500));
-    vTaskDelay(pdMS_TO_TICKS(fw.reboot_delay_ms));
+    /* TWDT budget: flush 2000 + drain 500 + this delay must stay well under
+     * the watchdog's window -- clamp so a bogus/oversized wire value from a
+     * corrupted or malicious frame can't stall the reboot indefinitely. */
+    uint16_t delay = fw.reboot_delay_ms;
+    if (delay > 3000) delay = 3000;
+    vTaskDelay(pdMS_TO_TICKS(delay));
     hg_reboot_to_rescue();
 }
 
-/* SYNCED once a ring TIME_SYNC has actually stepped the clock this boot
- * (sticky); else COARSE if the wall clock looks plausibly set by some other
- * local means (console SET TIME -- app_if_common tracks no exposed flag for
- * this, so a post-2020 clock value is the signal); else NONE. */
+/* SYNCED once any valid (time_valid) ring TIME_SYNC has been received this
+ * boot (sticky, latched on receipt regardless of whether a step was needed
+ * -- see handle_time_sync); else COARSE if the wall clock looks plausibly
+ * set by some other local means (console SET TIME -- app_if_common tracks
+ * no exposed flag for this, so a post-2020 clock value is the signal); else
+ * NONE. */
 static uint8_t time_quality_now(void) {
     if (s_time_synced) return 2;
     return time(NULL) > 1577836800 ? 1 : 0;
@@ -265,12 +308,18 @@ static void zone_ring_task(void *arg) {
     }
 }
 
-void zone_ring_start(const cmd_core_t *core) {
+uint8_t zone_ring_inhibit_mask(void) {
+    uint32_t now = now_ms();
+    if (s_inhibit_ms == 0 || (now - s_inhibit_ms) > 600000u) return 0;   /* never set, or stale */
+    return s_inhibit_mask;
+}
+
+void zone_ring_start(cmd_core_t *core) {
     s_core = core;
     ota_trial_drivers_ok();     /* ring_link_start() already returned by the time app_main calls us */
     /* Registered here (synchronously), not inside zone_ring_task: app_main's
      * once-per-boot NTF_BOOT emit follows this call immediately and must not
      * race the new task's startup, or the ring never sees the POWERON line. */
-    notify_add_sink(ring_notify_sink, NULL, ZRING_NOTIFY_MASK);
+    s_notify_sink = notify_add_sink(ring_notify_sink, NULL, ZRING_NOTIFY_MASK);
     xTaskCreatePinnedToCore(zone_ring_task, "zring", 4096, NULL, 5, NULL, 0);
 }

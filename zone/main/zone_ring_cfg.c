@@ -41,6 +41,16 @@ static void commit_ok(const ring_frame_t *f) {
     ring_casm_init(&s_casm);
 }
 
+/* HG_BLOB_E_VERSION_NEWER/_OLD are a real version mismatch (spec 2.9's
+ * "CFG_VERSION never retried" token, distinct from wire corruption); every
+ * other non-OK/MIGRATED rc (short/magic/length/crc) stays CRC_FAIL. */
+static void commit_fail_unwrap(const ring_frame_t *f, hg_blob_rc_t rc) {
+    if (rc == HG_BLOB_E_VERSION_NEWER || rc == HG_BLOB_E_VERSION_OLD)
+        commit_fail(f, "ERR CFG_VERSION", (uint8_t)(sizeof("ERR CFG_VERSION") - 1));
+    else
+        commit_fail(f, "ERR CRC_FAIL", (uint8_t)(sizeof("ERR CRC_FAIL") - 1));
+}
+
 void zone_ring_cfg_commit(const ring_frame_t *f, uint32_t now) {
     if (f->hdr.len < 5) return;                              /* malformed: never crash on a short frame */
     if (ring_casm_idle_expired(&s_casm, now)) ring_casm_init(&s_casm);
@@ -56,13 +66,16 @@ void zone_ring_cfg_commit(const ring_frame_t *f, uint32_t now) {
     char detail[126];
     if (kind == 1) {                                         /* CFG plane */
         hg_zone_cfg_t cfg;
-        /* gen_out NULL: the unwrapped struct's own .generation field (part of
-         * the payload itself, spec §2.9) is what hg_model_apply_cfg adopts --
-         * the envelope header's copy of it is redundant for our purposes. */
+        uint32_t env_gen;
         hg_blob_rc_t rc = hg_blob_unwrap(HG_MAGIC_CFG, HG_CFG_VER, HG_CFG_VER_MIN,
-                                          s_casm.buf, s_casm.total, &cfg, sizeof cfg, NULL);
-        if (rc != HG_BLOB_OK && rc != HG_BLOB_MIGRATED) {
-            commit_fail(f, "ERR CRC_FAIL", (uint8_t)(sizeof("ERR CRC_FAIL") - 1));
+                                          s_casm.buf, s_casm.total, &cfg, sizeof cfg, &env_gen);
+        if (rc != HG_BLOB_OK && rc != HG_BLOB_MIGRATED) { commit_fail_unwrap(f, rc); return; }
+        /* Identity contract (controller ruling): the zone applies the payload
+         * verbatim, so the envelope's transfer-tracking generation and the
+         * payload's own embedded cfg.generation must agree -- a mismatch
+         * means a stale/racing transfer, not a real config. */
+        if (env_gen != cfg.generation) {
+            commit_fail(f, "ERR INVALID_FIELD generation", (uint8_t)(sizeof("ERR INVALID_FIELD generation") - 1));
             return;
         }
         hg_zone_hw_t hw;
@@ -72,21 +85,19 @@ void zone_ring_cfg_commit(const ring_frame_t *f, uint32_t now) {
             commit_fail(f, detail, (uint8_t)(n < 0 ? 0 : (n > 125 ? 125 : n)));
             return;
         }
-        hg_model_apply_cfg(&cfg);
+        hg_model_apply_cfg(&cfg);                            /* verbatim: gen + source as pushed */
     } else if (kind == 2) {                                  /* HW plane */
         hg_zone_hw_t hw;
         hg_blob_rc_t rc = hg_blob_unwrap(HG_MAGIC_HW, HG_HW_VER, HG_HW_VER_MIN,
                                           s_casm.buf, s_casm.total, &hw, sizeof hw, NULL);
-        if (rc != HG_BLOB_OK && rc != HG_BLOB_MIGRATED) {
-            commit_fail(f, "ERR CRC_FAIL", (uint8_t)(sizeof("ERR CRC_FAIL") - 1));
-            return;
-        }
-        if (hg_hw_validate(&hw, err, sizeof err) != 0) {
+        if (rc != HG_BLOB_OK && rc != HG_BLOB_MIGRATED) { commit_fail_unwrap(f, rc); return; }
+        /* hg_model_apply_hw validates (hw alone, then the *current* cfg
+         * against this *new* hw -- atomicity) before writing anything. */
+        if (hg_model_apply_hw(&hw, err, sizeof err) != 0) {
             int n = snprintf(detail, sizeof detail, "ERR INVALID_FIELD %s", err);
             commit_fail(f, detail, (uint8_t)(n < 0 ? 0 : (n > 125 ? 125 : n)));
             return;
         }
-        hg_model_apply_hw(&hw);
     } else {
         commit_fail(f, "ERR MISSING_CHUNK", (uint8_t)(sizeof("ERR MISSING_CHUNK") - 1));
         return;

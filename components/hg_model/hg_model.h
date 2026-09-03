@@ -25,15 +25,23 @@ int      hg_model_restart_pending(void);
 
 /* ---- SP3 ring glue (Task 12) ---- */
 
-/* Full-plane replace for a master-pushed CFG_COMMIT (ring_link): envelope
- * generation is adopted as-is from *cfg (reconciliation gen arithmetic is
- * the master's job, spec 4.4) rather than bumped like a local edit; source
- * is forced HG_SRC_MASTER regardless of what the wire payload carried. */
+/* Full-plane replace for a master-pushed CFG_COMMIT (ring_link): applied
+ * VERBATIM -- generation and source are whatever the payload struct itself
+ * carries (the master stamps source=MASTER and generation=push-gen into the
+ * struct before wrapping it, Task 13's side; reconciliation gen arithmetic
+ * is the master's job, spec 4.4). This zone never force-mutates either
+ * field -- if a pushed payload carries source=LOCAL that is the master's
+ * bug, and hg_model_cfg_src() will faithfully report what was applied. */
 void hg_model_apply_cfg(const hg_zone_cfg_t *cfg);
-/* Full-plane replace for a master-pushed HW CFG_COMMIT; marks HW dirty +
- * restart_pending, same as a local HG_CH_HW edit (a wiring/pin change needs
- * a reboot regardless of who pushed it). */
-void hg_model_apply_hw(const hg_zone_hw_t *hw);
+/* Full-plane replace for a master-pushed HW CFG_COMMIT. Validates BEFORE
+ * any write (atomicity): hg_hw_validate(hw) first, then hg_cfg_validate()
+ * of the *current* (already-applied) cfg against the *new* hw -- a pushed
+ * HW change can silently invalidate the live cfg (e.g. lowering
+ * pump_max_run_s below a configured dose_s), and that combination must
+ * never land in the model. 0 ok; -2 invalid (err = field path, same
+ * convention as hg_model_edit) and the model is left untouched. On success,
+ * marks HW dirty + restart_pending, same as a local HG_CH_HW edit. */
+int hg_model_apply_hw(const hg_zone_hw_t *hw, char *err, size_t errlen);
 
 /* cfg_gen (== s_cfg.generation) + CRC-32 over the CFG plane -- payload-only,
  * envelope excluded -- the master computes cache CRCs the same way
