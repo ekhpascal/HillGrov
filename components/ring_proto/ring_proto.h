@@ -144,3 +144,27 @@ int hg_fwu_parse(const uint8_t *p, size_t n, hg_fwu_t *out);         /* enforces
 typedef struct { uint16_t acked_seq; uint8_t status; char detail[126]; uint8_t detail_len; } hg_ack_t;
 int hg_ack_pack(const hg_ack_t *a, uint8_t *out, size_t cap);        /* 3 + detail_len */
 int hg_ack_parse(const uint8_t *p, size_t n, hg_ack_t *out);         /* detail NUL-terminated on parse */
+
+/* Config transfer chunker + reassembler (ring_cfgx.c) */
+
+#define RING_CFG_DATA_MAX   112
+#define RING_CFG_BUF_MAX    768
+#define RING_CFG_IDLE_MS    2000
+/* CFG_CHUNK payload layout: 0 kind u8 (1 CFG, 2 HW) · 1 gen u32 · 5 idx u8 · 6 count u8
+   · 7 total u16 · 9 data[<=112]  => payload len = 9 + data_len */
+
+int ring_cfg_chunk_count(size_t blob_len);            /* ceil(len/112); 768 -> 7 */
+int ring_cfg_chunk_build(uint8_t kind, uint32_t gen, const uint8_t *blob, size_t blob_len,
+                         uint8_t idx, uint8_t *payload_out, size_t cap);
+                                                      /* one CFG_CHUNK payload; returns payload len / -1 */
+
+typedef struct {
+    uint8_t  active, kind; uint32_t gen; uint16_t total; uint8_t count, got_mask; /* count<=7 */
+    uint32_t last_ms; uint8_t buf[RING_CFG_BUF_MAX];
+} ring_casm_t;
+void ring_casm_init(ring_casm_t *a);
+int  ring_casm_feed(ring_casm_t *a, const uint8_t *payload, size_t n, uint32_t now_ms);
+     /* 0 progress; 1 complete (buf[0..total) valid); -1 rejected (bad layout, idx>=count,
+        total>768, count>7).  gen/kind mismatch vs an active transfer RESTARTS with the new
+        transfer (spec §2.9).  Duplicate idx overwrites idempotently. */
+int  ring_casm_idle_expired(const ring_casm_t *a, uint32_t now_ms);   /* active && now-last>2000 */
