@@ -35,10 +35,12 @@ void hg_model_apply_cfg(const hg_zone_cfg_t *cfg);
  * a reboot regardless of who pushed it). */
 void hg_model_apply_hw(const hg_zone_hw_t *hw);
 
-/* cfg_gen (== s_cfg.generation) + CRC-32 over the envelope-wrapped CFG plane,
- * computed by reusing hg_store's wrap path read-only (no NVS write). */
+/* cfg_gen (== s_cfg.generation) + CRC-32 over the CFG plane -- payload-only,
+ * envelope excluded -- the master computes cache CRCs the same way
+ * (spec 4.4/2.9): a content identity, not a transfer identity. */
 void     hg_model_cfg_info(uint32_t *gen, uint32_t *crc);
-/* CRC-32 over the envelope-wrapped HW plane, same read-only reuse. */
+/* CRC-32 over the HW plane -- payload-only, envelope excluded -- same rule
+ * as hg_model_cfg_info's crc. */
 void     hg_model_hw_crc(uint32_t *crc);
 /* 0 DEFAULTS (generation == 0, never written) / 1 LOCAL / 2 MASTER, derived
  * from the existing generation + source fields -- no extra state needed. */

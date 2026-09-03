@@ -126,6 +126,31 @@ static void test_cfg_info_and_hw_crc(void) {
     TEST_ASSERT_NOT_EQUAL(hwcrc1, hwcrc2);
 }
 
+static void test_hw_crc_payload_only_stable_across_reboot(void) {
+    hg_zone_hw_t hw;
+    hg_model_snapshot_hw(&hw);              /* current (default) content */
+    uint32_t crc_before = 0;
+    hg_model_hw_crc(&crc_before);
+
+    /* Simulate a reboot: hg_model_init() resets all RAM state, including the
+       internal envelope-generation counter (s_hw_gen -> 0); hg_model_boot_load
+       then restores byte-identical content, exactly as hg_store_init() does
+       from NVS on every real boot. hw_crc must be unaffected -- payload-only,
+       envelope (and any generation value) excluded. */
+    hg_model_init();
+    hg_model_boot_load(&hw, NULL);
+    uint32_t crc_after_reboot = 0;
+    hg_model_hw_crc(&crc_after_reboot);
+    TEST_ASSERT_EQUAL_UINT32(crc_before, crc_after_reboot);
+
+    /* A real content edit DOES change it. */
+    uint8_t pin = 9;
+    TEST_ASSERT_EQUAL_INT(0, hg_model_edit(ed_pump_pin, &pin, err, sizeof err));
+    uint32_t crc_edited = 0;
+    hg_model_hw_crc(&crc_edited);
+    TEST_ASSERT_NOT_EQUAL(crc_after_reboot, crc_edited);
+}
+
 static void test_boot_load(void) {
     hg_zone_cfg_t c; hg_zone_hw_t h;
     hg_defaults_cfg(&c); hg_defaults_hw(&h);
@@ -145,5 +170,6 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_take_dirty_hw);
     RUN_TEST(test_cfg_src_transitions);
     RUN_TEST(test_cfg_info_and_hw_crc);
+    RUN_TEST(test_hw_crc_payload_only_stable_across_reboot);
     RUN_TEST(test_boot_load);
     return UNITY_END(); }

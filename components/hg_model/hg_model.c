@@ -138,25 +138,28 @@ void hg_model_apply_hw(const hg_zone_hw_t *hw) {
     UNLOCK();
 }
 
-/* Reuses hg_store's envelope-wrap format (magic+ver+len+gen header, then
- * payload, then the blob's own CRC-32) purely to derive a fingerprint for
- * the heartbeat -- no NVS write, cap sized exactly for one plane. */
+/* CRC-32 over the raw plane payload only -- the packed struct as it goes on
+ * the wire -- with the 16-byte hg_blob envelope (and therefore any
+ * generation value, including the RAM-only s_hw_gen counter that resets on
+ * every reboot) excluded. This is a content identity, not a transfer
+ * identity: the master computes its cache CRCs the same way (spec 4.4/2.9),
+ * so the same config content must yield the same crc across reboots, and
+ * only a real content edit may change it. */
 void hg_model_cfg_info(uint32_t *gen, uint32_t *crc) {
     LOCK_WAIT();
     uint32_t g = s_cfg.generation;
-    uint8_t wire[HG_BLOB_HDR_LEN + sizeof(hg_zone_cfg_t)];
-    size_t n = hg_blob_wrap(HG_MAGIC_CFG, HG_CFG_VER, g, &s_cfg, (uint16_t)sizeof s_cfg, wire, sizeof wire);
+    uint32_t c = hg_crc32(0, &s_cfg, sizeof s_cfg);
     UNLOCK();
     if (gen) *gen = g;
-    if (crc) *crc = n ? hg_crc32(0, wire, n) : 0;
+    if (crc) *crc = c;
 }
 
+/* Payload-only, envelope excluded -- see hg_model_cfg_info's comment. */
 void hg_model_hw_crc(uint32_t *crc) {
     LOCK_WAIT();
-    uint8_t wire[HG_BLOB_HDR_LEN + sizeof(hg_zone_hw_t)];
-    size_t n = hg_blob_wrap(HG_MAGIC_HW, HG_HW_VER, s_hw_gen, &s_hw, (uint16_t)sizeof s_hw, wire, sizeof wire);
+    uint32_t c = hg_crc32(0, &s_hw, sizeof s_hw);
     UNLOCK();
-    if (crc) *crc = n ? hg_crc32(0, wire, n) : 0;
+    if (crc) *crc = c;
 }
 
 uint8_t hg_model_cfg_src(void) {
