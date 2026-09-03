@@ -41,3 +41,4 @@ hg_test(test_handover ${COMP}/rescue_handover/rescue_handover.c ${COMP}/hg_blob/
 hg_test(test_ring_frame ${COMP}/ring_proto/ring_crc.c ${COMP}/ring_proto/ring_cobs.c ${COMP}/ring_proto/ring_frame.c)
 hg_test(test_ring_route ${COMP}/ring_proto/ring_route.c ${COMP}/ring_proto/ring_dup.c)
 hg_test(test_ring_trk ${COMP}/ring_proto/ring_trk.c ${COMP}/ring_proto/ring_frame.c ${COMP}/ring_proto/ring_crc.c ${COMP}/ring_proto/ring_cobs.c)
+hg_test(test_ring_tlm ${COMP}/ring_proto/ring_tlm.c)

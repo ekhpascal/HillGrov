@@ -93,3 +93,54 @@ int  ring_trk_ack(ring_trk_t *t, uint16_t acked_seq, uint8_t status, const char 
                   uint8_t detail_len, ring_trk_ev_t *ev);   /* 1 = EV_DONE for the in-flight frame; late/unknown ACK -> 0 */
 int  ring_trk_unclaimed(ring_trk_t *t, const ring_hdr_t *returned, ring_trk_ev_t *ev);
      /* master saw its own ACK_REQ unicast come back: immediate EV_FAIL ZONE_UNKNOWN */
+
+/* Telemetry payload codecs (ring_tlm.c) */
+
+typedef struct {                       /* HEARTBEAT payload, spec §2.4: 62 + 14*n bytes */
+    uint8_t  mac[6];                   /* off 0 */
+    uint8_t  fw_maj, fw_min, fw_patch; /* 6..8 */
+    uint8_t  n_shelves;                /* 9 (0..4; parse rejects >4) */
+    uint32_t uptime_s;                 /* 10..13 */
+    uint32_t unix_time;                /* 14..17 */
+    uint32_t cfg_gen;                  /* 18..21 */
+    uint32_t cfg_crc;                  /* 22..25 */
+    uint32_t hw_crc;                   /* 26..29 */
+    uint8_t  cfg_src;                  /* 30: 0 DEFAULTS, 1 LOCAL, 2 MASTER */
+    uint8_t  mode;                     /* 31 */
+    uint8_t  reset_reason;             /* 32 */
+    uint8_t  time_quality;             /* 33: 0 NONE, 1 COARSE, 2 SYNCED */
+    uint64_t active_faults;            /* 34..41 */
+    uint16_t shelf_faults[4];          /* 42..49 */
+    uint8_t  link_flags;               /* 50: b0 upstream_alive, b1 master_alive, b2 heard_by_master */
+    uint8_t  override_mask;            /* 51 */
+    uint16_t rx_crc_err, rx_uart_err, rx_drop, fwd_count, min_free_heap_kb;  /* 52..61 */
+    struct { uint16_t raw_a, raw_b; uint8_t pct_a, pct_b, white, red,
+             out_flags, light_state, water_state, rsvd; uint16_t pump_today_s; } shelf[4]; /* 62 + i*14 */
+} hg_hb_t;
+
+int hg_hb_pack(const hg_hb_t *h, uint8_t *out, size_t cap);          /* returns payload len 62+14n / -1 */
+int hg_hb_parse(const uint8_t *p, size_t n, hg_hb_t *out);           /* -1 short / n_shelves>4 / len mismatch */
+
+typedef struct {                       /* TIME_SYNC payload, 13 B */
+    uint32_t utc;                      /* 0..3 */
+    int32_t  utc_offset_s;             /* 4..7 */
+    uint8_t  flags;                    /* 8: b0 time_valid, b1 ntp */
+    uint8_t  ring_size;                /* 9 */
+    uint16_t online_mask;              /* 10..11: bits 1..8 */
+    uint8_t  inhibit_mask;             /* 12: b0 PUMPS b1 LIGHTS b2 ALL */
+} hg_ts_t;
+
+int hg_ts_pack(const hg_ts_t *t, uint8_t out[13]);
+int hg_ts_parse(const uint8_t *p, size_t n, hg_ts_t *out);
+
+typedef struct { uint8_t mac[6]; uint8_t zone_id; } hg_assign_t;      /* 7 B */
+int hg_assign_pack(const hg_assign_t *a, uint8_t out[7]);
+int hg_assign_parse(const uint8_t *p, size_t n, hg_assign_t *out);
+
+typedef struct { uint16_t reboot_delay_ms; char ssid[33]; char pass[65]; } hg_fwu_t;
+int hg_fwu_pack(const hg_fwu_t *f, uint8_t *out, size_t cap);        /* 2 + 1+ssid_len + 1+pass_len <= 99 */
+int hg_fwu_parse(const uint8_t *p, size_t n, hg_fwu_t *out);         /* enforces NUL-termination + len bounds */
+
+typedef struct { uint16_t acked_seq; uint8_t status; char detail[126]; uint8_t detail_len; } hg_ack_t;
+int hg_ack_pack(const hg_ack_t *a, uint8_t *out, size_t cap);        /* 3 + detail_len */
+int hg_ack_parse(const uint8_t *p, size_t n, hg_ack_t *out);         /* detail NUL-terminated on parse */
