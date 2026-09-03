@@ -229,6 +229,24 @@ static void test_fw_update_url_too_long(void) {
     TEST_ASSERT_EQUAL_STRING("ERR BAD_ARGS\n", resp);
 }
 
+/* Task 9: ring sessions are full sessions -- CMD_SRC_RING must clear the
+ * CMDF_SESSION gate (only CMD_SRC_HTTP is NOT_LOCAL) and DEBUG ENABLE must
+ * still unlock a ring session the same as any other local source. */
+static void test_ring_source_session(void) {
+    ses.source = CMD_SRC_RING;
+    TEST_ASSERT_EQUAL_INT(0, run("SET ECHO ON"));
+    TEST_ASSERT_EQUAL_STRING("OK ECHO ON\n", resp);
+    TEST_ASSERT_EQUAL_UINT8(1, ses.echo);
+
+    TEST_ASSERT_EQUAL_INT(0, run("DEBUG ENABLE letmein"));
+    TEST_ASSERT_EQUAL_STRING("OK DEBUG ENABLE 600\n", resp);
+    TEST_ASSERT_EQUAL_UINT32(fake_clock_now() + CMD_UNLOCK_MS, ses.unlock_until_ms);
+
+    ses.source = CMD_SRC_HTTP;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET ECHO OFF"));
+    TEST_ASSERT_EQUAL_STRING("ERR NOT_LOCAL\n", resp);
+}
+
 int main(void) { UNITY_BEGIN();
     RUN_TEST(test_table_valid);
     RUN_TEST(test_get_id);
@@ -246,4 +264,5 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_factory_reset);
     RUN_TEST(test_fw_update);
     RUN_TEST(test_fw_update_url_too_long);
+    RUN_TEST(test_ring_source_session);
     return UNITY_END(); }
