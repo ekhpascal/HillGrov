@@ -4,6 +4,9 @@
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
+                <mxCell id="p4note_master" value="PLATFORM NOTE 2026-09-03: this page shows the DevKitC Master — the live SP3 bench platform. Superseded by the ESP32-P4 kit (spec §11.10) — see page “Master v2 (P4) Topology”." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="1" width="1100" height="26" as="geometry"/>
+                </mxCell>
                 <mxCell id="t0" value="HillGrow — Master Controller: feature map" style="text;html=1;fontSize=22;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="40" y="16" width="900" height="30" as="geometry"/>
                 </mxCell>
@@ -579,6 +582,9 @@
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
+                <mxCell id="p4note_display" value="RETIRED 2026-09-03 (spec §11.10): the separate display node is absorbed by the ESP32-P4 kit’s integrated 7&quot; panel. Page kept for history." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="1" width="1100" height="26" as="geometry"/>
+                </mxCell>
                 <mxCell id="t0" value="HillGrow — Display node (ESP32-S3 touch panel): feature map" style="text;html=1;fontSize=22;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="40" y="16" width="900" height="30" as="geometry"/>
                 </mxCell>
@@ -1240,6 +1246,9 @@
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
+                <mxCell id="p4note_topo" value="PLATFORM NOTE 2026-09-03: DevKitC Master topology = live SP3 bench. Planned replacement: page “Master v2 (P4) Topology” (spec §11.10)." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="1" width="1100" height="26" as="geometry"/>
+                </mxCell>
                 <mxCell id="tm1" value="Master — hardware topology" style="text;html=1;fontSize=22;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="40" y="16" width="900" height="30" as="geometry"/>
                 </mxCell>
@@ -1717,6 +1726,174 @@
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
                 <mxCell id="tze23" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tz30" target="tz29" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="topo_master_p4" name="Master v2 (P4) Topology">
+        <mxGraphModel dx="914" dy="1129" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1650" pageHeight="988" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="tp1" value="HillGrow — Master v2 (ESP32-P4) planned topology" style="text;html=1;fontSize=22;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="16" width="900" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp2" value="Owner decision 2026-09-03 (spec §11.10). The DevKitC Master pages remain the live SP3 bench reality until the migration sub-project executes." style="text;html=1;fontSize=11;fontColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="48" width="1100" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp3" value="onboard / board" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="76" width="120" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp4" value="sensor" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="752" y="76" width="120" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp5" value="actuator / link" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="884" y="76" width="120" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp6" value="future project" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#fafafa;strokeColor=#999999;fontColor=#666666;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="1016" y="76" width="120" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp7" value="7&quot; MIPI-DSI touch 1024×600 — UI runs ON the master (LVGL; display node RETIRED)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="110" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp8" value="ESP32-C6 — Wi-Fi 6 over SDIO (esp_wifi_remote + esp_hosted); AP 192.168.7.7 — softAP = migration gate test #1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="164" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp9" value="RTC + coin cell (chip id at bring-up) — replaces DS3231" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="218" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp10" value="microSD (SDMMC, exp. GPIO39–44 — verify vs IO46–52 header)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="272" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp11" value="PAR sensor 400–700 nm (Modbus RTU field bus)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="332" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp12" value="RS-485 transceiver on own UART — 120 Ω jumpers, NON-isolated" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="328" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp12" target="tp11" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp13" value="also onboard: audio codec/PA (unused — see streamer) · CAN · camera CSI · USB-Serial-JTAG = master recovery path" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="384" width="290" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp14" value="Onboard — integrated on the kit" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="241" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp14" target="tp7" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp14" target="tp8" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp14" target="tp9" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp14" target="tp10" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp14" target="tp12" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp14" target="tp13" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp15" value="PCF8575 relay expander @0x20 — fan, dampers, refill, grow light, heater (P7), blind (P8/P9)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="436" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp16" value="STCC4 @0x64 (+SHT4x) — room CO₂/T/RH" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="490" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp17" value="AHT20 @0x38 + BMP280 @0x76/77 — workshop T/RH/P" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="544" width="290" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp18" value="I²C header — same expansion tree as Master v1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="488" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp18" target="tp15" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp18" target="tp16" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp18" target="tp17" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp19" value="Zone 1…N DevKitC controllers — protocol, framing, fleet OTA all unchanged" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="624" width="290" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp20" value="UART header — ring (unchanged: TX→zone1, RX←zoneN)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="614" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe11" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp20" target="tp19" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp21" value="I²S: BCLK IO46 · WS IO47 · DOUT IO48 (P4 = I²S master TX, no MCLK)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="688" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp22" value="control UART: TX IO49 → / RX IO50 ← (source · volume · DSP)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="726" width="300" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp23" value="IO51 / IO52 spare on the same header" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="764" width="300" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp24" value="ESP32-DevKitC STREAMER node — future project: BT Classic A2DP sink + P4 program feed, PCM5102A DAC" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#fafafa;strokeColor=#999999;fontColor=#666666;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="723" width="290" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp24" target="tp21" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp24" target="tp22" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp24" target="tp23" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp25" value="Streamer header — IO46–52 + GND (one ribbon)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="718" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe15" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp25" target="tp24" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp26" value="DS18B20 outdoor probe (1-Wire) · HX711 ×2 · presence · blind end-stops ×2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="816" width="290" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp27" value="rescue button · status LED" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="862" width="290" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp28" value="pin-level map fixed at the migration sub-project (docs/pin-mapping.md “Master v2”)" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="908" width="290" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp29" value="Local I/O pool — IO28–31 · IO2–5 (JTAG-shared) · IO34/36 (strapping, use last)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;fontStyle=1;align=left;spacingLeft=6;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="854" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe16" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp29" target="tp26" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe17" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp29" target="tp27" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe18" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp29" target="tp28" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tp30" value="ESP32-P4-WIFI6-Touch-LCD-7B — MASTER v2
+PLANNED (spec §11.10) · kit ordered 2026-09-03" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;fontStyle=1;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="532" width="220" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe19" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp30" target="tp14" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe20" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp30" target="tp18" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe21" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp30" target="tp20" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe22" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp30" target="tp25" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tpe23" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=none;strokeColor=#b0b0b0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tp30" target="tp29" edge="1">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
             </root>
