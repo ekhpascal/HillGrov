@@ -51,6 +51,7 @@ int ring_cobs_decode(const uint8_t *in, size_t n, uint8_t *out) {
             out[out_idx++] = byte;
         }
 
+        /* Add zero if more input follows (another code byte after this block's data) */
         if (code < 0xFF && in_idx < n) {
             out[out_idx++] = 0;
         }

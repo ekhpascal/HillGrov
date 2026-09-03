@@ -50,6 +50,5 @@ int main(void) {
     RUN_TEST(test_cobs_roundtrip_all_lengths);
     RUN_TEST(test_cobs_decode_rejects_embedded_zero);
     RUN_TEST(test_cobs_decode_rejects_truncated_block);
-    // RUN_TEST(test_cobs_254_boundary);  /* Will be enabled after core fix */
     return UNITY_END();
 }
