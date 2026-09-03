@@ -89,8 +89,7 @@ int hg_hb_pack(const hg_hb_t *h, uint8_t *out, size_t cap) {
     /* Shelf data at [62 + i*14] for i = 0..n_shelves-1 */
     for (int i = 0; i < h->n_shelves; i++) {
         uint8_t *shelf_base = out + 62 + i * 14;
-        const struct { uint16_t raw_a, raw_b; uint8_t pct_a, pct_b, white, red,
-                       out_flags, light_state, water_state, rsvd; uint16_t pump_today_s; } *s = &h->shelf[i];
+        const hg_hb_shelf_t *s = &h->shelf[i];
 
         shelf_base[0] = (uint8_t)(s->raw_a & 0xFF);        /* [0..1]: raw_a LE */
         shelf_base[1] = (uint8_t)((s->raw_a >> 8) & 0xFF);

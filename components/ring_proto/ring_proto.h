@@ -96,6 +96,12 @@ int  ring_trk_unclaimed(ring_trk_t *t, const ring_hdr_t *returned, ring_trk_ev_t
 
 /* Telemetry payload codecs (ring_tlm.c) */
 
+typedef struct {  /* Shelf sensor array entry, 14 bytes per shelf at offset [62 + i*14] */
+    uint16_t raw_a, raw_b;
+    uint8_t  pct_a, pct_b, white, red, out_flags, light_state, water_state, rsvd;
+    uint16_t pump_today_s;
+} hg_hb_shelf_t;
+
 typedef struct {                       /* HEARTBEAT payload, spec §2.4: 62 + 14*n bytes */
     uint8_t  mac[6];                   /* off 0 */
     uint8_t  fw_maj, fw_min, fw_patch; /* 6..8 */
@@ -114,8 +120,7 @@ typedef struct {                       /* HEARTBEAT payload, spec §2.4: 62 + 14
     uint8_t  link_flags;               /* 50: b0 upstream_alive, b1 master_alive, b2 heard_by_master */
     uint8_t  override_mask;            /* 51 */
     uint16_t rx_crc_err, rx_uart_err, rx_drop, fwd_count, min_free_heap_kb;  /* 52..61 */
-    struct { uint16_t raw_a, raw_b; uint8_t pct_a, pct_b, white, red,
-             out_flags, light_state, water_state, rsvd; uint16_t pump_today_s; } shelf[4]; /* 62 + i*14 */
+    hg_hb_shelf_t shelf[4];            /* 62 + i*14 */
 } hg_hb_t;
 
 int hg_hb_pack(const hg_hb_t *h, uint8_t *out, size_t cap);          /* returns payload len 62+14n / -1 */
