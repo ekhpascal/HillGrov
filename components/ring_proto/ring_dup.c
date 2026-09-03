@@ -20,8 +20,8 @@ int ring_dup_check(ring_dup_t *c, uint16_t seq, uint32_t now_ms)
     }
 
     if (c->state == RING_DUP_REPLAY) {
-        /* Execution complete: check if within 3000 ms window */
-        if (now_ms - c->t_ms < 3000) {
+        /* Execution complete: check if within 3000 ms window (inclusive) */
+        if (now_ms - c->t_ms <= 3000) {
             return RING_DUP_REPLAY;
         }
         /* Outside window: treat as new execution */
@@ -43,7 +43,11 @@ void ring_dup_start(ring_dup_t *c, uint16_t seq, uint32_t now_ms)
 
 void ring_dup_done(ring_dup_t *c, uint16_t seq, uint8_t status, const char *detail)
 {
-    c->seq = seq;
+    /* Only update if this completion matches the cached sequence;
+       stale completions (e.g. from a slow handler after cache eviction) are ignored */
+    if (c->seq != seq) {
+        return;
+    }
     c->state = RING_DUP_REPLAY;
     c->status = status;
     if (detail) {

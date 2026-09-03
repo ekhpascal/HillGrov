@@ -30,18 +30,18 @@ static void test_zone_dst_broadcast_consume_fwd(void) {
 
 static void test_zone_dst_unassigned_assign_id_mac_match_consume(void) {
     uint8_t my_mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
-    /* Payload: MAC address that matches */
-    uint8_t payload[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
-    ring_hdr_t h = {.src = 0, .dst = RING_ID_UNASSIGNED, .type = RING_T_ASSIGN_ID, .flags = 0, .ttl = 10, .len = 6, .seq = 103};
+    /* Payload: MAC address that matches + zone_id (7 bytes total per spec §2.4) */
+    uint8_t payload[7] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x05};
+    ring_hdr_t h = {.src = 0, .dst = RING_ID_UNASSIGNED, .type = RING_T_ASSIGN_ID, .flags = 0, .ttl = 10, .len = 7, .seq = 103};
     ring_rt_t result = ring_route(0, 5, my_mac, &h, payload);
     TEST_ASSERT_EQUAL_INT(RING_RT_CONSUME, result);
 }
 
 static void test_zone_dst_unassigned_assign_id_mac_mismatch_forward(void) {
     uint8_t my_mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
-    /* Payload: MAC address that doesn't match */
-    uint8_t payload[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
-    ring_hdr_t h = {.src = 0, .dst = RING_ID_UNASSIGNED, .type = RING_T_ASSIGN_ID, .flags = 0, .ttl = 10, .len = 6, .seq = 104};
+    /* Payload: MAC address that doesn't match + zone_id (7 bytes) */
+    uint8_t payload[7] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x05};
+    ring_hdr_t h = {.src = 0, .dst = RING_ID_UNASSIGNED, .type = RING_T_ASSIGN_ID, .flags = 0, .ttl = 10, .len = 7, .seq = 104};
     ring_rt_t result = ring_route(0, 5, my_mac, &h, payload);
     TEST_ASSERT_EQUAL_INT(RING_RT_FORWARD, result);
 }
@@ -76,6 +76,14 @@ static void test_zone_else_ttl_equals_0_drop(void) {
     uint8_t payload[1] = {0};
     ring_rt_t result = ring_route(0, 5, my_mac, &h, payload);
     TEST_ASSERT_EQUAL_INT(RING_RT_DROP, result);
+}
+
+static void test_zone_src_equals_my_id_and_dst_equals_my_id_drop_self(void) {
+    uint8_t my_mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    ring_hdr_t h = {.src = 5, .dst = 5, .type = RING_T_NOTIFY, .flags = 0, .ttl = 10, .len = 0, .seq = 109};
+    uint8_t payload[1] = {0};
+    ring_rt_t result = ring_route(0, 5, my_mac, &h, payload);
+    TEST_ASSERT_EQUAL_INT(RING_RT_DROP_SELF, result);
 }
 
 /* ========== Master Node Tests ========== */
@@ -227,6 +235,44 @@ static void test_dup_cache_single_slot_only(void) {
     TEST_ASSERT_EQUAL_INT(RING_DUP_EXEC, result);
 }
 
+static void test_dup_window_boundary_at_3000_ms_replay(void) {
+    ring_dup_t c;
+    ring_dup_init(&c);
+    ring_dup_start(&c, 100, 1000);
+    ring_dup_done(&c, 100, 0, "test");
+    /* Exactly 3000 ms elapsed: should still be REPLAY */
+    int result = ring_dup_check(&c, 100, 4000);
+    TEST_ASSERT_EQUAL_INT(RING_DUP_REPLAY, result);
+}
+
+static void test_dup_window_boundary_after_3000_ms_exec(void) {
+    ring_dup_t c;
+    ring_dup_init(&c);
+    ring_dup_start(&c, 100, 1000);
+    ring_dup_done(&c, 100, 0, "test");
+    /* 3001 ms elapsed: should be EXEC (outside window) */
+    int result = ring_dup_check(&c, 100, 4001);
+    TEST_ASSERT_EQUAL_INT(RING_DUP_EXEC, result);
+}
+
+static void test_dup_done_stale_completion_ignored(void) {
+    ring_dup_t c;
+    ring_dup_init(&c);
+    /* Start seq 100 and complete it */
+    ring_dup_start(&c, 100, 1000);
+    ring_dup_done(&c, 100, 0, "seq 100 done");
+    /* Start seq 200 (overwrites 100) */
+    ring_dup_start(&c, 200, 2000);
+    /* Stale completion for seq 100 arrives — should be NO-OP */
+    ring_dup_done(&c, 100, 5, "old handler finished");
+    /* Check that seq 200 is still in progress (ABSORB) */
+    int result_200 = ring_dup_check(&c, 200, 2000);
+    TEST_ASSERT_EQUAL_INT(RING_DUP_ABSORB, result_200);
+    /* Check that seq 100 returns EXEC (not in cache anymore) */
+    int result_100 = ring_dup_check(&c, 100, 2500);
+    TEST_ASSERT_EQUAL_INT(RING_DUP_EXEC, result_100);
+}
+
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -241,6 +287,7 @@ int main(void) {
     RUN_TEST(test_zone_else_ttl_greater_than_1_forward);
     RUN_TEST(test_zone_else_ttl_equals_1_drop);
     RUN_TEST(test_zone_else_ttl_equals_0_drop);
+    RUN_TEST(test_zone_src_equals_my_id_and_dst_equals_my_id_drop_self);
     RUN_TEST(test_master_src_equals_master_drop_self);
     RUN_TEST(test_master_dst_equals_zone_consume);
     RUN_TEST(test_master_dst_broadcast_consume);
@@ -257,5 +304,8 @@ int main(void) {
     RUN_TEST(test_dup_detail_preserved_exactly);
     RUN_TEST(test_dup_new_seq_overwrites_old);
     RUN_TEST(test_dup_cache_single_slot_only);
+    RUN_TEST(test_dup_window_boundary_at_3000_ms_replay);
+    RUN_TEST(test_dup_window_boundary_after_3000_ms_exec);
+    RUN_TEST(test_dup_done_stale_completion_ignored);
     return UNITY_END();
 }
