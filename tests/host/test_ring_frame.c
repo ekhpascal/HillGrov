@@ -40,6 +40,50 @@ static void test_cobs_decode_rejects_truncated_block(void) {
     TEST_ASSERT_EQUAL_INT(-1, ring_cobs_decode(bad, 2, out));
 }
 
+static void test_cobs_254_boundary(void) {
+    uint8_t in[301], enc[304], dec[301];
+    int test_cases[] = {253, 254, 255, 300};
+
+    for (size_t tc = 0; tc < 4; tc++) {
+        int n = test_cases[tc];
+
+        /* Test 1: n non-zero bytes (no trailing zero) */
+        for (int i = 0; i < n; i++) {
+            in[i] = (uint8_t)((i % 255) + 1);  /* All non-zero: 1..255 cycling */
+        }
+        size_t enc_len = ring_cobs_encode(in, n, enc);
+        TEST_ASSERT_TRUE(enc_len >= n && enc_len <= n + n / 254 + 1);
+        for (size_t i = 0; i < enc_len; i++) {
+            TEST_ASSERT_NOT_EQUAL(0, enc[i]);  /* No zeros in encoded output */
+        }
+        int dec_len = ring_cobs_decode(enc, enc_len, dec);
+        TEST_ASSERT_EQUAL_INT(n, dec_len);
+        if (n > 0) TEST_ASSERT_EQUAL_MEMORY(in, dec, n);
+
+        /* Test 2: n non-zero bytes + one trailing 0x00 */
+        for (int i = 0; i < n; i++) {
+            in[i] = (uint8_t)((i % 255) + 1);
+        }
+        in[n] = 0;
+        enc_len = ring_cobs_encode(in, n + 1, enc);
+        TEST_ASSERT_TRUE(enc_len >= n + 1 && enc_len <= n + 1 + (n + 1) / 254 + 1);
+        for (size_t i = 0; i < enc_len; i++) {
+            TEST_ASSERT_NOT_EQUAL(0, enc[i]);
+        }
+        dec_len = ring_cobs_decode(enc, enc_len, dec);
+        TEST_ASSERT_EQUAL_INT(n + 1, dec_len);
+        TEST_ASSERT_EQUAL_MEMORY(in, dec, n + 1);
+
+        /* Special: for 254 non-zero + 1 zero, verify exact encoded format: [0xFF, 254B, 0x01, 0x01] */
+        if (n == 254) {
+            TEST_ASSERT_EQUAL_size_t(257, enc_len);
+            TEST_ASSERT_EQUAL_HEX8(0xFF, enc[0]);
+            TEST_ASSERT_EQUAL_HEX8(0x01, enc[255]);
+            TEST_ASSERT_EQUAL_HEX8(0x01, enc[256]);
+        }
+    }
+}
+
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -50,5 +94,6 @@ int main(void) {
     RUN_TEST(test_cobs_roundtrip_all_lengths);
     RUN_TEST(test_cobs_decode_rejects_embedded_zero);
     RUN_TEST(test_cobs_decode_rejects_truncated_block);
+    RUN_TEST(test_cobs_254_boundary);
     return UNITY_END();
 }
