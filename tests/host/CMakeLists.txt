@@ -38,4 +38,4 @@ hg_test(test_zone_cmds ${COMP}/zone_cmds/zone_cmds.c ${CMD_CORE_SRC} ${HG_CFG_SR
         ${COMP}/cmd_common/cmd_common.c ${COMP}/notify/notify.c)
 hg_test(test_cmd_common ${COMP}/cmd_common/cmd_common.c ${CMD_CORE_SRC} ${COMP}/notify/notify.c fakes/fake_app_if.c)
 hg_test(test_handover ${COMP}/rescue_handover/rescue_handover.c ${COMP}/hg_blob/hg_blob.c)
-hg_test(test_ring_frame ${COMP}/ring_proto/ring_crc.c ${COMP}/ring_proto/ring_cobs.c)
+hg_test(test_ring_frame ${COMP}/ring_proto/ring_crc.c ${COMP}/ring_proto/ring_cobs.c ${COMP}/ring_proto/ring_frame.c)

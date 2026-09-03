@@ -21,3 +21,17 @@ enum { RING_T_HEARTBEAT = 0x01, RING_T_ACK = 0x02, RING_T_FAULT_EVENT = 0x03, RI
 uint16_t ring_crc16(const uint8_t *p, size_t n);                       /* CCITT-FALSE, own 512 B table */
 size_t   ring_cobs_encode(const uint8_t *in, size_t n, uint8_t *out);  /* returns encoded len; out cap >= n + n/254 + 1 */
 int      ring_cobs_decode(const uint8_t *in, size_t n, uint8_t *out);  /* decoded len, or -1 malformed (embedded zero, bad code) */
+
+typedef struct { uint8_t src, dst, type, flags, ttl, len; uint16_t seq; } ring_hdr_t;
+
+int  ring_frame_encode(const ring_hdr_t *h, const uint8_t *payload,
+                       uint8_t *wire, size_t cap);
+     /* builds 0x00 + COBS(hdr+payload+crc16le) + 0x00; returns wire length, or -1
+        (len > 128, cap too small). h->len must equal the payload length. */
+
+typedef struct { uint8_t buf[RING_WIRE_MAX]; uint16_t n; } ring_dec_t;
+void ring_dec_init(ring_dec_t *d);
+void ring_dec_reset(ring_dec_t *d);          /* on UART BREAK/error events */
+int  ring_dec_feed(ring_dec_t *d, uint8_t byte, ring_hdr_t *h, uint8_t payload[RING_MAX_PAYLOAD]);
+     /* 1 = complete valid frame in (h, payload); 0 = need more; -1 = frame dropped
+        (bad COBS / magic / len mismatch / CRC / oversize) — decoder has resynced, caller counts. */
