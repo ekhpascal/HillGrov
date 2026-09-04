@@ -76,6 +76,6 @@ void app_main(void) {
      * completes. */
     if (fw_ok) ota_trial_drivers_ok();
 
-    notify_emit(NTF_BOOT, 0, "%s POWERON", esp_app_get_description()->version);
+    notify_emit(NTF_BOOT, 0, "%s %s", esp_app_get_description()->version, hg_app_reset_reason());
     vTaskDelete(NULL);
 }

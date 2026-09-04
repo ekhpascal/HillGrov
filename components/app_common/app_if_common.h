@@ -14,6 +14,11 @@ extern "C" {
 
 void     hg_app_get_mac(uint8_t mac[6]);
 uint32_t hg_app_uptime_s(void);
+/* This boot's reset reason as the CLI/NOTIFY reason token (the esp_reset_reason
+ * name without its ESP_RST_ prefix: POWERON, SW, PANIC, TASK_WDT, BROWNOUT,
+ * ...). One list for both apps -- NOTIFY BOOT used to print a hardcoded
+ * "POWERON" regardless of why the board actually restarted. */
+const char *hg_app_reset_reason(void);
 int      hg_app_log_set(const char *level, const char *tag, char *eff, size_t n);
 int      hg_app_time_get(char *buf, size_t n);
 /* Same line, but with an EXTERNAL clock source offered alongside the local

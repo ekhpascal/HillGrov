@@ -50,6 +50,6 @@ void app_main(void) {
     hg_app_get_mac(mac);
     ring_link_start(0, hg_store_zid, mac);
     zone_ring_start(&core);
-    notify_emit(NTF_BOOT, 0, "%s POWERON", esp_app_get_description()->version);
+    notify_emit(NTF_BOOT, 0, "%s %s", esp_app_get_description()->version, hg_app_reset_reason());
     vTaskDelete(NULL);
 }

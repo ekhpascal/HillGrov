@@ -25,6 +25,26 @@ uint32_t hg_app_uptime_s(void) {
     return (uint32_t)(esp_timer_get_time() / 1000000);
 }
 
+/* Indexed by esp_reset_reason_t (esp_system.h): the enum's own names minus the
+ * ESP_RST_ prefix, which is the reason vocabulary the CLI/NOTIFY lines use.
+ * A value outside the list (a newer IDF gaining an entry) reads UNKNOWN rather
+ * than indexing off the end. */
+static const char *const RESET_REASONS[] = {
+    "UNKNOWN", "POWERON", "EXT", "SW", "PANIC", "INT_WDT", "TASK_WDT", "WDT",
+    "DEEPSLEEP", "BROWNOUT", "SDIO", "USB", "JTAG", "EFUSE", "PWR_GLITCH", "CPU_LOCKUP",
+};
+
+const char *hg_app_reset_reason(void) {
+    /* NOTE for bench work: on the ESP32 classic an EN-pin reset (what a serial
+     * adapter's RTS pulse does) reports POWERON, not EXT -- ESP_RST_EXT is
+     * documented as "not applicable for ESP32". So a tool-driven reset and a
+     * real power cycle are indistinguishable here; SW appears after
+     * esp_restart(), which is what the rescue/OTA path uses. */
+    esp_reset_reason_t r = esp_reset_reason();
+    if ((unsigned)r >= sizeof RESET_REASONS / sizeof RESET_REASONS[0]) return "UNKNOWN";
+    return RESET_REASONS[r];
+}
+
 /* ---- log level ---- */
 
 static const char *const LOG_NAMES[] = { "NONE", "ERROR", "WARN", "INFO", "DEBUG", "VERBOSE" };
