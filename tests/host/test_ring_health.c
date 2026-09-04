@@ -102,13 +102,17 @@ static void test_empty_table_stays_idle_no_events(void) {
     TEST_ASSERT_EQUAL_INT(0, cap.count);
 }
 
-/* ========== Ring OPEN blame, 3-scenario bench (Z1, Z2 used; M = master) ========== */
+/* ========== Ring OPEN blame, 3-scenario bench (Z1, Z2 used; M = master) ==========
+   hops is measured at the MASTER'S RX (RING_TTL_INIT - ttl), so the zone feeding
+   that RX has hops 0 and the first hop after the master's TX has the highest.
+   These three cases are the IN-ORDER chain M->Z1->Z2->M (Z1 hops 1, Z2 hops 0);
+   their expected strings are unchanged by the hop-order leg naming. */
 
 static void test_ring_open_blame_silent_lowest_id(void) {
     hg_node_t tab[2] = {0};
-    tab[0] = (hg_node_t){ .used = 1, .id = 1, .hops = 1, .last_hb_ms = 0,
+    tab[0] = (hg_node_t){ .used = 1, .id = 1, .hops = 1, .hops_valid = 1, .last_hb_ms = 0,
                            .link_flags = LINK_UPSTREAM_ALIVE, .health = NODE_H_DEGRADED };   /* Z1 silent */
-    tab[1] = (hg_node_t){ .used = 1, .id = 2, .hops = 2, .last_hb_ms = 6000,
+    tab[1] = (hg_node_t){ .used = 1, .id = 2, .hops = 0, .hops_valid = 1, .last_hb_ms = 6000,
                            .link_flags = LINK_UPSTREAM_ALIVE, .health = NODE_H_ONLINE };      /* Z2 hops normal */
     ring_status_t st = { .state = RING_ST_OK };
 
@@ -122,9 +126,9 @@ static void test_ring_open_blame_silent_lowest_id(void) {
 
 static void test_ring_open_blame_upstream_alive_clear(void) {
     hg_node_t tab[2] = {0};
-    tab[0] = (hg_node_t){ .used = 1, .id = 1, .hops = 1, .last_hb_ms = 6000,
+    tab[0] = (hg_node_t){ .used = 1, .id = 1, .hops = 1, .hops_valid = 1, .last_hb_ms = 6000,
                            .link_flags = LINK_UPSTREAM_ALIVE, .health = NODE_H_ONLINE };      /* Z1 alive */
-    tab[1] = (hg_node_t){ .used = 1, .id = 2, .hops = 2, .last_hb_ms = 6000,
+    tab[1] = (hg_node_t){ .used = 1, .id = 2, .hops = 0, .hops_valid = 1, .last_hb_ms = 6000,
                            .link_flags = 0, .health = NODE_H_ONLINE };                        /* Z2 upstream_alive clear */
     ring_status_t st = { .state = RING_ST_OK };
 
@@ -139,9 +143,9 @@ static void test_ring_open_blame_upstream_alive_clear(void) {
 
 static void test_ring_open_blame_masters_own_rx_leg(void) {
     hg_node_t tab[2] = {0};
-    tab[0] = (hg_node_t){ .used = 1, .id = 1, .hops = 1, .last_hb_ms = 6000,
+    tab[0] = (hg_node_t){ .used = 1, .id = 1, .hops = 1, .hops_valid = 1, .last_hb_ms = 6000,
                            .link_flags = LINK_UPSTREAM_ALIVE, .health = NODE_H_ONLINE };
-    tab[1] = (hg_node_t){ .used = 1, .id = 2, .hops = 2, .last_hb_ms = 6000,
+    tab[1] = (hg_node_t){ .used = 1, .id = 2, .hops = 0, .hops_valid = 1, .last_hb_ms = 6000,
                            .link_flags = LINK_UPSTREAM_ALIVE, .health = NODE_H_ONLINE };      /* all HBs alive */
     ring_status_t st = { .state = RING_ST_OK };
 
@@ -157,9 +161,9 @@ static void test_ring_open_blame_masters_own_rx_leg(void) {
 
 static void test_ring_stays_open_until_probe_returns_then_closes(void) {
     hg_node_t tab[2] = {0};
-    tab[0] = (hg_node_t){ .used = 1, .id = 1, .hops = 1, .last_hb_ms = 6000,
+    tab[0] = (hg_node_t){ .used = 1, .id = 1, .hops = 1, .hops_valid = 1, .last_hb_ms = 6000,
                            .link_flags = LINK_UPSTREAM_ALIVE, .health = NODE_H_ONLINE };
-    tab[1] = (hg_node_t){ .used = 1, .id = 2, .hops = 2, .last_hb_ms = 0,
+    tab[1] = (hg_node_t){ .used = 1, .id = 2, .hops = 0, .hops_valid = 1, .last_hb_ms = 0,
                            .link_flags = LINK_UPSTREAM_ALIVE, .health = NODE_H_DEGRADED };    /* Z2 silent */
     ring_status_t st = { .state = RING_ST_OK };
 
@@ -176,6 +180,103 @@ static void test_ring_stays_open_until_probe_returns_then_closes(void) {
     TEST_ASSERT_EQUAL_INT(2, cap.count);
     TEST_ASSERT_EQUAL_STRING("RING CLOSED", cap.lines[1]);
     TEST_ASSERT_EQUAL_STRING("", st.blame);
+}
+
+/* ========== Blame legs follow MEASURED HOP ORDER, not id order ==========
+   The 3-board bench enrolled its ids in reverse physical order: the chain is
+   M->Z2->Z1->M, so Z2 (first hop after the master's TX) has hops 1 and Z1 (feeds
+   the master's RX) has hops 0. Naming legs by id order printed "wire Z1->Z2" for
+   the physical M->Z2 leg -- the operator was sent to the wrong cable. */
+
+static void bench_reversed(hg_node_t *tab, uint32_t z1_hb, uint32_t z2_hb,
+                            uint8_t z1_link, uint8_t z2_link) {
+    tab[0] = (hg_node_t){ .used = 1, .id = 1, .hops = 0, .hops_valid = 1, .last_hb_ms = z1_hb,
+                           .link_flags = z1_link, .health = NODE_H_ONLINE };   /* last hop */
+    tab[1] = (hg_node_t){ .used = 1, .id = 2, .hops = 1, .hops_valid = 1, .last_hb_ms = z2_hb,
+                           .link_flags = z2_link, .health = NODE_H_ONLINE };   /* first hop */
+}
+
+static void test_blame_reversed_hops_first_hop_owns_the_master_leg(void) {
+    hg_node_t tab[2] = {0};
+    bench_reversed(tab, 6000, 0, LINK_UPSTREAM_ALIVE, LINK_UPSTREAM_ALIVE);   /* Z2 (first hop) silent */
+    ring_status_t st = { .state = RING_ST_OK };
+
+    ring_health_eval(tab, 2, 6000, 0, &st, cap_cb, &cap);
+
+    TEST_ASSERT_EQUAL_INT(RING_ST_OPEN, st.state);
+    TEST_ASSERT_EQUAL_STRING("Z2 dead or wire M->Z2", st.blame);   /* was "wire Z1->Z2" */
+}
+
+static void test_blame_reversed_hops_last_hop_leg_named_from_upstream(void) {
+    hg_node_t tab[2] = {0};
+    bench_reversed(tab, 0, 6000, LINK_UPSTREAM_ALIVE, LINK_UPSTREAM_ALIVE);   /* Z1 (last hop) silent */
+    ring_status_t st = { .state = RING_ST_OK };
+
+    ring_health_eval(tab, 2, 6000, 0, &st, cap_cb, &cap);
+
+    TEST_ASSERT_EQUAL_INT(RING_ST_OPEN, st.state);
+    TEST_ASSERT_EQUAL_STRING("Z1 dead or wire Z2->Z1", st.blame);   /* was "wire M->Z1" */
+}
+
+static void test_blame_reversed_hops_upstream_alive_clear_case(void) {
+    hg_node_t tab[2] = {0};
+    bench_reversed(tab, 6000, 6000, 0, LINK_UPSTREAM_ALIVE);   /* Z1's upstream (= Z2) is dead */
+    ring_status_t st = { .state = RING_ST_OK };
+
+    ring_health_eval(tab, 2, 6000, 0, &st, cap_cb, &cap);
+
+    TEST_ASSERT_EQUAL_STRING("Z1 dead or wire Z2->Z1", st.blame);
+}
+
+static void test_blame_reversed_hops_masters_rx_leg_is_the_last_hop(void) {
+    hg_node_t tab[2] = {0};
+    bench_reversed(tab, 6000, 6000, LINK_UPSTREAM_ALIVE, LINK_UPSTREAM_ALIVE);   /* all alive */
+    ring_status_t st = { .state = RING_ST_OK };
+
+    ring_health_eval(tab, 2, 6000, 0, &st, cap_cb, &cap);       /* TIME_SYNC not returning */
+
+    TEST_ASSERT_EQUAL_STRING("Z1 dead or wire Z1->M", st.blame);   /* Z1 owns the ->M leg, not Z2 */
+}
+
+/* ========== hops never measured (NVS row, never heard): fall back to id order ========== */
+
+static void test_blame_unknown_hops_falls_back_to_id_order(void) {
+    hg_node_t tab[2] = {0};
+    tab[0] = (hg_node_t){ .used = 1, .id = 1, .last_hb_ms = 6000,
+                           .link_flags = LINK_UPSTREAM_ALIVE, .health = NODE_H_ONLINE };
+    tab[1] = (hg_node_t){ .used = 1, .id = 2, .last_hb_ms = 0,       /* silent, hops_valid 0 */
+                           .link_flags = LINK_UPSTREAM_ALIVE, .health = NODE_H_ONLINE };
+    ring_status_t st = { .state = RING_ST_OK };
+
+    ring_health_eval(tab, 2, 6000, 0, &st, cap_cb, &cap);
+
+    TEST_ASSERT_EQUAL_STRING("Z2 dead or wire Z1->Z2", st.blame);   /* id order: predecessor is Z1 */
+}
+
+static void test_blame_unknown_hops_lowest_id_takes_the_master_leg(void) {
+    hg_node_t tab[2] = {0};
+    tab[0] = (hg_node_t){ .used = 1, .id = 1, .last_hb_ms = 0,       /* silent, hops_valid 0 */
+                           .link_flags = LINK_UPSTREAM_ALIVE, .health = NODE_H_ONLINE };
+    tab[1] = (hg_node_t){ .used = 1, .id = 2, .last_hb_ms = 6000,
+                           .link_flags = LINK_UPSTREAM_ALIVE, .health = NODE_H_ONLINE };
+    ring_status_t st = { .state = RING_ST_OK };
+
+    ring_health_eval(tab, 2, 6000, 0, &st, cap_cb, &cap);
+
+    TEST_ASSERT_EQUAL_STRING("Z1 dead or wire M->Z1", st.blame);
+}
+
+static void test_blame_unknown_hops_masters_rx_leg_uses_highest_id(void) {
+    hg_node_t tab[2] = {0};
+    tab[0] = (hg_node_t){ .used = 1, .id = 1, .last_hb_ms = 6000,
+                           .link_flags = LINK_UPSTREAM_ALIVE, .health = NODE_H_ONLINE };
+    tab[1] = (hg_node_t){ .used = 1, .id = 2, .last_hb_ms = 6000,
+                           .link_flags = LINK_UPSTREAM_ALIVE, .health = NODE_H_ONLINE };
+    ring_status_t st = { .state = RING_ST_OK };
+
+    ring_health_eval(tab, 2, 6000, 0, &st, cap_cb, &cap);
+
+    TEST_ASSERT_EQUAL_STRING("Z2 dead or wire Z2->M", st.blame);
 }
 
 /* ========== ring_online_mask bit math ========== */
@@ -200,6 +301,13 @@ int main(void) {
     RUN_TEST(test_ring_open_blame_upstream_alive_clear);
     RUN_TEST(test_ring_open_blame_masters_own_rx_leg);
     RUN_TEST(test_ring_stays_open_until_probe_returns_then_closes);
+    RUN_TEST(test_blame_reversed_hops_first_hop_owns_the_master_leg);
+    RUN_TEST(test_blame_reversed_hops_last_hop_leg_named_from_upstream);
+    RUN_TEST(test_blame_reversed_hops_upstream_alive_clear_case);
+    RUN_TEST(test_blame_reversed_hops_masters_rx_leg_is_the_last_hop);
+    RUN_TEST(test_blame_unknown_hops_falls_back_to_id_order);
+    RUN_TEST(test_blame_unknown_hops_lowest_id_takes_the_master_leg);
+    RUN_TEST(test_blame_unknown_hops_masters_rx_leg_uses_highest_id);
     RUN_TEST(test_online_mask_bit_math);
     return UNITY_END();
 }

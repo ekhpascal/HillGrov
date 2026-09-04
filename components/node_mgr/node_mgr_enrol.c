@@ -106,7 +106,12 @@ static void purge_unassigned(const uint8_t mac[6]) {
 
 /* caller holds nmgr_lock() */
 static void update_telemetry(hg_node_t *nd, uint8_t zone_id, const ring_hdr_t *hdr, const hg_hb_t *hb) {
+    /* Measured at the master's RX: 0 = the zone feeding it (undecremented),
+     * highest = the first hop after the master's TX. ring_health's blame names
+     * the suspect leg from this, and needs hops_valid to tell "real last hop"
+     * from "never heard" (both would read 0). */
     nd->hops         = (uint8_t)(RING_TTL_INIT - hdr->ttl);
+    nd->hops_valid   = 1;
     nd->link_flags   = hb->link_flags;
     nd->fault_flag   = hb->active_faults != 0;
     nd->cmd_timeouts = 0;                          /* any HB clears forward-failure accounting */

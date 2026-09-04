@@ -30,6 +30,43 @@ static uint8_t highest_used_id(const hg_node_t *tab, int n_slots) {
     return best;
 }
 
+/* The upstream neighbour of node k -- the node whose TX feeds k's RX -- named
+ * from MEASURED hop order, because id order is not physical order (ids come
+ * from enrolment, which for simultaneously-enrolling boards is arbitrary) and
+ * the blame line exists to tell the operator which cable to touch.
+ *
+ * hops is stamped at the MASTER'S RX as RING_TTL_INIT - ttl, so it counts the
+ * forwards a heartbeat took to get there: the zone that feeds the master's RX
+ * arrives undecremented (hops 0) and the FIRST hop after the master's TX has
+ * the HIGHEST hops. Walking upstream therefore walks hops UP -- the upstream
+ * neighbour of a node with hops h is the node with hops h+1, and the master
+ * itself when no such node exists (the max-hops node owns the M->Z leg).
+ * hops survives silence (last known value, kept in RAM), so a dead node is
+ * still placed correctly; id order is the fallback only for a node whose hops
+ * have never been measured (hops_valid 0: enrolled from NVS, never heard). */
+static uint8_t upstream_id(const hg_node_t *tab, int n_slots, const hg_node_t *k) {
+    if (!k->hops_valid) return prev_used_id(tab, n_slots, k->id);
+    uint8_t best = 0;
+    for (int i = 0; i < n_slots; i++) {
+        const hg_node_t *nd = &tab[i];
+        if (!nd->used || !nd->hops_valid || nd->hops != (uint8_t)(k->hops + 1)) continue;
+        if (best == 0 || nd->id < best) best = nd->id;   /* ties can't happen physically; be deterministic */
+    }
+    return best;   /* 0 = nothing upstream of the first hop but the master */
+}
+
+/* The node whose TX feeds the master's RX: the smallest measured hops, or the
+ * highest used id when no hops have ever been measured (same fallback rule). */
+static uint8_t last_hop_id(const hg_node_t *tab, int n_slots) {
+    const hg_node_t *best = NULL;
+    for (int i = 0; i < n_slots; i++) {
+        const hg_node_t *nd = &tab[i];
+        if (!nd->used || !nd->hops_valid) continue;
+        if (!best || nd->hops < best->hops || (nd->hops == best->hops && nd->id < best->id)) best = nd;
+    }
+    return best ? best->id : highest_used_id(tab, n_slots);
+}
+
 static void format_wire_blame(uint8_t k, uint8_t prev, char *out, size_t outsz) {
     if (prev == 0) snprintf(out, outsz, "Z%u dead or wire M->Z%u", (unsigned)k, (unsigned)k);
     else           snprintf(out, outsz, "Z%u dead or wire Z%u->Z%u", (unsigned)k, (unsigned)prev, (unsigned)k);
@@ -37,7 +74,8 @@ static void format_wire_blame(uint8_t k, uint8_t prev, char *out, size_t outsz) 
 
 /* Priority order (spec §2.7): (1) smallest-hops FRESH node whose upstream_alive bit is clear;
    (2) else lowest-id SILENT (stale HB) used node; (3) else every zone is alive and reporting
-   its upstream alive -> the break is the master's own RX leg, blamed on the last hop. */
+   its upstream alive -> the break is the master's own RX leg, blamed on the last hop (the
+   smallest-hops node). The suspect LEG is always named by measured hop order (upstream_id). */
 static void ring_blame(const hg_node_t *tab, int n_slots, uint32_t now_ms, char *out, size_t outsz) {
     const hg_node_t *cand_a = NULL;
     for (int i = 0; i < n_slots; i++) {
@@ -48,7 +86,7 @@ static void ring_blame(const hg_node_t *tab, int n_slots, uint32_t now_ms, char 
         if (!cand_a || nd->hops < cand_a->hops) cand_a = nd;
     }
     if (cand_a) {
-        format_wire_blame(cand_a->id, prev_used_id(tab, n_slots, cand_a->id), out, outsz);
+        format_wire_blame(cand_a->id, upstream_id(tab, n_slots, cand_a), out, outsz);
         return;
     }
 
@@ -60,11 +98,11 @@ static void ring_blame(const hg_node_t *tab, int n_slots, uint32_t now_ms, char 
         if (!cand_b || nd->id < cand_b->id) cand_b = nd;
     }
     if (cand_b) {
-        format_wire_blame(cand_b->id, prev_used_id(tab, n_slots, cand_b->id), out, outsz);
+        format_wire_blame(cand_b->id, upstream_id(tab, n_slots, cand_b), out, outsz);
         return;
     }
 
-    uint8_t last = highest_used_id(tab, n_slots);
+    uint8_t last = last_hop_id(tab, n_slots);
     snprintf(out, outsz, "Z%u dead or wire Z%u->M", (unsigned)last, (unsigned)last);
 }
 

@@ -196,6 +196,11 @@ typedef struct {
     node_health_t health; uint8_t fault_flag;            /* fault_flag = HB carried faults != 0 */
     uint32_t last_hb_ms, updating_until_ms;
     uint8_t  hops, link_flags, cmd_timeouts;
+    /* hops has been measured at least once (node_mgr stamps RING_TTL_INIT - ttl
+       on every heartbeat). A row loaded from NVS that has never been heard from
+       has hops 0 -- indistinguishable from the real last hop -- so the blame
+       leg naming needs this flag to know when to fall back to id order. */
+    uint8_t  hops_valid;
     hg_hb_t  hb;                        /* last full heartbeat */
     /* RAM-side only (never on the wire, never read by ring_health.c): a
        master-side accumulator of HB hdr.seq gaps (delta-1 per jump beyond
@@ -219,5 +224,8 @@ void ring_health_eval(hg_node_t *tab, int n_slots, uint32_t now_ms,
    Ring: no used nodes -> IDLE (no open alarm).  Used nodes and master's own TIME_SYNC not
    returned for 5000 ms -> OPEN + blame; blame = first gap in the hop sequence: the node with
    the smallest hops whose upstream_alive bit is clear, else the lowest-id silent node:
-   "Z<k> dead or wire Z<k-1|M>->Z<k>".  Events fire on TRANSITIONS only. */
+   "Z<k> dead or wire Z<u|M>->Z<k>".  The suspect leg is named by MEASURED HOP ORDER -- u is
+   the node with hops+1 (hops counts forwards to the master's RX, so upstream = hops up), the
+   master when there is none, and id order only for a node with hops_valid 0.
+   Events fire on TRANSITIONS only. */
 uint16_t ring_online_mask(const hg_node_t *tab, int n_slots, uint32_t now_ms);  /* HB within 5000 ms */
