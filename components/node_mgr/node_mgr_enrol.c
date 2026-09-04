@@ -67,11 +67,16 @@ int nmgr_unassigned_copy(uint8_t macs[][6], int cap) {
     return n;
 }
 
+/* hg_assign_pack/hg_ts_pack are FIXED-size codecs: they return 0 for OK, not
+ * a byte count like hg_hb_pack/hg_ack_pack do. Their payload length is the
+ * sizeof of the buffer they filled -- passing the return value as the wire len
+ * put len=0 on every ASSIGN_ID and TIME_SYNC, which the receiving zone's
+ * hg_assign_parse/hg_ts_parse (both exact-length) then rejected in silence. */
 static void send_assign(const uint8_t mac[6], uint8_t zone_id) {
     hg_assign_t a; memcpy(a.mac, mac, 6); a.zone_id = zone_id;
     uint8_t payload[7];
-    int n = hg_assign_pack(&a, payload);
-    if (n >= 0) nmgr_send_raw(RING_ID_UNASSIGNED, RING_T_ASSIGN_ID, payload, (uint8_t)n);
+    if (hg_assign_pack(&a, payload) != 0) return;
+    nmgr_send_raw(RING_ID_UNASSIGNED, RING_T_ASSIGN_ID, payload, (uint8_t)sizeof payload);
 }
 
 static void mac_str(const uint8_t mac[6], char out[18]) {
@@ -170,8 +175,8 @@ void nmgr_broadcast_time_sync(uint32_t now) {
     nmgr_unlock();
     t.inhibit_mask = 0;   /* SP5 */
     uint8_t payload[13];
-    int n = hg_ts_pack(&t, payload);
-    if (n >= 0) nmgr_send_raw(RING_ID_BCAST, RING_T_TIME_SYNC, payload, (uint8_t)n);
+    if (hg_ts_pack(&t, payload) != 0) return;   /* fixed-size codec: 0 = OK, see send_assign */
+    nmgr_send_raw(RING_ID_BCAST, RING_T_TIME_SYNC, payload, (uint8_t)sizeof payload);
 }
 
 /* ring_health_eval's callback text is already "NODE %u %s" / "RING OPEN %s"

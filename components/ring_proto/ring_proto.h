@@ -137,12 +137,12 @@ typedef struct {                       /* TIME_SYNC payload, 13 B */
     uint8_t  inhibit_mask;             /* 12: b0 PUMPS b1 LIGHTS b2 ALL */
 } hg_ts_t;
 
-int hg_ts_pack(const hg_ts_t *t, uint8_t out[13]);
-int hg_ts_parse(const uint8_t *p, size_t n, hg_ts_t *out);
+int hg_ts_pack(const hg_ts_t *t, uint8_t out[13]);   /* fixed size: 0 = OK / -1 -- NOT a length */
+int hg_ts_parse(const uint8_t *p, size_t n, hg_ts_t *out);           /* requires n == 13 exactly */
 
 typedef struct { uint8_t mac[6]; uint8_t zone_id; } hg_assign_t;      /* 7 B */
-int hg_assign_pack(const hg_assign_t *a, uint8_t out[7]);
-int hg_assign_parse(const uint8_t *p, size_t n, hg_assign_t *out);
+int hg_assign_pack(const hg_assign_t *a, uint8_t out[7]);            /* fixed size: 0 = OK / -1 */
+int hg_assign_parse(const uint8_t *p, size_t n, hg_assign_t *out);   /* requires n == 7 exactly */
 
 typedef struct { uint16_t reboot_delay_ms; char ssid[33]; char pass[65]; } hg_fwu_t;
 int hg_fwu_pack(const hg_fwu_t *f, uint8_t *out, size_t cap);        /* 2 + 1+ssid_len + 1+pass_len <= 99 */
