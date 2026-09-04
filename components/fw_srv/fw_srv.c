@@ -56,7 +56,26 @@ static int validate_image(const esp_partition_t *part, uint32_t *len_out) {
     return 0;
 }
 
-/* fix round CRITICAL fix: httpd_resp_send_chunk() UNCONDITIONALLY emits
+/* fix round 2: httpd_send() returns the byte count of ONE send() call,
+ * which can be short under the socket's 5 s SO_SNDTIMEO on a marginal link
+ * -- exactly the edge-of-AP fleet-OTA case this server exists for. IDF's
+ * own higher-level resp API loops internally (the private httpd_send_all);
+ * a hand-rolled send path has to do the same, or a short write silently
+ * advances the cursor past bytes that were never actually sent, desyncing
+ * the stream against the Content-Length already promised to the client.
+ * Returns 0 once all len bytes are sent, -1 on any ret <= 0 (error or the
+ * peer/httpd closing the socket). */
+static int send_all(httpd_req_t *r, const char *buf, size_t len) {
+    size_t sent = 0;
+    while (sent < len) {
+        int n = httpd_send(r, buf + sent, len - sent);
+        if (n <= 0) return -1;
+        sent += (size_t)n;
+    }
+    return 0;
+}
+
+/* fix round 1 CRITICAL fix: httpd_resp_send_chunk() UNCONDITIONALLY emits
  * "Transfer-Encoding: chunked" (IDF httpd_txrx.c), regardless of whether
  * the caller also set a Content-Length header -- the two together trip
  * esp_http_client's strict parser (HPE_UNEXPECTED_CONTENT_LENGTH), which
@@ -64,9 +83,9 @@ static int validate_image(const esp_partition_t *part, uint32_t *len_out) {
  * the malformed dual-header response (which is why this only showed up
  * against a real rescue pull, not a bench curl smoke test). So this
  * handler composes the identity-framed response BY HAND -- status line +
- * headers + blank line via one raw httpd_send(), then the body via plain
- * httpd_send() calls -- and never touches httpd_resp_send_chunk/
- * httpd_resp_set_hdr at all. */
+ * headers + blank line via one send_all(), then the body via send_all()
+ * chunks -- and never touches httpd_resp_send_chunk/httpd_resp_set_hdr at
+ * all. */
 static esp_err_t zone_bin_get(httpd_req_t *req) {
     if (!s_img_ok) {
         httpd_resp_set_status(req, "404 Not Found");
@@ -78,7 +97,7 @@ static esp_err_t zone_bin_get(httpd_req_t *req) {
     int hn = snprintf(head, sizeof head,
                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %lu\r\n\r\n",
                        (unsigned long)s_img_len);
-    if (hn < 0 || (size_t)hn >= sizeof head || httpd_send(req, head, (size_t)hn) < 0) return ESP_FAIL;
+    if (hn < 0 || (size_t)hn >= sizeof head || send_all(req, head, (size_t)hn) != 0) return ESP_FAIL;
 
     /* The httpd worker task isn't TWDT-subscribed by default -- add/delete
      * around the loop, reset every chunk (SP1 rescue-upload pattern,
@@ -90,8 +109,8 @@ static esp_err_t zone_bin_get(httpd_req_t *req) {
         esp_task_wdt_reset();
         uint32_t n = rem < FW_CHUNK ? rem : FW_CHUNK;
         if (esp_partition_read(s_part, off, s_buf, n) != ESP_OK ||
-            httpd_send(req, (const char *)s_buf, n) < 0) {
-            rc = ESP_FAIL;
+            send_all(req, (const char *)s_buf, n) != 0) {
+            rc = ESP_FAIL;   /* ret<=0 from send_all: httpd already closed the socket -- correct for a truncated response */
             break;
         }
         off += n;
