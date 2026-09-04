@@ -64,13 +64,19 @@ nmgr_cache_t *nmgr_cfg_cache(uint8_t zone, uint8_t kind) {
 void nmgr_cfg_note_synced(uint8_t zone) {
     if (zone < 1 || zone > HG_MAX_ZONES) return;
     memset(&s_latch[zone - 1], 0, sizeof s_latch[0]);   /* cache identity changed: any old latch is stale */
+    /* A completed transfer is a successful master->zone exchange, so the
+     * consecutive-failure count starts over -- including the 3 this file's own
+     * note_failed sets to force DEGRADED. Heartbeats no longer clear it (see
+     * node_mgr_enrol.c), so a success has to. */
+    hg_node_t *nd = nmgr_node_by_id(zone);
+    if (nd) nd->cmd_timeouts = 0;
 }
 
 void nmgr_cfg_note_failed(uint8_t zone, uint8_t kind, int terminal,
                           uint32_t hb_gen, uint32_t hb_crc,
                           uint32_t cache_gen, uint32_t cache_crc) {
     if (zone < 1 || zone > HG_MAX_ZONES) return;
-    notify_emit(NTF_NODE, zone, "%u CFG_SYNC_FAILED", zone);
+    notify_emit_as(zone, NTF_NODE, zone, "CFG_SYNC_FAILED");
     hg_node_t *nd = nmgr_node_by_id(zone);
     if (nd && nd->cmd_timeouts < 3) nd->cmd_timeouts = 3;   /* DEGRADED via ring_health_eval's own rule */
     if (!terminal) s_cooldown_until[zone - 1] = nmgr_now_ms() + CFG_COOLDOWN_MS;   /* rule (b) */
@@ -98,9 +104,9 @@ static int try_start(uint8_t zone, const hg_node_t *nd) {
 
     uint32_t new_gen = (nd->hb.cfg_gen > cfg->gen ? nd->hb.cfg_gen : cfg->gen) + 1;
     if (nd->hb.cfg_gen == cfg->gen)
-        notify_emit(NTF_NODE, zone, "%u CFG_FORK", zone);
+        notify_emit_as(zone, NTF_NODE, zone, "CFG_FORK");
     else if (nd->hb.cfg_gen > cfg->gen)
-        notify_emit(NTF_NODE, zone, "%u CFG_REVERTED %lu", zone, (unsigned long)new_gen);
+        notify_emit_as(zone, NTF_NODE, zone, "CFG_REVERTED %lu", (unsigned long)new_gen);
     nmgr_cx_push(zone, new_gen, nd->hb.cfg_gen, nd->hb.cfg_crc, cfg->gen, cfg->crc);
     return 1;
 }

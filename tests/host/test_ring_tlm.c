@@ -428,11 +428,64 @@ static void test_ts_parse_reject_short(void) {
     TEST_ASSERT_EQUAL_INT(-1, result);
 }
 
-static void test_ts_parse_reject_long(void) {
-    uint8_t buf[HG_TS_LEN + 1];
+/* Re-pinned (final review G5, protocol evolution): a LONGER payload parses and
+   the trailing bytes are ignored, so a newer master that appended a TIME_SYNC
+   field stays readable by an older zone (spec 2.4/6.3, zones-first updates). */
+static void test_ts_parse_accepts_trailing_bytes(void) {
+    hg_ts_t orig;
+    memset(&orig, 0, sizeof orig);
+    orig.utc = 0x11223344;
+    orig.utc_offset_s = -3600;
+    orig.flags = 0x01;
+    orig.ring_size = 3;
+    orig.online_mask = 0x000E;
+    orig.inhibit_mask = 0x02;
+
+    uint8_t buf[HG_TS_LEN + 4];
+    memset(buf, 0xEE, sizeof buf);            /* the appended field, unknown to us */
+    TEST_ASSERT_EQUAL_INT(0, hg_ts_pack(&orig, buf));
+
     hg_ts_t out;
-    int result = hg_ts_parse(buf, sizeof buf, &out);
-    TEST_ASSERT_EQUAL_INT(-1, result);  /* Reject if not exactly HG_TS_LEN */
+    memset(&out, 0, sizeof out);
+    TEST_ASSERT_EQUAL_INT(0, hg_ts_parse(buf, sizeof buf, &out));
+    TEST_ASSERT_EQUAL_UINT32(orig.utc, out.utc);
+    TEST_ASSERT_EQUAL_INT32(orig.utc_offset_s, out.utc_offset_s);
+    TEST_ASSERT_EQUAL_UINT8(orig.flags, out.flags);
+    TEST_ASSERT_EQUAL_UINT8(orig.ring_size, out.ring_size);
+    TEST_ASSERT_EQUAL_UINT16(orig.online_mask, out.online_mask);
+    TEST_ASSERT_EQUAL_UINT8(orig.inhibit_mask, out.inhibit_mask);
+}
+
+/* Same rule on the heartbeat: exact parses, longer parses (extra ignored),
+   shorter than 62 + 14*n_shelves still rejects. */
+static void test_hb_parse_accepts_trailing_bytes(void) {
+    hg_hb_t orig;
+    memset(&orig, 0, sizeof orig);
+    orig.n_shelves = 2;
+    orig.uptime_s = 4242;
+    orig.cfg_gen = 7;
+    orig.cfg_crc = 0xDEADBEEF;
+    orig.shelf[1].pump_today_s = 900;
+
+    uint8_t buf[62 + 14 * 4 + 6];
+    memset(buf, 0xEE, sizeof buf);
+    int plen = hg_hb_pack(&orig, buf, sizeof buf);
+    TEST_ASSERT_EQUAL_INT(62 + 14 * 2, plen);
+
+    hg_hb_t out;
+    memset(&out, 0, sizeof out);
+    /* exact */
+    TEST_ASSERT_EQUAL_INT(0, hg_hb_parse(buf, (size_t)plen, &out));
+    /* six appended bytes an older master knows nothing about */
+    memset(&out, 0, sizeof out);
+    TEST_ASSERT_EQUAL_INT(0, hg_hb_parse(buf, (size_t)plen + 6, &out));
+    TEST_ASSERT_EQUAL_UINT8(2, out.n_shelves);
+    TEST_ASSERT_EQUAL_UINT32(4242, out.uptime_s);
+    TEST_ASSERT_EQUAL_UINT32(7, out.cfg_gen);
+    TEST_ASSERT_EQUAL_UINT32(0xDEADBEEF, out.cfg_crc);
+    TEST_ASSERT_EQUAL_UINT16(900, out.shelf[1].pump_today_s);
+    /* one byte short of what n_shelves promises: still rejected */
+    TEST_ASSERT_EQUAL_INT(-1, hg_hb_parse(buf, (size_t)plen - 1, &out));
 }
 
 static void test_ts_roundtrip(void) {
@@ -767,7 +820,8 @@ int main(void) {
     RUN_TEST(test_ts_pack_fixed_13);
     RUN_TEST(test_ts_parse_succeeds);
     RUN_TEST(test_ts_parse_reject_short);
-    RUN_TEST(test_ts_parse_reject_long);
+    RUN_TEST(test_ts_parse_accepts_trailing_bytes);
+    RUN_TEST(test_hb_parse_accepts_trailing_bytes);
     RUN_TEST(test_ts_roundtrip);
     RUN_TEST(test_assign_pack_fixed_7);
     RUN_TEST(test_assign_parse_succeeds);

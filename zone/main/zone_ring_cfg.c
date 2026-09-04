@@ -48,8 +48,14 @@ static void commit_fail(const ring_frame_t *f, const char *detail, uint8_t dlen)
 }
 
 static void commit_ok(const ring_frame_t *f, int applied) {
-    if (applied) hg_store_flush(2000);
+    /* ACK FIRST, then persist: hg_store_flush blocks for up to 2000 ms while
+     * the master's COMMIT ack-timeout is 520 ms x 3 attempts, so flushing ahead
+     * of the ACK could time the push out even though the zone had applied it
+     * (the master would then re-push, and the retransmit path would answer from
+     * the dup cache). The model is already updated in RAM at this point; the
+     * flush only moves it to NVS. */
     commit_reply(f, 0, "OK", 2);
+    if (applied) hg_store_flush(2000);
     ring_casm_init(&s_casm);
 }
 

@@ -26,8 +26,12 @@ int node_store_load(ztab_t *t) {
         return -1;
     }
 
-    if (len != sizeof(buf)) {
-        ESP_LOGW(TAG, "bad blob length: %u (expected %u)", (unsigned)len, (unsigned)sizeof(buf));
+    /* <=, not ==: a blob written by an older, SHORTER ztab layout is exactly
+     * what hg_blob's MIGRATED path exists for (it zero-fills the tail), and an
+     * exact-length test rejected it here before ztab_unpack ever saw it -- the
+     * envelope's own length/CRC/version checks are the real gate. */
+    if (len < HG_BLOB_HDR_LEN || len > sizeof(buf)) {
+        ESP_LOGW(TAG, "bad blob length: %u (max %u)", (unsigned)len, (unsigned)sizeof(buf));
         nvs_close(handle);
         return -1;
     }

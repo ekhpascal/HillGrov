@@ -30,8 +30,12 @@ int hg_ts_pack(const hg_ts_t *t, uint8_t out[HG_TS_LEN]) {
     return 0;
 }
 
+/* n >= HG_TS_LEN, not ==: trailing bytes are ignored so a newer sender that has
+   APPENDED a field stays readable by an older receiver (spec §2.4/§6.3, same
+   rule as hg_hb_parse). Short is still a reject -- the promised fields are not
+   all there. */
 int hg_ts_parse(const uint8_t *p, size_t n, hg_ts_t *out) {
-    if (!p || !out || n != HG_TS_LEN) return -1;
+    if (!p || !out || n < HG_TS_LEN) return -1;
 
     out->utc = ((uint32_t)p[0]) |
                ((uint32_t)p[1] << 8) |

@@ -31,6 +31,15 @@ static cx_t        s_cx;
 static ring_casm_t s_casm;
 static const uint32_t BACKOFF_MS[3] = { 1000, 2000, 4000 };
 
+/* A push's wire bytes are built HERE, never in the cache. start_push stamps the
+ * pushed generation and source=MASTER into the payload before wrapping, and
+ * doing that in the cache blob in place left the cache's embedded gen ahead of
+ * c->gen for as long as the push then took to fail (fix round minor). This
+ * buffer holds exactly the bytes the chunks carried, so accept_push can adopt
+ * them once the zone has ACKed them -- the cache then matches the zone byte for
+ * byte, which is what makes the cfg_crc comparison meaningful. */
+static uint8_t s_push_wire[HG_BLOB_HDR_LEN + sizeof(hg_zone_cfg_t)];
+
 static size_t cache_payload_len(uint8_t kind) { return kind == 1 ? sizeof(hg_zone_cfg_t) : sizeof(hg_zone_hw_t); }
 
 void nmgr_cx_init(void) {
@@ -109,12 +118,14 @@ static void start_push(uint8_t zone, uint32_t gen, uint8_t attempt,
     memcpy(&work, c->blob + HG_BLOB_HDR_LEN, sizeof work);
     work.generation = gen;                  /* identity contract (ruling #4): embedded gen ... */
     work.source = HG_SRC_MASTER;            /* ... and source stamped before wrapping */
-    hg_blob_wrap(HG_MAGIC_CFG, HG_CFG_VER, gen, &work, (uint16_t)sizeof work, c->blob, sizeof c->blob);
+    hg_blob_wrap(HG_MAGIC_CFG, HG_CFG_VER, gen, &work, (uint16_t)sizeof work,
+                  s_push_wire, sizeof s_push_wire);
 
     int count = ring_cfg_chunk_count(sizeof(hg_zone_cfg_t) + HG_BLOB_HDR_LEN);
     for (int i = 0; i < count; i++) {
         uint8_t payload[9 + RING_CFG_DATA_MAX];
-        int n = ring_cfg_chunk_build(1, gen, c->blob, sizeof c->blob, (uint8_t)i, payload, sizeof payload);
+        int n = ring_cfg_chunk_build(1, gen, s_push_wire, sizeof s_push_wire,
+                                      (uint8_t)i, payload, sizeof payload);
         if (n < 0) break;
         nmgr_send_raw(zone, RING_T_CFG_CHUNK, payload, (uint8_t)n);   /* unACKed, back-to-back (spec §2.9) */
     }
@@ -134,6 +145,7 @@ static void start_push(uint8_t zone, uint32_t gen, uint8_t attempt,
 static void accept_push(void) {
     nmgr_cache_t *c = nmgr_cfg_cache(s_cx.zone, 1);
     if (!c) { memset(&s_cx, 0, sizeof s_cx); return; }
+    memcpy(c->blob, s_push_wire, sizeof c->blob);   /* adopt exactly the bytes the zone ACKed */
     c->gen   = s_cx.push_gen;
     c->crc   = hg_crc32(0, c->blob + HG_BLOB_HDR_LEN, sizeof(hg_zone_cfg_t));   /* ruling #4: recompute post-ACK */
     c->valid = 1;

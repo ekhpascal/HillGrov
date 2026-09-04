@@ -81,6 +81,11 @@ int ring_casm_feed(ring_casm_t *a, const uint8_t *payload, size_t n, uint32_t no
     if (count == 0 || count > RING_CFG_MAX_CHUNKS) return -1;
     if (idx >= count) return -1;
     if (total > RING_CFG_BUF_MAX) return -1;
+    /* count and total must agree at ESTABLISH time (Task 6 parked item), not
+       only against an already-running transfer: a header claiming e.g. 3 chunks
+       for a 112 B blob would otherwise start a transfer that can never complete
+       and would sit in the buffer until the 2 s idle abort. */
+    if (count != ring_cfg_chunk_count(total)) return -1;
 
     /* interior chunks are always a full 112 B; the last chunk carries the remainder */
     size_t expected_len;

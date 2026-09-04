@@ -56,6 +56,11 @@ int nmgr_ztab_set_name(uint8_t zone, const char *name) {
 /* caller holds nmgr_lock() */
 int nmgr_ztab_clear(uint8_t zone) {
     if (ztab_clear(&s_ztab, zone) != 0) return -1;
+    /* A slot just freed up, so TABLE_FULL is worth saying again the next time an
+     * unknown board heartbeats into a full table -- without this re-arm the
+     * once-per-boot latch left the operator with no notify at all after the
+     * first one, for the rest of the master's uptime. */
+    s_unassigned_notified = 0;
     return node_store_save(&s_ztab);
 }
 
@@ -114,8 +119,13 @@ static void update_telemetry(hg_node_t *nd, uint8_t zone_id, const ring_hdr_t *h
     nd->hops_valid   = 1;
     nd->link_flags   = hb->link_flags;
     nd->fault_flag   = hb->active_faults != 0;
-    nd->cmd_timeouts = 0;                          /* any HB clears forward-failure accounting */
     nd->last_hb_ms   = nmgr_now_ms();
+    /* cmd_timeouts is deliberately NOT cleared here (final review G5): it counts
+     * CONSECUTIVE failed master->zone exchanges, and clearing it on every 2 s
+     * heartbeat made spec §2.7's "3 command timeouts -> DEGRADED" rule
+     * unreachable -- three timeouts can never land inside one heartbeat gap.
+     * It is cleared by a SUCCESSFUL exchange instead: a forward that got its
+     * reply (node_mgr_fwd.c) or a completed config transfer (node_mgr_cfgx.c). */
 
     /* seq-gap accounting (ruling #6 / minor #4): fold into the RAM-only,
      * monotonically-accumulating seq_drop_tally BEFORE the hb copy below --
@@ -156,7 +166,7 @@ void nmgr_enrol_handle_hb(const ring_frame_t *f) {
         return;
     }
     if (v == ZTAB_EN_CONFLICT) {
-        notify_emit(NTF_NODE, out_id, "%u ID_CONFLICT", out_id);
+        notify_emit_as(out_id, NTF_NODE, out_id, "ID_CONFLICT");
         nmgr_unlock();
         send_assign(hb.mac, RING_ID_UNASSIGNED);       /* intruder reset to 0xFE (spec §2.8) */
         return;                                        /* the real owner's row is untouched */
@@ -172,7 +182,7 @@ void nmgr_enrol_handle_hb(const ring_frame_t *f) {
         s_seq_known[out_id - 1] = 0;   /* a different board on this id: its counter is unrelated */
         nd->used = 1; nd->id = out_id; nd->unconfigured = 1;
         char ms[18]; mac_str(hb.mac, ms);
-        notify_emit(NTF_NODE, out_id, "%u NEW %s", out_id, ms);
+        notify_emit_as(out_id, NTF_NODE, out_id, "NEW %s", ms);
     }
     update_telemetry(nd, out_id, &f->hdr, &hb);
     nmgr_unlock();
@@ -205,17 +215,20 @@ void nmgr_broadcast_time_sync(uint32_t now) {
 
 /* ring_health_eval's callback text is already "NODE %u %s" / "RING OPEN %s"
  * / "RING CLOSED" (spec §2.7) -- strip the leading type word it already
- * carries so notify_emit's own type-name prefix isn't duplicated. See the
- * design note in node_mgr.c's NOTIFY passthrough for why the master's own
- * id (0) still shows up ahead of the real zone id in the final line. Called
- * from node_mgr.c's task loop while nmgr_lock() is already held (it's
+ * carries so notify_emit's own type-name prefix isn't duplicated. A NODE line
+ * is about a ZONE, so it is emitted AS that zone (notify_emit_as) and reads
+ * "NOTIFY NODE 2 DEGRADED" rather than the master's own id followed by the
+ * zone's; a RING line is about the ring as a whole and stays the master's.
+ * Called from node_mgr.c's task loop while nmgr_lock() is already held (it's
  * ring_health_eval's own callback, invoked synchronously from inside that
  * locked call). */
 void nmgr_health_cb(void *ctx, const char *line) {
     (void)ctx;
     if (strncmp(line, "NODE ", 5) == 0) {
-        long id = strtol(line + 5, NULL, 10);
-        notify_emit(NTF_NODE, (uint8_t)id, "%s", line + 5);
+        const char *p = line + 5;
+        long id = strtol(p, NULL, 10);
+        const char *sp = strchr(p, ' ');
+        notify_emit_as((uint8_t)id, NTF_NODE, (uint8_t)id, "%s", sp ? sp + 1 : p);
     } else if (strncmp(line, "RING ", 5) == 0) {
         notify_emit(NTF_RING, 0, "%s", line + 5);
     }

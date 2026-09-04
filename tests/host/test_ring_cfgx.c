@@ -296,6 +296,32 @@ static void test_reject_mismatched_count_or_total_same_gen_kind(void) {
     TEST_ASSERT_EQUAL_INT(-1, ring_casm_feed(&a, bad, n, 0));
 }
 
+/* count vs total must agree at ESTABLISH time too (Task 6 parked item):
+   otherwise a transfer that can never complete sits in the buffer until the
+   2 s idle abort. */
+static void test_reject_count_inconsistent_with_total_at_establish(void) {
+    uint8_t data[112]; memset(data, 0xAA, sizeof data);
+    uint8_t payload[9 + 112];
+    ring_casm_t a;
+
+    /* 112 B blob needs exactly 1 chunk; a header claiming 3 is self-inconsistent */
+    ring_casm_init(&a);
+    size_t n = build_raw(payload, 1, 1, 0, 3, 112, data, sizeof data);
+    TEST_ASSERT_EQUAL_INT(-1, ring_casm_feed(&a, payload, n, 0));
+    TEST_ASSERT_EQUAL_UINT8(0, a.active);        /* nothing established */
+
+    /* 700 B needs 7; claiming 6 is short by one */
+    ring_casm_init(&a);
+    n = build_raw(payload, 1, 1, 0, 6, 700, data, sizeof data);
+    TEST_ASSERT_EQUAL_INT(-1, ring_casm_feed(&a, payload, n, 0));
+
+    /* the consistent pair still establishes */
+    ring_casm_init(&a);
+    n = build_raw(payload, 1, 1, 0, 7, 700, data, sizeof data);
+    TEST_ASSERT_EQUAL_INT(0, ring_casm_feed(&a, payload, n, 0));
+    TEST_ASSERT_EQUAL_UINT8(1, a.active);
+}
+
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -318,5 +344,6 @@ int main(void) {
     RUN_TEST(test_reject_payload_shorter_than_9);
     RUN_TEST(test_reject_interior_chunk_short_data);
     RUN_TEST(test_reject_mismatched_count_or_total_same_gen_kind);
+    RUN_TEST(test_reject_count_inconsistent_with_total_at_establish);
     return UNITY_END();
 }

@@ -81,7 +81,7 @@ const char *notify_type_name(int t) {
     return s_type_name[t];
 }
 
-void notify_emit(ntf_type_t t, uint8_t idx, const char *fmt, ...) {
+static void emit_v(ntf_type_t t, uint8_t idx, uint8_t node_id, const char *fmt, va_list ap) {
     uint8_t i = idx > 7 ? 7 : idx;
     uint32_t now = s_now_fn();
     uint32_t last = s_last_ms[t][i];
@@ -89,14 +89,11 @@ void notify_emit(ntf_type_t t, uint8_t idx, const char *fmt, ...) {
     s_last_ms[t][i] = now;
 
     char line[NTF_LINE_MAX];
-    int n = snprintf(line, sizeof line, "NOTIFY %s %u ", s_type_name[t], (unsigned)s_node_id);
+    int n = snprintf(line, sizeof line, "NOTIFY %s %u ", s_type_name[t], (unsigned)node_id);
     if (n < 0) n = 0;
     if ((size_t)n >= sizeof line) n = (int)sizeof(line) - 1;
 
-    va_list ap;
-    va_start(ap, fmt);
     vsnprintf(line + n, sizeof(line) - (size_t)n, fmt, ap);
-    va_end(ap);
 
     size_t len = strlen(line);
     if (len >= NTF_LINE_MAX - 1) {          /* payload filled/overran the buffer: force the newline */
@@ -110,4 +107,22 @@ void notify_emit(ntf_type_t t, uint8_t idx, const char *fmt, ...) {
     for (int s = 0; s < s_sink_count; s++)
         if (s_sinks[s].mask & NTF_MASK(t))
             s_sinks[s].fn(s_sinks[s].ctx, line);
+}
+
+void notify_emit(ntf_type_t t, uint8_t idx, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    emit_v(t, idx, s_node_id, fmt, ap);
+    va_end(ap);
+}
+
+/* Same line, but printed as though ANOTHER node had emitted it -- for a master
+ * relaying a zone's NOTIFY, or reporting about a zone. Without it the master's
+ * own id (0, fixed at notify_init) went in the id field and the real subject had
+ * to be repeated as the first content word: "NOTIFY NODE 0 2 DEGRADED". */
+void notify_emit_as(uint8_t node_id, ntf_type_t t, uint8_t idx, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    emit_v(t, idx, node_id, fmt, ap);
+    va_end(ap);
 }

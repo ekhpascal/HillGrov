@@ -23,6 +23,11 @@ uint16_t    notify_sink_mask(int sink);
 int         notify_parse(const char *name);   /* type index; NTF_COUNT for "ALL"; -1 unknown */
 const char *notify_type_name(int t);
 void        notify_emit(ntf_type_t t, uint8_t idx, const char *fmt, ...);
+/* Emit as if node_id had said it, instead of this node's own notify_init id --
+   for the master relaying a zone's NOTIFY, or reporting about a zone, so the
+   line reads "NOTIFY <TYPE> <zone> <rest>" and not "NOTIFY <TYPE> 0 <zone>
+   <rest>". Rate limiting still keys on (type, idx). */
+void        notify_emit_as(uint8_t node_id, ntf_type_t t, uint8_t idx, const char *fmt, ...);
 
 #ifdef __cplusplus
 }

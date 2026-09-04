@@ -132,7 +132,10 @@ typedef struct {                       /* HEARTBEAT payload, spec §2.4: 62 + 14
 } hg_hb_t;
 
 int hg_hb_pack(const hg_hb_t *h, uint8_t *out, size_t cap);          /* returns payload len 62+14n / -1 */
-int hg_hb_parse(const uint8_t *p, size_t n, hg_hb_t *out);           /* -1 short / n_shelves>4 / len mismatch */
+int hg_hb_parse(const uint8_t *p, size_t n, hg_hb_t *out);           /* -1 short (n < 62+14*n_shelves) or
+                                                                        n_shelves>4; TRAILING bytes ignored so a
+                                                                        newer zone that appended a field stays
+                                                                        readable by an older master (§2.4/§6.3) */
 
 /* Wire sizes of the two FIXED-size payloads. Named because their pack
  * functions return 0/-1 (a status, never a length), so every caller has to
@@ -152,7 +155,8 @@ typedef struct {                       /* TIME_SYNC payload, HG_TS_LEN B */
 } hg_ts_t;
 
 int hg_ts_pack(const hg_ts_t *t, uint8_t out[HG_TS_LEN]);            /* fixed size: 0 = OK / -1 -- NOT a length */
-int hg_ts_parse(const uint8_t *p, size_t n, hg_ts_t *out);           /* requires n == HG_TS_LEN exactly */
+int hg_ts_parse(const uint8_t *p, size_t n, hg_ts_t *out);           /* requires n >= HG_TS_LEN; trailing bytes
+                                                                        ignored, same rule as hg_hb_parse */
 
 typedef struct { uint8_t mac[6]; uint8_t zone_id; } hg_assign_t;      /* HG_ASSIGN_LEN B */
 int hg_assign_pack(const hg_assign_t *a, uint8_t out[HG_ASSIGN_LEN]); /* fixed size: 0 = OK / -1 */
@@ -186,8 +190,9 @@ typedef struct {
 void ring_casm_init(ring_casm_t *a);
 int  ring_casm_feed(ring_casm_t *a, const uint8_t *payload, size_t n, uint32_t now_ms);
      /* 0 progress; 1 complete (buf[0..total) valid); -1 rejected (bad layout, idx>=count,
-        total>768, count>7).  gen/kind mismatch vs an active transfer RESTARTS with the new
-        transfer (spec §2.9).  Duplicate idx overwrites idempotently. */
+        total>768, count>7, count != ceil(total/112)).  gen/kind mismatch vs an active
+        transfer RESTARTS with the new transfer (spec §2.9).  Duplicate idx overwrites
+        idempotently. */
 int  ring_casm_idle_expired(const ring_casm_t *a, uint32_t now_ms);   /* active && now-last>2000 */
 
 /* Node health ladder + ring break analysis (ring_health.c) */

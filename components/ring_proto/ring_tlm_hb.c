@@ -123,9 +123,13 @@ int hg_hb_parse(const uint8_t *p, size_t n, hg_hb_t *out) {
     uint8_t n_shelves = p[9];
     if (n_shelves > 4) return -1;
 
-    /* Verify total length */
+    /* Protocol evolution (spec §2.4, §6.3): everything the declared n_shelves
+       promises must be present, but TRAILING bytes are ignored rather than
+       rejected. Zones are updated before the master, so a newer zone that has
+       APPENDED a field to its heartbeat stays readable by an older master --
+       fields are only ever appended, never reordered or resized. */
     size_t expected_len = 62 + 14 * n_shelves;
-    if (n != expected_len) return -1;
+    if (n < expected_len) return -1;
 
     /* Parse fixed base structure */
     memcpy(out->mac, p + 0, 6);

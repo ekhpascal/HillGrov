@@ -136,9 +136,23 @@ static void ring_rx_task(void *arg) {
         case UART_BREAK:
         case UART_FRAME_ERR:
         case UART_PARITY_ERR:
+            ring_dec_reset(&dec);   /* line-level fault: whatever is half-decoded is suspect */
+            s_ctr.rx_uart_err++;
+            break;
         case UART_FIFO_OVF:
-        case UART_BUFFER_FULL:   /* not in the brief's list, but the same class of hardware fault */
-            ring_dec_reset(&dec);
+        case UART_BUFFER_FULL:
+            /* IDF's documented recovery for both: bytes have already been lost
+             * and the driver's event queue can be backed up with events for
+             * data that no longer exists, so flush the input and reset the
+             * queue to restart from a known-empty state. Only FIFO_OVF resets
+             * the decoder: a hardware FIFO overrun means the byte stream itself
+             * has a hole, whereas BUFFER_FULL is back-pressure on the driver's
+             * ring buffer -- the bytes already fed to the decoder are intact,
+             * so the frame in flight is kept (and COBS's 0x00 delimiters resync
+             * the stream by themselves if anything really was dropped). */
+            if (ev.type == UART_FIFO_OVF) ring_dec_reset(&dec);
+            uart_flush_input(UART_NUM_2);
+            xQueueReset(s_uart_evtq);
             s_ctr.rx_uart_err++;
             break;
         default:

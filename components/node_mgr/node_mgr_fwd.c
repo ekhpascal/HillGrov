@@ -135,9 +135,20 @@ static int do_forward(uint8_t zone, const char *line, char *resp, int resp_len, 
     }
 
     if (s_fail_token) {
-        nmgr_lock(); nd->cmd_timeouts++; nmgr_unlock();
-        return errline(resp, resp_len, s_fail_token);
+        nmgr_lock();
+        nd->cmd_timeouts++;
+        /* ring_trk reports an unclaimed frame as ZONE_UNKNOWN, but this zone IS
+         * in the table (checked above): nobody answered for an id that exists,
+         * which is OFFLINE, not UNKNOWN (final review G5). */
+        const char *tok = s_fail_token;
+        if (nd->used && strcmp(tok, "ZONE_UNKNOWN") == 0) tok = "ZONE_OFFLINE";
+        nmgr_unlock();
+        return errline(resp, resp_len, tok);
     }
+    /* A reply arrived (OK or an ERR from the zone itself): the link works, so
+     * the consecutive-failure count starts over -- see node_mgr_enrol.c's note
+     * on why heartbeats no longer clear it. */
+    nmgr_lock(); nd->cmd_timeouts = 0; nmgr_unlock();
     snprintf(resp, resp_len, "%s", s_detail);
     return s_status == 0 ? 0 : -1;
 }

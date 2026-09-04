@@ -107,16 +107,13 @@ static void handle_ack(const ring_frame_t *f) {
 
 /* ---- NOTIFY / FAULT_EVENT passthrough ----
  * A zone's NOTIFY payload is already a complete "NOTIFY <TYPE> <zoneid> ..."
- * line (its own notify_emit, relayed verbatim by zone_ring's sink). notify.c
- * has no raw-broadcast API, so re-injecting it means re-running it through
- * the master's own notify_emit -- which always prints ITS OWN node id (0,
- * fixed at notify_init) right after the type. To avoid losing which zone
- * this is about, the parsed zone id is kept as the first content word, so a
- * master console line reads "NOTIFY <TYPE> 0 <zoneid> <rest>" -- the extra
- * leading 0 is an accepted artifact of notify.c's single-id design running
- * on a device that reports on OTHER entities; ring_health's own lines (see
- * node_mgr_enrol.c's nmgr_health_cb) get the same treatment for the same
- * reason. */
+ * line (its own notify_emit, relayed verbatim by zone_ring's sink), so
+ * re-injecting it through the master's notify_emit used to print the master's
+ * OWN id (0) in the id field and repeat the real subject as the first content
+ * word: "NOTIFY <TYPE> 0 <zoneid> <rest>". notify_emit_as() lets the master
+ * emit it AS the originating node, so the relayed line reads exactly as the
+ * zone printed it; ring_health's own lines about a zone (see node_mgr_enrol.c's
+ * nmgr_health_cb) get the same treatment for the same reason. */
 
 static void handle_notify_frame(const ring_frame_t *f) {
     char buf[RING_MAX_PAYLOAD + 1];
@@ -138,7 +135,7 @@ static void handle_notify_frame(const ring_frame_t *f) {
     int type = notify_parse(p);
     if (type < 0 || type >= NTF_COUNT) return;
     long id = strtol(id_str, NULL, 10);
-    notify_emit((ntf_type_t)type, (uint8_t)id, "%ld %s", id, rest);
+    notify_emit_as((uint8_t)id, (ntf_type_t)type, (uint8_t)id, "%s", rest);
 }
 
 /* FAULT_EVENT has no payload codec yet (SP2's fault store hasn't landed) --
@@ -147,7 +144,7 @@ static void handle_fault_event(const ring_frame_t *f) {
     char buf[RING_MAX_PAYLOAD + 1];
     size_t n = f->hdr.len > RING_MAX_PAYLOAD ? RING_MAX_PAYLOAD : f->hdr.len;
     memcpy(buf, f->payload, n); buf[n] = '\0';
-    notify_emit(NTF_ALARM, f->hdr.src, "%u %s", (unsigned)f->hdr.src, buf);
+    notify_emit_as(f->hdr.src, NTF_ALARM, f->hdr.src, "%s", buf);
 }
 
 static void dispatch_frame(const ring_frame_t *f, uint32_t now) {

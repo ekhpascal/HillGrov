@@ -1,5 +1,6 @@
 #include "unity.h"
 #include "node_store.h"
+#include "hg_blob.h"
 #include <string.h>
 
 void setUp(void) {}
@@ -464,6 +465,32 @@ static void test_fleet_reenrols_with_original_ids_after_table_wipe(void) {
     TEST_ASSERT_EQUAL_UINT8_ARRAY(mac_c, t.e[ztab_find_id(&t, 5)].mac, 6);
 }
 
+/* The pure seam behind node_store_nvs.c's length check (G5): a blob written by
+   an older, SHORTER ztab layout unpacks fine -- hg_blob reports MIGRATED and
+   zero-fills the tail. The NVS loader's "len != sizeof(buf)" test rejected such
+   a blob before ztab_unpack ever saw it, defeating that path. */
+static void test_unpack_shorter_migrated_blob_accepted(void) {
+    ztab_t t_in, t_out;
+    memset(&t_in, 0, sizeof(t_in));
+
+    uint8_t mac1[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x01};
+    ztab_assign(&t_in, mac1);
+    ztab_set_name(&t_in, 1, "Zone1");
+
+    /* wrap only the first 7 entries: a 168 B payload instead of 192 */
+    uint8_t buf[256];
+    size_t short_len = sizeof(ztab_ent_t) * 7;
+    size_t n = hg_blob_wrap(HG_MAGIC_ZTAB, 1, 9, &t_in, (uint16_t)short_len, buf, sizeof buf);
+    TEST_ASSERT_EQUAL_UINT32((uint32_t)(16 + short_len), (uint32_t)n);
+
+    uint32_t gen_out = 0;
+    TEST_ASSERT_EQUAL_INT(0, ztab_unpack(buf, n, &t_out, &gen_out));
+    TEST_ASSERT_EQUAL_UINT32(9, gen_out);
+    TEST_ASSERT_EQUAL_UINT8(1, t_out.e[0].id);
+    TEST_ASSERT_EQUAL_STRING("Zone1", t_out.e[0].name);
+    TEST_ASSERT_EQUAL_UINT8(0, t_out.e[7].id);   /* the entry that wasn't there reads as empty */
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_assign_fills_1_to_8_in_order);
@@ -492,5 +519,6 @@ int main(void) {
     RUN_TEST(test_enrol_claiming_free_id_keeps_the_claimed_id);
     RUN_TEST(test_enrol_unassigned_claim_still_gets_lowest_free);
     RUN_TEST(test_fleet_reenrols_with_original_ids_after_table_wipe);
+    RUN_TEST(test_unpack_shorter_migrated_blob_accepted);
     return UNITY_END();
 }

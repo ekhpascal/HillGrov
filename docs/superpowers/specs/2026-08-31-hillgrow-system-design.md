@@ -146,6 +146,8 @@ Ids: `0x00` Master · `0x01..0x10` reserved for zones by the protocol — V1 bui
 
 **CMD carries CLI text.** The zone executes it through the same table-driven `cmd_dispatch()` as its own console — one grammar, one range check, one safety gate, `GET`/`HELP` over the ring for free; the Master compiles in no zone vocabulary, so images cannot skew during one-at-a-time fleet updates. ACK detail is the verbatim reply line. Master-local failures map to CLI tokens `ZONE_TIMEOUT | ZONE_OFFLINE | ZONE_UNKNOWN | RING_DOWN | BUSY`.
 
+**Payload evolution.** Fields are only ever *appended* — never reordered, resized or removed — and the HEARTBEAT/TIME_SYNC parsers accept a payload longer than they understand, ignoring the trailing bytes (short is still rejected). That is what makes the zones-first update order of §6.3 safe: a newer zone's heartbeat stays readable by an older Master.
+
 Wire field values: `time_quality` {0 NONE, 1 COARSE (assumed/RTC-restored), 2 SYNCED}; `link_flags` b0 upstream_alive, b1 master_alive, b2 heard_by_master (from `online_mask`); shelf `out_flags` b0 pump, b1 fan, b2 vib, b3 light_on, b4 manual_override; `shelf_faults[n]` is the shelf-scoped fault subset of §3.8 with bit indices fixed in `fault.h`. Remote `GET`/`HELP` answers fit the single-ACK 125 B reply cap — longer replies truncate at a line boundary; full dumps (`GET CONFIG`, bare `HELP`) are Master-side operations (config cache / local table).
 
 ### 2.5 Store-and-forward
