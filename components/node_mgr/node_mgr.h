@@ -54,6 +54,17 @@ int  node_mgr_cfg_sync_failed(uint8_t zone);                    /* 1 = latched ย
                                                                     failure; GET NODE display */
 void node_mgr_mark_updating(uint8_t zone, uint32_t hold_ms);    /* fleet sequencer (Task 15) */
 
+/* Fleet OTA sequencer (Task 15, node_mgr_fleet.c/fleet_seq.c) -- signatures
+ * match node_ops_t's fw_* members exactly (master_cmds.h); cmd_table_master.c
+ * wires these in verbatim, replacing Task 14's NULL-safe -1 stubs. 0 = ok
+ * (fw_zone/fw_all: sequence accepted -- async, "OK QUEUED"+NOTIFY FW per
+ * spec ยง5.3; fw_abort: a running sequence was cancelled), -1 = rejected
+ * (already active, no assigned zones, or nothing to abort). */
+int  node_mgr_fw_zone(uint8_t zone);
+int  node_mgr_fw_all(void);
+int  node_mgr_fw_abort(void);
+int  node_mgr_fw_status(char *buf, size_t n);
+
 /* master's SET TIME hook (app_if_master.c's time_set wrapper): time_valid in
  * the TIME_SYNC broadcast is 0 until this has been called once. */
 void node_mgr_time_was_set(void);

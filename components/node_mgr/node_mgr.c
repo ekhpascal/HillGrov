@@ -82,7 +82,8 @@ static void route_trk_ev(const ring_trk_ev_t *ev) {
     case RING_T_CMD:        nmgr_fwd_on_ev(ev); break;
     case RING_T_CFG_GET:
     case RING_T_CFG_COMMIT: nmgr_cfg_on_ev(ev); break;
-    default: break;   /* FW_UPDATE: Task 15's fleet sequencer, not wired here */
+    case RING_T_FW_UPDATE:  nmgr_fleet_on_ev(ev); break;
+    default: break;
     }
 }
 
@@ -197,6 +198,7 @@ static void node_mgr_task(void *arg) {
                               nmgr_health_cb, NULL);
             nmgr_unlock();
             nmgr_cfg_tick_1s(now);
+            nmgr_fleet_tick_1s(now);
         }
         if (now - last_2s >= 2000) { last_2s = now; nmgr_broadcast_time_sync(now); }
 
@@ -208,6 +210,7 @@ void node_mgr_start(void) {
     s_trk_mux = xSemaphoreCreateMutex();
     s_state_mux = xSemaphoreCreateMutex();
     nmgr_fwd_init();
+    nmgr_fleet_init();
     xTaskCreatePinnedToCore(node_mgr_task, "node_mgr", 6144, NULL, 4, NULL, 1);
 }
 

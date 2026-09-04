@@ -13,16 +13,10 @@ static cmd_entry_t s_table[64];
 static int         s_n;
 static int         s_init;
 
-/* Task 15's fleet sequencer hasn't landed -- these three stay NULL-safe -1
- * stubs (ruling #5); master_cmds.c's fw rows map any non-zero rc to
- * ERR NOT_IMPLEMENTED until then. */
-static int stub_fw_zone(uint8_t zone)  { (void)zone; return -1; }
-static int stub_fw_all(void)           { return -1; }
-static int stub_fw_abort(void)         { return -1; }
-static int stub_fw_status(char *buf, size_t n) { snprintf(buf, n, "NOT_IMPLEMENTED"); return 0; }
-
 /* node_mgr's public API was shaped to match node_ops_t 1:1 (master_cmds.h),
- * so every member but the fw_* stubs above wires straight through. */
+ * so every member wires straight through -- including the fleet OTA
+ * sequencer's fw_* (Task 15, node_mgr_fleet.c/fleet_seq.c), replacing
+ * Task 14's NULL-safe -1 stubs. */
 static const node_ops_t MASTER_NODE_OPS = {
     .node_count      = node_mgr_node_count,
     .get             = node_mgr_get,
@@ -33,10 +27,10 @@ static const node_ops_t MASTER_NODE_OPS = {
     .trace           = ring_link_trace,
     .time_valid      = node_mgr_time_valid,
     .cfg_sync_failed = node_mgr_cfg_sync_failed,
-    .fw_zone         = stub_fw_zone,
-    .fw_all          = stub_fw_all,
-    .fw_abort        = stub_fw_abort,
-    .fw_status       = stub_fw_status,
+    .fw_zone         = node_mgr_fw_zone,
+    .fw_all          = node_mgr_fw_all,
+    .fw_abort        = node_mgr_fw_abort,
+    .fw_status       = node_mgr_fw_status,
 };
 
 /* Master picked up its first non-common rows in SP3 (OTA_TRIAL_ROWS, then

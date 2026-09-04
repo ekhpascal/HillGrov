@@ -13,6 +13,8 @@
 #include "app_if_common.h"
 #include "ring_link.h"
 #include "node_mgr.h"
+#include "wifi_ap.h"
+#include "fw_srv.h"
 
 static const char *TAG = "hg_main";
 extern const app_if_t APP_IF_MASTER;
@@ -53,10 +55,26 @@ void app_main(void) {
 
     ota_trial_start(1);
 
+    /* Task 15 ruling #7: AP -> httpd -> ring -> node_mgr -> trial
+     * drivers_ok, in that order. wifi_ap_start()/fw_srv_start() failures
+     * are logged and never abort boot (never-abort rule: greenhouse control
+     * still needs ring_link/node_mgr regardless of Wi-Fi/fleet-OTA
+     * availability this boot) -- they only gate whether drivers_ok fires,
+     * per ruling #1 ("do NOT call ota_trial_drivers_ok on failure"). */
+    int ap_ok = wifi_ap_start() == 0;
+    if (!ap_ok) ESP_LOGE(TAG, "wifi_ap_start failed -- AP/fleet-OTA unavailable this boot");
+    int fw_ok = ap_ok && fw_srv_start() == 0;
+    if (ap_ok && !fw_ok) ESP_LOGE(TAG, "fw_srv_start failed -- fleet OTA unavailable this boot");
+
     uint8_t mac[6];
     hg_app_get_mac(mac);
     ring_link_start(1, master_id_fn, mac);
     node_mgr_start();
+
+    /* spec §3.10 drivers criterion (master): AP netif + httpd both up,
+     * checked once here -- Task 10's plan-sequenced obligation this task
+     * completes. */
+    if (fw_ok) ota_trial_drivers_ok();
 
     notify_emit(NTF_BOOT, 0, "%s POWERON", esp_app_get_description()->version);
     vTaskDelete(NULL);

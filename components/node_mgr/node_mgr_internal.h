@@ -67,3 +67,67 @@ void nmgr_cfg_note_fresh_hb(uint8_t zone);                       /* node_mgr tas
 void nmgr_cfg_tick_1s(uint32_t now);
 void nmgr_cfg_on_chunk(const ring_frame_t *f, uint32_t now);
 void nmgr_cfg_on_ev(const ring_trk_ev_t *ev);
+
+/* fleet_seq.c: pure per-zone fleet OTA sequencer state machine (Task 15).
+ * No IDF headers anywhere in this section or in fleet_seq.c itself -- it
+ * touches no globals and calls nothing outside its own translation unit;
+ * every side effect comes back as one fleet_act_t per call and the caller
+ * (node_mgr_fleet.c, the glue half) executes it. Same "return one ev, let
+ * the caller do IO" shape ring_trk.c uses for the tracker. Host-tested
+ * directly (test_fleet_seq.c links only fleet_seq.c), mirroring how
+ * ota_trial/trial_eval.c sits pure and host-tested beside ota_trial.c's
+ * IDF glue in that component.
+ *
+ * Ladder per zone (controller ruling #3): PRECHECK (image_ok && online) ->
+ * FA_START (mark_updating + NOTIFY UPDATING + submit tracked FW_UPDATE,
+ * glue's job) -> ack ok -> WAIT_HB (new fw triple, or uptime-reset-with-
+ * cfg-intact, within 180 s) -> FA_DONE; anything else -> FA_FAILED and the
+ * whole run stops (fw_all: "stop on first failure" resolves the brief's
+ * own "target ONLINE else skip/fail" ambiguity toward "fail"). */
+typedef enum { FZS_IDLE = 0, FZS_PRECHECK, FZS_WAIT_ACK, FZS_WAIT_HB } fz_state_t;
+typedef struct {
+    uint8_t    zones[HG_MAX_ZONES];
+    uint8_t    n, idx;
+    uint8_t    active, cancel_req;
+    fz_state_t st;
+    uint32_t   deadline_ms;        /* WAIT_HB expiry */
+    uint16_t   seq;                /* tracked FW_UPDATE seq, WAIT_ACK/WAIT_HB */
+    uint8_t    pre_fw[3];
+    uint32_t   pre_uptime, pre_cfg_gen;
+} fleet_t;
+
+typedef enum { FA_NONE = 0, FA_START, FA_FAILED, FA_DONE } fleet_act_kind_t;
+typedef struct { fleet_act_kind_t kind; uint8_t zone; uint8_t fw[3]; } fleet_act_t;
+
+void fleet_init(fleet_t *s);
+int  fleet_start(fleet_t *s, const uint8_t *zones, uint8_t n);   /* 0 ok, -1 already active */
+void fleet_cancel(fleet_t *s);                                    /* "between zones": in-flight zone finishes on its own */
+/* 1 Hz-ish tick: PRECHECK judged from image_ok/online (current zone);
+   WAIT_HB judged from hb_valid/hb_fw/hb_uptime/hb_cfg_gen (current zone) vs
+   now_ms and the recorded deadline. Returns 1 with *out on FA_START/
+   FA_DONE/FA_FAILED, else 0 (WAIT_ACK: nothing to do here, see
+   fleet_on_ack). */
+int  fleet_tick(fleet_t *s, uint32_t now_ms, int image_ok, int online,
+                int hb_valid, const uint8_t hb_fw[3], uint32_t hb_uptime, uint32_t hb_cfg_gen,
+                fleet_act_t *out);
+/* the tracked FW_UPDATE's ACK (or ZONE_TIMEOUT/ZONE_UNKNOWN, ok=0 either
+   way) arrived; ignored outside WAIT_ACK or for a stale/foreign seq. */
+int  fleet_on_ack(fleet_t *s, uint16_t seq, int ok, fleet_act_t *out);
+/* records the glue's actual nmgr_submit() outcome for an FA_START just
+   issued; submitted=0 (tracker full/busy) fails the zone right there. */
+int  fleet_note_submitted(fleet_t *s, int submitted, uint16_t seq, uint32_t now_ms,
+                           const uint8_t pre_fw[3], uint32_t pre_uptime, uint32_t pre_cfg_gen,
+                           fleet_act_t *out);
+void fleet_status(const fleet_t *s, char *buf, size_t cap);       /* GET FW ZONE rendering */
+
+/* node_mgr_fleet.c: glue driving fleet_seq.c from node_mgr.c's task loop
+   (mirrors nmgr_cfg_tick_1s/nmgr_cfg_on_ev's wiring). node_mgr_fw_zone/
+   fw_all/fw_abort/fw_status (node_mgr.h) reach the SAME fleet_t instance
+   from cmd_task -- node_mgr_fleet.c guards it with its own dedicated mutex
+   (created here), the same "new foreign-task-shared state gets its own
+   lock" pattern node_mgr_fwd.c's s_busy uses, rather than reusing
+   nmgr_lock() (whose critical sections already call notify_emit(), so
+   nesting it under a second lock risks non-obvious ordering). */
+void nmgr_fleet_init(void);
+void nmgr_fleet_tick_1s(uint32_t now);
+void nmgr_fleet_on_ev(const ring_trk_ev_t *ev);
