@@ -40,9 +40,11 @@ typedef enum { RING_RT_DROP_SELF, RING_RT_CONSUME, RING_RT_CONSUME_FWD,
                RING_RT_FORWARD, RING_RT_DROP } ring_rt_t;
 ring_rt_t ring_route(int is_master, uint8_t my_id, const uint8_t my_mac[6],
                      const ring_hdr_t *h, const uint8_t *payload);
-     /* Zone rules (spec §2.5): src==my_id -> DROP_SELF; dst==my_id -> CONSUME;
-        dst==0xFF -> CONSUME_FWD; dst==0xFE -> (type==ASSIGN_ID && payload mac[0..5]==my_mac)
-        ? CONSUME : FORWARD; else ttl<=1 ? RING_RT_DROP : FORWARD.
+     /* Zone rules (spec §2.5): src==my_id -> DROP_SELF; dst==my_id -> CONSUME (both only
+        while my_id != 0xFE -- an unassigned node has no id to match on and knows its own
+        frames by MAC alone); dst==0xFF -> CONSUME_FWD; dst==0xFE ->
+        (type==ASSIGN_ID && payload mac[0..5]==my_mac) ? CONSUME : FORWARD;
+        else ttl<=1 ? RING_RT_DROP : FORWARD.
         Master rules: src==MASTER -> DROP_SELF (returned broadcast = ring-closed probe — caller
         inspects type before dropping); everything else CONSUME; master NEVER forwards. */
 

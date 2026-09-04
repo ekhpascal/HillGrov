@@ -1,6 +1,8 @@
 #include <string.h>
 #include <time.h>
 #include <sys/time.h>
+#include "esp_log.h"
+#include "app_if_common.h"
 #include "ring_link.h"
 #include "hg_store.h"
 #include "notify.h"
@@ -11,6 +13,8 @@
  * (the natural TIME_SYNC/ASSIGN_ID/link-state/inhibit group). */
 
 #define ZRING_LINK_MS 6000u   /* spec 2.7: zone link state LOST after 6000 ms without a frame */
+
+static const char *TAG = "zsync";
 
 static cmd_core_t *s_core;
 
@@ -54,6 +58,16 @@ void zsync_time_sync(const ring_frame_t *f, uint32_t now) {
 void zsync_assign_id(const ring_frame_t *f) {
     hg_assign_t a;
     if (hg_assign_parse(f->payload, f->hdr.len, &a) != 0) return;
+    /* Defence in depth: ring_route already routes 0xFE-addressed ASSIGN_IDs by
+     * MAC, so a frame naming someone else's MAC reaching this handler means the
+     * routing layer is broken -- say so loudly rather than adopting the id. */
+    uint8_t mac[6];
+    hg_app_get_mac(mac);
+    if (memcmp(a.mac, mac, 6) != 0) {
+        ESP_LOGW(TAG, "ASSIGN_ID for %02x:%02x:%02x:%02x:%02x:%02x ignored (not ours)",
+                 a.mac[0], a.mac[1], a.mac[2], a.mac[3], a.mac[4], a.mac[5]);
+        return;
+    }
     hg_store_set_zid(a.zone_id);
     if (s_core) s_core->zone_id = a.zone_id;   /* live: cmd_dispatch shares this exact struct with cmd_task */
     notify_set_node_id(a.zone_id);

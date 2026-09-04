@@ -78,6 +78,59 @@ static void test_zone_else_ttl_equals_0_drop(void) {
     TEST_ASSERT_EQUAL_INT(RING_RT_DROP, result);
 }
 
+/* ---- Unassigned zones identify their own frames by MAC only (spec §2.5) ----
+   my_id 0xFE is not an identity: it is "no identity yet". Matching src/dst
+   against it makes the first unassigned hop swallow every other unassigned
+   node's traffic -- both directions of the enrolment handshake. Loop
+   protection for 0xFE-sourced frames is the master being the ring sink plus
+   the TTL, not DROP_SELF. */
+
+static void test_unassigned_zone_src_unassigned_forwards(void) {
+    uint8_t my_mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    /* another still-unassigned zone's heartbeat, on its way to the master */
+    ring_hdr_t h = {.src = RING_ID_UNASSIGNED, .dst = RING_ID_MASTER, .type = RING_T_HEARTBEAT,
+                    .flags = 0, .ttl = 16, .len = 62, .seq = 110};
+    uint8_t payload[1] = {0};
+    ring_rt_t result = ring_route(0, RING_ID_UNASSIGNED, my_mac, &h, payload);
+    TEST_ASSERT_EQUAL_INT(RING_RT_FORWARD, result);
+}
+
+static void test_unassigned_zone_assign_id_other_mac_forwards(void) {
+    uint8_t my_mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    uint8_t payload[7] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x01};
+    ring_hdr_t h = {.src = RING_ID_MASTER, .dst = RING_ID_UNASSIGNED, .type = RING_T_ASSIGN_ID,
+                    .flags = 0, .ttl = 16, .len = 7, .seq = 111};
+    ring_rt_t result = ring_route(0, RING_ID_UNASSIGNED, my_mac, &h, payload);
+    TEST_ASSERT_EQUAL_INT(RING_RT_FORWARD, result);
+}
+
+static void test_unassigned_zone_assign_id_own_mac_consumes(void) {
+    uint8_t my_mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    uint8_t payload[7] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x02};
+    ring_hdr_t h = {.src = RING_ID_MASTER, .dst = RING_ID_UNASSIGNED, .type = RING_T_ASSIGN_ID,
+                    .flags = 0, .ttl = 16, .len = 7, .seq = 112};
+    ring_rt_t result = ring_route(0, RING_ID_UNASSIGNED, my_mac, &h, payload);
+    TEST_ASSERT_EQUAL_INT(RING_RT_CONSUME, result);
+}
+
+static void test_assigned_zone_still_drops_own_src(void) {
+    uint8_t my_mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    ring_hdr_t h = {.src = 3, .dst = RING_ID_MASTER, .type = RING_T_HEARTBEAT,
+                    .flags = 0, .ttl = 16, .len = 62, .seq = 113};
+    uint8_t payload[1] = {0};
+    ring_rt_t result = ring_route(0, 3, my_mac, &h, payload);
+    TEST_ASSERT_EQUAL_INT(RING_RT_DROP_SELF, result);
+}
+
+static void test_assigned_zone_still_consumes_own_dst(void) {
+    uint8_t my_mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    ring_hdr_t h = {.src = RING_ID_MASTER, .dst = 3, .type = RING_T_CMD,
+                    .flags = 0, .ttl = 16, .len = 4, .seq = 114};
+    uint8_t payload[1] = {0};
+    ring_rt_t result = ring_route(0, 3, my_mac, &h, payload);
+    TEST_ASSERT_EQUAL_INT(RING_RT_CONSUME, result);
+}
+
 static void test_zone_src_equals_my_id_and_dst_equals_my_id_drop_self(void) {
     uint8_t my_mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
     ring_hdr_t h = {.src = 5, .dst = 5, .type = RING_T_NOTIFY, .flags = 0, .ttl = 10, .len = 0, .seq = 109};
@@ -287,6 +340,11 @@ int main(void) {
     RUN_TEST(test_zone_else_ttl_greater_than_1_forward);
     RUN_TEST(test_zone_else_ttl_equals_1_drop);
     RUN_TEST(test_zone_else_ttl_equals_0_drop);
+    RUN_TEST(test_unassigned_zone_src_unassigned_forwards);
+    RUN_TEST(test_unassigned_zone_assign_id_other_mac_forwards);
+    RUN_TEST(test_unassigned_zone_assign_id_own_mac_consumes);
+    RUN_TEST(test_assigned_zone_still_drops_own_src);
+    RUN_TEST(test_assigned_zone_still_consumes_own_dst);
     RUN_TEST(test_zone_src_equals_my_id_and_dst_equals_my_id_drop_self);
     RUN_TEST(test_master_src_equals_master_drop_self);
     RUN_TEST(test_master_dst_equals_zone_consume);
