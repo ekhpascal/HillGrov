@@ -131,6 +131,37 @@ static void test_assigned_zone_still_consumes_own_dst(void) {
     TEST_ASSERT_EQUAL_INT(RING_RT_CONSUME, result);
 }
 
+/* The three paths an unassigned zone must still take normally -- the 0xFE gate
+   above removes its src/dst matching, so everything else has to fall through to
+   the ordinary broadcast/forward/ttl rules unchanged (review minor #7). */
+
+static void test_unassigned_zone_broadcast_consume_fwd(void) {
+    uint8_t my_mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    ring_hdr_t h = {.src = RING_ID_MASTER, .dst = RING_ID_BCAST, .type = RING_T_TIME_SYNC,
+                    .flags = 0, .ttl = 16, .len = 13, .seq = 115};
+    uint8_t payload[1] = {0};
+    ring_rt_t result = ring_route(0, RING_ID_UNASSIGNED, my_mac, &h, payload);
+    TEST_ASSERT_EQUAL_INT(RING_RT_CONSUME_FWD, result);
+}
+
+static void test_unassigned_zone_other_id_unicast_forwards(void) {
+    uint8_t my_mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    ring_hdr_t h = {.src = RING_ID_MASTER, .dst = 3, .type = RING_T_CMD,
+                    .flags = 0, .ttl = 5, .len = 4, .seq = 116};
+    uint8_t payload[1] = {0};
+    ring_rt_t result = ring_route(0, RING_ID_UNASSIGNED, my_mac, &h, payload);
+    TEST_ASSERT_EQUAL_INT(RING_RT_FORWARD, result);
+}
+
+static void test_unassigned_zone_unicast_ttl_1_drops(void) {
+    uint8_t my_mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    ring_hdr_t h = {.src = RING_ID_MASTER, .dst = 3, .type = RING_T_CMD,
+                    .flags = 0, .ttl = 1, .len = 4, .seq = 117};
+    uint8_t payload[1] = {0};
+    ring_rt_t result = ring_route(0, RING_ID_UNASSIGNED, my_mac, &h, payload);
+    TEST_ASSERT_EQUAL_INT(RING_RT_DROP, result);
+}
+
 static void test_zone_src_equals_my_id_and_dst_equals_my_id_drop_self(void) {
     uint8_t my_mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
     ring_hdr_t h = {.src = 5, .dst = 5, .type = RING_T_NOTIFY, .flags = 0, .ttl = 10, .len = 0, .seq = 109};
@@ -345,6 +376,9 @@ int main(void) {
     RUN_TEST(test_unassigned_zone_assign_id_own_mac_consumes);
     RUN_TEST(test_assigned_zone_still_drops_own_src);
     RUN_TEST(test_assigned_zone_still_consumes_own_dst);
+    RUN_TEST(test_unassigned_zone_broadcast_consume_fwd);
+    RUN_TEST(test_unassigned_zone_other_id_unicast_forwards);
+    RUN_TEST(test_unassigned_zone_unicast_ttl_1_drops);
     RUN_TEST(test_zone_src_equals_my_id_and_dst_equals_my_id_drop_self);
     RUN_TEST(test_master_src_equals_master_drop_self);
     RUN_TEST(test_master_dst_equals_zone_consume);

@@ -383,7 +383,7 @@ static void test_ts_pack_fixed_13(void) {
     t.online_mask = 0x00AA;
     t.inhibit_mask = 0x05;
 
-    uint8_t out[13];
+    uint8_t out[HG_TS_LEN];
     int result = hg_ts_pack(&t, out);
     TEST_ASSERT_EQUAL_INT(0, result);
     TEST_ASSERT_EQUAL_HEX8(0x78, out[0]);
@@ -402,7 +402,7 @@ static void test_ts_pack_fixed_13(void) {
 }
 
 static void test_ts_parse_succeeds(void) {
-    uint8_t buf[13];
+    uint8_t buf[HG_TS_LEN];
     buf[0] = 0x78; buf[1] = 0x56; buf[2] = 0x34; buf[3] = 0x12;
     buf[4] = 0xF0; buf[5] = 0xDE; buf[6] = 0xBC; buf[7] = 0x9A;
     buf[8] = 0x03;
@@ -422,17 +422,17 @@ static void test_ts_parse_succeeds(void) {
 }
 
 static void test_ts_parse_reject_short(void) {
-    uint8_t buf[12];
+    uint8_t buf[HG_TS_LEN - 1];
     hg_ts_t out;
     int result = hg_ts_parse(buf, sizeof buf, &out);
     TEST_ASSERT_EQUAL_INT(-1, result);
 }
 
 static void test_ts_parse_reject_long(void) {
-    uint8_t buf[14];
+    uint8_t buf[HG_TS_LEN + 1];
     hg_ts_t out;
     int result = hg_ts_parse(buf, sizeof buf, &out);
-    TEST_ASSERT_EQUAL_INT(-1, result);  /* Reject if not exact 13 */
+    TEST_ASSERT_EQUAL_INT(-1, result);  /* Reject if not exactly HG_TS_LEN */
 }
 
 static void test_ts_roundtrip(void) {
@@ -445,7 +445,7 @@ static void test_ts_roundtrip(void) {
     orig.online_mask = 0x0155;
     orig.inhibit_mask = 0x01;
 
-    uint8_t buf[13];
+    uint8_t buf[HG_TS_LEN];
     int pres = hg_ts_pack(&orig, buf);
     TEST_ASSERT_EQUAL_INT(0, pres);
 
@@ -467,7 +467,7 @@ static void test_assign_pack_fixed_7(void) {
     memcpy(a.mac, "\x11\x22\x33\x44\x55\x66", 6);
     a.zone_id = 0x05;
 
-    uint8_t out[7];
+    uint8_t out[HG_ASSIGN_LEN];
     int result = hg_assign_pack(&a, out);
     TEST_ASSERT_EQUAL_INT(0, result);
     TEST_ASSERT_EQUAL_HEX8(0x11, out[0]);
@@ -480,7 +480,7 @@ static void test_assign_pack_fixed_7(void) {
 }
 
 static void test_assign_parse_succeeds(void) {
-    uint8_t buf[7] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x05 };
+    uint8_t buf[HG_ASSIGN_LEN] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x05 };
 
     hg_assign_t out;
     int result = hg_assign_parse(buf, sizeof buf, &out);
@@ -490,17 +490,17 @@ static void test_assign_parse_succeeds(void) {
 }
 
 static void test_assign_parse_reject_short(void) {
-    uint8_t buf[6];
+    uint8_t buf[HG_ASSIGN_LEN - 1];
     hg_assign_t out;
     int result = hg_assign_parse(buf, sizeof buf, &out);
     TEST_ASSERT_EQUAL_INT(-1, result);
 }
 
 static void test_assign_parse_reject_long(void) {
-    uint8_t buf[8];
+    uint8_t buf[HG_ASSIGN_LEN + 1];
     hg_assign_t out;
     int result = hg_assign_parse(buf, sizeof buf, &out);
-    TEST_ASSERT_EQUAL_INT(-1, result);  /* Reject if not exact 7 */
+    TEST_ASSERT_EQUAL_INT(-1, result);  /* Reject if not exactly HG_ASSIGN_LEN */
 }
 
 static void test_assign_roundtrip(void) {
@@ -508,7 +508,7 @@ static void test_assign_roundtrip(void) {
     memcpy(orig.mac, "\xAA\xBB\xCC\xDD\xEE\xFF", 6);
     orig.zone_id = 0x02;
 
-    uint8_t buf[7];
+    uint8_t buf[HG_ASSIGN_LEN];
     int pres = hg_assign_pack(&orig, buf);
     TEST_ASSERT_EQUAL_INT(0, pres);
 

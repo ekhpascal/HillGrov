@@ -42,6 +42,17 @@ static uint16_t       s_synced_notify_mask = ZRING_NOTIFY_MASK;
 static uint32_t     s_last_hb_ms;
 static volatile int  s_hb_now = 1;             /* immediate-send flag: link start / ASSIGN_ID */
 
+#define ZRING_HB_PERIOD_MS  2000u   /* spec 2.7: HEARTBEAT every 2000 ms ... */
+#define ZRING_HB_FLOOR_MS    500u   /* ... immediate triggers "rate-limited 1/500 ms" */
+
+/* Two headers, two names for "no id yet": hg_cfg_types.h's HG_NODE_UNASSIGNED
+ * (what hg_store persists and cmd_core carries) and ring_proto.h's
+ * RING_ID_UNASSIGNED (what goes on the wire and what ring_route matches). They
+ * are compared against each other all over the zone; this TU is the one that
+ * sees both, so pin them here (review minor #3). */
+_Static_assert(HG_NODE_UNASSIGNED == RING_ID_UNASSIGNED,
+               "unassigned-node id must be the same value on the wire and in the store");
+
 static uint32_t now_ms(void) { return s_core->now_ms(); }
 
 /* TIME_SYNC/ASSIGN_ID, link-state (W_LINK_LOST) and the inhibit-mask
@@ -241,7 +252,14 @@ static void zone_ring_task(void *arg) {
         ota_trial_tick();
         uint32_t now = now_ms();
         zsync_link_tick(now);
-        if (s_hb_now || (now - s_last_hb_ms) >= 2000) send_hb(now);
+        /* spec 2.7's floor: an immediate trigger (link start, ASSIGN_ID, fault
+         * edge) may bring the next heartbeat forward, but never closer than
+         * 500 ms to the last one. s_hb_now stays latched until it actually
+         * fires (send_hb clears it), so a trigger inside the floor window is
+         * delayed, not lost. Without this any per-heartbeat stimulus from the
+         * master turns the pair into a wire-speed loop. */
+        uint32_t since_hb = now - s_last_hb_ms;
+        if ((s_hb_now && since_hb >= ZRING_HB_FLOOR_MS) || since_hb >= ZRING_HB_PERIOD_MS) send_hb(now);
     }
 }
 

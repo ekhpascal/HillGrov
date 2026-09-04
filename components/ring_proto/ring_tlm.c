@@ -6,7 +6,7 @@
    TIME_SYNC
    ============================================================================ */
 
-int hg_ts_pack(const hg_ts_t *t, uint8_t out[13]) {
+int hg_ts_pack(const hg_ts_t *t, uint8_t out[HG_TS_LEN]) {
     if (!t || !out) return -1;
 
     out[0] = (uint8_t)(t->utc & 0xFF);             /* [0..3]: utc LE */
@@ -31,7 +31,7 @@ int hg_ts_pack(const hg_ts_t *t, uint8_t out[13]) {
 }
 
 int hg_ts_parse(const uint8_t *p, size_t n, hg_ts_t *out) {
-    if (!p || !out || n != 13) return -1;
+    if (!p || !out || n != HG_TS_LEN) return -1;
 
     out->utc = ((uint32_t)p[0]) |
                ((uint32_t)p[1] << 8) |
@@ -58,7 +58,7 @@ int hg_ts_parse(const uint8_t *p, size_t n, hg_ts_t *out) {
    ASSIGN_ID
    ============================================================================ */
 
-int hg_assign_pack(const hg_assign_t *a, uint8_t out[7]) {
+int hg_assign_pack(const hg_assign_t *a, uint8_t out[HG_ASSIGN_LEN]) {
     if (!a || !out) return -1;
 
     memcpy(out + 0, a->mac, 6);                    /* [0..5]: mac */
@@ -68,7 +68,7 @@ int hg_assign_pack(const hg_assign_t *a, uint8_t out[7]) {
 }
 
 int hg_assign_parse(const uint8_t *p, size_t n, hg_assign_t *out) {
-    if (!p || !out || n != 7) return -1;
+    if (!p || !out || n != HG_ASSIGN_LEN) return -1;
 
     memcpy(out->mac, p + 0, 6);
     out->zone_id = p[6];

@@ -74,8 +74,9 @@ int nmgr_unassigned_copy(uint8_t macs[][6], int cap) {
  * hg_assign_parse/hg_ts_parse (both exact-length) then rejected in silence. */
 static void send_assign(const uint8_t mac[6], uint8_t zone_id) {
     hg_assign_t a; memcpy(a.mac, mac, 6); a.zone_id = zone_id;
-    uint8_t payload[7];
-    if (hg_assign_pack(&a, payload) != 0) return;
+    uint8_t payload[HG_ASSIGN_LEN];
+    if (hg_assign_pack(&a, payload) < 0) return;   /* minor #4: "< 0" reads correctly under both
+                                                      pack conventions (0 = OK here, a length elsewhere) */
     nmgr_send_raw(RING_ID_UNASSIGNED, RING_T_ASSIGN_ID, payload, (uint8_t)sizeof payload);
 }
 
@@ -161,7 +162,15 @@ void nmgr_enrol_handle_hb(const ring_frame_t *f) {
     update_telemetry(nd, out_id, &f->hdr, &hb);
     nmgr_unlock();
 
-    send_assign(hb.mac, out_id);   /* KNOWN/STALE/ASSIGNED all (re)assert the same id, spec §2.8 */
+    /* Assert the id ONLY when the sender isn't already using it. Re-asserting
+     * on every heartbeat is what closed the HB<->ASSIGN_ID feedback loop once
+     * 2469706 made ASSIGN_ID parseable again: the zone answered each ASSIGN_ID
+     * with an immediate heartbeat, which drew the next ASSIGN_ID, at wire
+     * speed (measured: 205 forwards per 10 s vs ~15 nominal). A zone whose
+     * hdr.src already equals the id the ztab resolved needs no assertion;
+     * unassigned (0xFE) and stale-id senders still get one, which is every
+     * case that has anything to correct. Spec §2.8. */
+    if (f->hdr.src != out_id) send_assign(hb.mac, out_id);
 }
 
 void nmgr_broadcast_time_sync(uint32_t now) {
@@ -174,8 +183,8 @@ void nmgr_broadcast_time_sync(uint32_t now) {
     t.online_mask  = ring_online_mask(nmgr_table(), HG_MAX_ZONES, now);
     nmgr_unlock();
     t.inhibit_mask = 0;   /* SP5 */
-    uint8_t payload[13];
-    if (hg_ts_pack(&t, payload) != 0) return;   /* fixed-size codec: 0 = OK, see send_assign */
+    uint8_t payload[HG_TS_LEN];
+    if (hg_ts_pack(&t, payload) < 0) return;    /* fixed-size codec: 0 = OK, see send_assign */
     nmgr_send_raw(RING_ID_BCAST, RING_T_TIME_SYNC, payload, (uint8_t)sizeof payload);
 }
 

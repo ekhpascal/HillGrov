@@ -68,6 +68,20 @@ void zsync_assign_id(const ring_frame_t *f) {
                  a.mac[0], a.mac[1], a.mac[2], a.mac[3], a.mac[4], a.mac[5]);
         return;
     }
+    /* hg_store_set_zid() takes any byte: 0x00 (the master's own id) or 0xFF
+     * (broadcast) would poison routing for good, since the id is persisted
+     * and reloaded on every boot. Only 1..HG_MAX_ZONES and the "no id yet"
+     * sentinel are legal on the wire (spec 2.8). */
+    if (!((a.zone_id >= 1 && a.zone_id <= HG_MAX_ZONES) || a.zone_id == RING_ID_UNASSIGNED)) {
+        ESP_LOGW(TAG, "ASSIGN_ID with illegal zone_id %u ignored", a.zone_id);
+        return;
+    }
+    /* Re-assert of the id we already hold: a genuine no-op. Persisting it
+     * again and asking for an immediate heartbeat is what let a master that
+     * re-asserts per heartbeat run the pair at wire speed -- the zone must
+     * not answer an assignment that changes nothing. */
+    if (a.zone_id == hg_store_zid()) return;
+
     hg_store_set_zid(a.zone_id);
     if (s_core) s_core->zone_id = a.zone_id;   /* live: cmd_dispatch shares this exact struct with cmd_task */
     notify_set_node_id(a.zone_id);

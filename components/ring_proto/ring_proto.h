@@ -128,7 +128,15 @@ typedef struct {                       /* HEARTBEAT payload, spec §2.4: 62 + 14
 int hg_hb_pack(const hg_hb_t *h, uint8_t *out, size_t cap);          /* returns payload len 62+14n / -1 */
 int hg_hb_parse(const uint8_t *p, size_t n, hg_hb_t *out);           /* -1 short / n_shelves>4 / len mismatch */
 
-typedef struct {                       /* TIME_SYNC payload, 13 B */
+/* Wire sizes of the two FIXED-size payloads. Named because their pack
+ * functions return 0/-1 (a status, never a length), so every caller has to
+ * spell the length out for itself when it builds the frame -- a bare 13/7
+ * there is exactly the mistake that put len=0 on every ASSIGN_ID and
+ * TIME_SYNC (see node_mgr_enrol.c). */
+#define HG_TS_LEN      13
+#define HG_ASSIGN_LEN  7
+
+typedef struct {                       /* TIME_SYNC payload, HG_TS_LEN B */
     uint32_t utc;                      /* 0..3 */
     int32_t  utc_offset_s;             /* 4..7 */
     uint8_t  flags;                    /* 8: b0 time_valid, b1 ntp */
@@ -137,19 +145,19 @@ typedef struct {                       /* TIME_SYNC payload, 13 B */
     uint8_t  inhibit_mask;             /* 12: b0 PUMPS b1 LIGHTS b2 ALL */
 } hg_ts_t;
 
-int hg_ts_pack(const hg_ts_t *t, uint8_t out[13]);   /* fixed size: 0 = OK / -1 -- NOT a length */
-int hg_ts_parse(const uint8_t *p, size_t n, hg_ts_t *out);           /* requires n == 13 exactly */
+int hg_ts_pack(const hg_ts_t *t, uint8_t out[HG_TS_LEN]);            /* fixed size: 0 = OK / -1 -- NOT a length */
+int hg_ts_parse(const uint8_t *p, size_t n, hg_ts_t *out);           /* requires n == HG_TS_LEN exactly */
 
-typedef struct { uint8_t mac[6]; uint8_t zone_id; } hg_assign_t;      /* 7 B */
-int hg_assign_pack(const hg_assign_t *a, uint8_t out[7]);            /* fixed size: 0 = OK / -1 */
-int hg_assign_parse(const uint8_t *p, size_t n, hg_assign_t *out);   /* requires n == 7 exactly */
+typedef struct { uint8_t mac[6]; uint8_t zone_id; } hg_assign_t;      /* HG_ASSIGN_LEN B */
+int hg_assign_pack(const hg_assign_t *a, uint8_t out[HG_ASSIGN_LEN]); /* fixed size: 0 = OK / -1 */
+int hg_assign_parse(const uint8_t *p, size_t n, hg_assign_t *out);   /* requires n == HG_ASSIGN_LEN exactly */
 
 typedef struct { uint16_t reboot_delay_ms; char ssid[33]; char pass[65]; } hg_fwu_t;
-int hg_fwu_pack(const hg_fwu_t *f, uint8_t *out, size_t cap);        /* 2 + 1+ssid_len + 1+pass_len <= 99 */
+int hg_fwu_pack(const hg_fwu_t *f, uint8_t *out, size_t cap);        /* RETURNS the payload len (2 + 1+ssid_len + 1+pass_len <= 99) / -1 */
 int hg_fwu_parse(const uint8_t *p, size_t n, hg_fwu_t *out);         /* enforces NUL-termination + len bounds */
 
 typedef struct { uint16_t acked_seq; uint8_t status; char detail[126]; uint8_t detail_len; } hg_ack_t;
-int hg_ack_pack(const hg_ack_t *a, uint8_t *out, size_t cap);        /* 3 + detail_len */
+int hg_ack_pack(const hg_ack_t *a, uint8_t *out, size_t cap);        /* RETURNS the payload len (3 + detail_len) / -1 */
 int hg_ack_parse(const uint8_t *p, size_t n, hg_ack_t *out);         /* detail NUL-terminated on parse */
 
 /* Config transfer chunker + reassembler (ring_cfgx.c) */

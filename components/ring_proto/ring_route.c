@@ -35,7 +35,7 @@ ring_rt_t ring_route(int is_master, uint8_t my_id, const uint8_t my_mac[6],
     }
 
     if (h->dst == RING_ID_UNASSIGNED) {
-        if (h->type == RING_T_ASSIGN_ID && h->len >= 7) {
+        if (h->type == RING_T_ASSIGN_ID && h->len >= HG_ASSIGN_LEN) {
             if (memcmp(payload, my_mac, 6) == 0) {
                 return RING_RT_CONSUME;
             }
