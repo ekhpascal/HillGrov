@@ -22,6 +22,20 @@ int ztab_find_id(const ztab_t *t, uint8_t id) {
     return -1;
 }
 
+/* Put mac in the first empty slot holding the given (already-verified free) id.
+   -1 = no empty slot (table full). */
+static int ztab_place(ztab_t *t, const uint8_t mac[6], uint8_t id) {
+    for (int i = 0; i < HG_MAX_ZONES; i++) {
+        if (t->e[i].id != 0) continue;
+        memcpy(t->e[i].mac, mac, 6);
+        t->e[i].id = id;
+        t->e[i].flags = ZTAB_F_ASSIGNED | ZTAB_F_UNCONFIGURED;
+        memset(t->e[i].name, 0, 16);
+        return i;
+    }
+    return -1;
+}
+
 int ztab_assign(ztab_t *t, const uint8_t mac[6]) {
     if (!t || !mac) return -1;
 
@@ -33,19 +47,8 @@ int ztab_assign(ztab_t *t, const uint8_t mac[6]) {
 
     /* Find lowest free id 1..8 */
     for (uint8_t id = 1; id <= HG_MAX_ZONES; id++) {
-        int id_slot = ztab_find_id(t, id);
-        if (id_slot < 0) {
-            /* This id is free, find first empty slot */
-            for (int i = 0; i < HG_MAX_ZONES; i++) {
-                if (t->e[i].id == 0) {
-                    memcpy(t->e[i].mac, mac, 6);
-                    t->e[i].id = id;
-                    t->e[i].flags = ZTAB_F_ASSIGNED | ZTAB_F_UNCONFIGURED;
-                    memset(t->e[i].name, 0, 16);
-                    return id;
-                }
-            }
-        }
+        if (ztab_find_id(t, id) >= 0) continue;
+        return ztab_place(t, mac, id) < 0 ? -1 : (int)id;
     }
 
     return -1;  /* Table full */
@@ -95,7 +98,6 @@ ztab_en_t ztab_enrol(ztab_t *t, const uint8_t mac[6], uint8_t claimed_id, uint8_
 
     /* MAC is unknown */
 
-    /* Check if claimed_id is already taken by a different MAC */
     if (claimed_id >= 1 && claimed_id <= HG_MAX_ZONES) {
         int id_slot = ztab_find_id(t, claimed_id);
         if (id_slot >= 0) {
@@ -103,9 +105,20 @@ ztab_en_t ztab_enrol(ztab_t *t, const uint8_t mac[6], uint8_t claimed_id, uint8_
             if (out_id) *out_id = claimed_id;
             return ZTAB_EN_CONFLICT;
         }
+        /* Claimed id is FREE: honour it. Id stability is the intent of spec
+           §2.8 and of §4.4's "Master NVS loss self-heals" -- after a wiped
+           master table every zone still knows its own id and re-claims it in
+           its first heartbeat, so the fleet keeps its numbering (and its
+           labels, cabling and operator habits) instead of being renumbered
+           lowest-free, which also fired spurious ID_CONFLICTs when the
+           renumbering collided with a zone that had not been heard yet.
+           Lowest-free is for a zone that claims NOTHING (0xFE, or 0). */
+        if (ztab_place(t, mac, claimed_id) < 0) return ZTAB_EN_FULL;
+        if (out_id) *out_id = claimed_id;
+        return ZTAB_EN_ASSIGNED;
     }
 
-    /* Try to assign a new id */
+    /* Claims nothing: give it the lowest free id */
     int new_id = ztab_assign(t, mac);
     if (new_id < 0) {
         return ZTAB_EN_FULL;

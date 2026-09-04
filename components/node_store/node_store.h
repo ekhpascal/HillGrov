@@ -35,7 +35,9 @@ int ztab_clear(ztab_t *t, uint8_t id);                           /* forget the e
 
 typedef enum {
     ZTAB_EN_KNOWN = 0,      /* MAC already has this id -> re-send ASSIGN_ID */
-    ZTAB_EN_ASSIGNED,        /* new MAC assigned (out_id) -> save + ASSIGN_ID + NOTIFY NODE NEW */
+    ZTAB_EN_ASSIGNED,        /* new MAC assigned (out_id): its own claimed id when that id is free
+                                (id stability after a master NVS loss), else lowest free -> save +
+                                ASSIGN_ID + NOTIFY NODE NEW */
     ZTAB_EN_CONFLICT,        /* claimed id owned by another MAC -> reset intruder to 0xFE */
     ZTAB_EN_STALE,           /* known MAC heartbeating with wrong/0xFE id -> re-send ASSIGN_ID */
     ZTAB_EN_FULL

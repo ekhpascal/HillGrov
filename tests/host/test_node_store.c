@@ -391,7 +391,10 @@ static void test_enrol_stale_vs_conflict_precedence(void) {
     TEST_ASSERT_EQUAL_UINT8_ARRAY(mac_b, t.e[b_slot].mac, 6);
 }
 
-static void test_enrol_claiming_free_id_gets_lowest_free(void) {
+/* Re-pinned (final review G1): an unknown MAC claiming a FREE id KEEPS that id.
+   Id stability is the intent of spec 2.8 / 4.4's "Master NVS loss self-heals";
+   lowest-free is only for a zone that claims nothing (0xFE or 0). */
+static void test_enrol_claiming_free_id_keeps_the_claimed_id(void) {
     ztab_t t;
     memset(&t, 0, sizeof(t));
 
@@ -402,17 +405,63 @@ static void test_enrol_claiming_free_id_gets_lowest_free(void) {
     int id1 = ztab_assign(&t, mac1);
     TEST_ASSERT_EQUAL_INT(1, id1);
 
-    /* Unknown MAC claims id 5 (which is free), but ids 2,3,4 are also free */
-    /* Must get lowest-free (id 2), not the claimed id */
+    /* Unknown MAC claims id 5, which is free (2,3,4 are free too) */
     uint8_t out_id = 0;
     ztab_en_t verdict = ztab_enrol(&t, mac_new, 5, &out_id);
     TEST_ASSERT_EQUAL_INT(ZTAB_EN_ASSIGNED, verdict);
-    TEST_ASSERT_EQUAL_UINT8(2, out_id);  /* Gets lowest-free, not claimed id 5 */
+    TEST_ASSERT_EQUAL_UINT8(5, out_id);
 
-    /* Verify MAC is assigned to id 2 */
     int new_slot = ztab_find_mac(&t, mac_new);
-    TEST_ASSERT_EQUAL_INT(1, new_slot);  /* Should be in slot 1 (id 2) */
-    TEST_ASSERT_EQUAL_UINT8(2, t.e[new_slot].id);
+    TEST_ASSERT_EQUAL_INT(1, new_slot);              /* first empty slot */
+    TEST_ASSERT_EQUAL_UINT8(5, t.e[new_slot].id);    /* holding the claimed id */
+    TEST_ASSERT_EQUAL_UINT8(ZTAB_F_ASSIGNED | ZTAB_F_UNCONFIGURED, t.e[new_slot].flags);
+}
+
+static void test_enrol_unassigned_claim_still_gets_lowest_free(void) {
+    ztab_t t;
+    memset(&t, 0, sizeof(t));
+
+    uint8_t mac1[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x01};
+    uint8_t mac_new[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0xFF};
+    TEST_ASSERT_EQUAL_INT(1, ztab_assign(&t, mac1));
+
+    uint8_t out_id = 0;
+    ztab_en_t verdict = ztab_enrol(&t, mac_new, 0xFE, &out_id);   /* claims nothing */
+    TEST_ASSERT_EQUAL_INT(ZTAB_EN_ASSIGNED, verdict);
+    TEST_ASSERT_EQUAL_UINT8(2, out_id);
+}
+
+/* The self-heal the ruling exists for: the master's table is wiped, every zone
+   still knows its own id and re-claims it in its first heartbeat. */
+static void test_fleet_reenrols_with_original_ids_after_table_wipe(void) {
+    ztab_t t;
+    memset(&t, 0, sizeof(t));
+
+    uint8_t mac_a[6] = {0x24, 0x6f, 0x28, 0x00, 0x2a, 0x88};   /* was id 1 */
+    uint8_t mac_b[6] = {0x24, 0x6f, 0x28, 0x00, 0x2a, 0xd0};   /* was id 2 */
+    uint8_t mac_c[6] = {0x24, 0x6f, 0x28, 0x00, 0x2a, 0x11};   /* was id 5 */
+
+    /* heartbeats arrive in an order unrelated to the ids */
+    uint8_t out_id = 0;
+    TEST_ASSERT_EQUAL_INT(ZTAB_EN_ASSIGNED, ztab_enrol(&t, mac_c, 5, &out_id));
+    TEST_ASSERT_EQUAL_UINT8(5, out_id);
+    TEST_ASSERT_EQUAL_INT(ZTAB_EN_ASSIGNED, ztab_enrol(&t, mac_a, 1, &out_id));
+    TEST_ASSERT_EQUAL_UINT8(1, out_id);
+    TEST_ASSERT_EQUAL_INT(ZTAB_EN_ASSIGNED, ztab_enrol(&t, mac_b, 2, &out_id));
+    TEST_ASSERT_EQUAL_UINT8(2, out_id);
+
+    /* second heartbeat from each: now simply KNOWN, no reassignment, no conflict */
+    TEST_ASSERT_EQUAL_INT(ZTAB_EN_KNOWN, ztab_enrol(&t, mac_a, 1, &out_id));
+    TEST_ASSERT_EQUAL_UINT8(1, out_id);
+    TEST_ASSERT_EQUAL_INT(ZTAB_EN_KNOWN, ztab_enrol(&t, mac_b, 2, &out_id));
+    TEST_ASSERT_EQUAL_UINT8(2, out_id);
+    TEST_ASSERT_EQUAL_INT(ZTAB_EN_KNOWN, ztab_enrol(&t, mac_c, 5, &out_id));
+    TEST_ASSERT_EQUAL_UINT8(5, out_id);
+
+    /* and the ids sit on the original MACs */
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(mac_a, t.e[ztab_find_id(&t, 1)].mac, 6);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(mac_b, t.e[ztab_find_id(&t, 2)].mac, 6);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(mac_c, t.e[ztab_find_id(&t, 5)].mac, 6);
 }
 
 int main(void) {
@@ -440,6 +489,8 @@ int main(void) {
     RUN_TEST(test_unpack_short_buffer_rejects);
     RUN_TEST(test_set_name_nul_padding);
     RUN_TEST(test_enrol_stale_vs_conflict_precedence);
-    RUN_TEST(test_enrol_claiming_free_id_gets_lowest_free);
+    RUN_TEST(test_enrol_claiming_free_id_keeps_the_claimed_id);
+    RUN_TEST(test_enrol_unassigned_claim_still_gets_lowest_free);
+    RUN_TEST(test_fleet_reenrols_with_original_ids_after_table_wipe);
     return UNITY_END();
 }
