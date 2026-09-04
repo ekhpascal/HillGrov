@@ -74,6 +74,18 @@ static void ring_link_dispatch(const ring_hdr_t *h, const uint8_t *payload) {
         /* master's own TIME_SYNC broadcast returning is the ring-closed probe
          * (spec §2.5/§2.7) -- stamp before dropping. A zone's DROP_SELF just counts. */
         if (s_is_master && h->type == RING_T_TIME_SYNC) s_ts_returned_ms = now_ms();
+        /* Task 13 ruling #9 (authorized ring_link extension): a master-sent
+         * TRACKED unicast (CMD/FW_UPDATE/CFG_COMMIT/CFG_GET) coming back as
+         * DROP_SELF means the addressed id doesn't exist on the ring -- no
+         * zone claimed it. node_mgr's tracker needs to see this to fail the
+         * pending entry fast (ring_trk_unclaimed) instead of waiting out a
+         * full ack-timeout ladder, so it's ALSO copied into the consume
+         * queue here; the ttl-0 guard and the TIME_SYNC probe stamp above
+         * are unchanged. */
+        if (s_is_master &&
+            (h->type == RING_T_CMD || h->type == RING_T_FW_UPDATE ||
+             h->type == RING_T_CFG_COMMIT || h->type == RING_T_CFG_GET))
+            ring_link_enqueue(h, payload);
         break;
     case RING_RT_CONSUME:
         ring_link_enqueue(h, payload);
@@ -162,6 +174,13 @@ int ring_link_send(const ring_hdr_t *h, const uint8_t *payload) {
     int n = ring_frame_encode(h, payload, wire, sizeof wire);
     if (n < 0) return -1;
     uart_write_bytes(UART_NUM_2, (const char *)wire, (size_t)n);
+    s_ctr.tx_count++;
+    return 0;
+}
+
+int ring_link_send_raw(const uint8_t *wire, size_t len) {
+    if (!wire || len == 0 || len > RING_WIRE_MAX) return -1;
+    uart_write_bytes(UART_NUM_2, (const char *)wire, len);
     s_ctr.tx_count++;
     return 0;
 }

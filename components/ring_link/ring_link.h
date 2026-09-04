@@ -24,6 +24,14 @@ int  ring_link_recv(ring_frame_t *f, uint32_t wait_ms);
  * ring_frame_encode rejects the header/payload. */
 int  ring_link_send(const ring_hdr_t *h, const uint8_t *payload);
 
+/* Sends an already-COBS/CRC-encoded wire frame verbatim. node_mgr's pending
+ * tracker (ring_trk) encodes a submitted frame ONCE and replays those exact
+ * bytes on every stop-and-wait retry (spec §2.6); re-running it through
+ * ring_link_send() would re-encode (harmless CRC-wise, but defeats the
+ * "byte-identical retries" contract ring_trk documents). Returns 0 on
+ * success, -1 if wire is NULL/empty/oversize. */
+int  ring_link_send_raw(const uint8_t *wire, size_t len);
+
 void ring_link_counters(ring_counters_t *out);
 
 /* Master only: ms timestamp of the last time the master's own TIME_SYNC
