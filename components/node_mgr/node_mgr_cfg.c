@@ -12,7 +12,22 @@
  * half's job (node_mgr_cfgx.c) -- see node_mgr_cfg_internal.h for the seam.
  * Single-writer (important #3): s_cfg/s_hw/s_latch/s_fresh are touched ONLY
  * from the node_mgr task; foreign-task entry points just set a request flag
- * under nmgr_lock(), consumed by the 1 Hz tick. */
+ * under nmgr_lock(), consumed by the 1 Hz tick.
+ *
+ * Two fairness rules keep one sick zone from owning the reconciler (final
+ * review G2 -- the old loop scanned from id 1 every tick and returned on the
+ * first zone that started a transfer, so a zone failing non-terminally every
+ * ~15 s starved every higher id and flapped CFG_SYNC_FAILED/DEGRADED):
+ *   (a) ROUND ROBIN -- the scan resumes after the last zone that got a
+ *       decision, so every zone reaches the front within one full turn.
+ *   (b) COOLDOWN -- a zone whose transfer failed non-terminally is skipped for
+ *       CFG_COOLDOWN_MS. Terminal failures need no cooldown: they latch (see
+ *       s_latch) and are not retried at all until an identity changes.
+ * Both are per-zone and RAM-only; nmgr_cfg_invalidate clears the cooldown,
+ * because a master-originated edit must be adopted on the next heartbeat and
+ * not after the remainder of a cooldown. Treating E_VERSION_* on a PULL as
+ * terminal is deliberately NOT here -- mixed-version fleets are SP4's
+ * scenario (carry). */
 
 static nmgr_cache_t s_cfg[HG_MAX_ZONES];   /* kind 1, slot = id-1 */
 static nmgr_cache_t s_hw[HG_MAX_ZONES];    /* kind 2 -- display/export only, never pushed (spec §4.4) */
@@ -24,6 +39,10 @@ static uint8_t      s_fresh[HG_MAX_ZONES]; /* important #2: a fresh HB has arriv
  * A manual push bypasses the latch but can set a new one on the same fail. */
 typedef struct { uint8_t valid, kind; uint32_t hb_gen, hb_crc, cache_gen, cache_crc; } nmgr_latch_t;
 static nmgr_latch_t s_latch[HG_MAX_ZONES];
+
+#define CFG_COOLDOWN_MS 30000u
+static uint32_t s_cooldown_until[HG_MAX_ZONES];   /* rule (b); 0 = not cooling down */
+static uint8_t  s_rr_next = 1;                    /* rule (a): id the next scan starts at */
 
 /* fix round 2 item 1: push stays single-slot/last-caller-wins -- the transfer
  * half can only run one push at a time regardless, and a superseded manual push
@@ -54,6 +73,7 @@ void nmgr_cfg_note_failed(uint8_t zone, uint8_t kind, int terminal,
     notify_emit(NTF_NODE, zone, "%u CFG_SYNC_FAILED", zone);
     hg_node_t *nd = nmgr_node_by_id(zone);
     if (nd && nd->cmd_timeouts < 3) nd->cmd_timeouts = 3;   /* DEGRADED via ring_health_eval's own rule */
+    if (!terminal) s_cooldown_until[zone - 1] = nmgr_now_ms() + CFG_COOLDOWN_MS;   /* rule (b) */
     if (terminal) {
         nmgr_latch_t *L = &s_latch[zone - 1];
         L->valid = 1; L->kind = kind;
@@ -90,6 +110,8 @@ void nmgr_cfg_init(void) {
     memset(s_hw, 0, sizeof s_hw);
     memset(s_latch, 0, sizeof s_latch);
     memset(s_fresh, 0, sizeof s_fresh);
+    memset(s_cooldown_until, 0, sizeof s_cooldown_until);
+    s_rr_next = 1;
     nmgr_cx_init();
 }
 
@@ -102,6 +124,7 @@ void nmgr_cfg_invalidate(uint8_t zone) {
     memset(&s_cfg[zone - 1], 0, sizeof s_cfg[0]);
     memset(&s_hw[zone - 1], 0, sizeof s_hw[0]);
     memset(&s_latch[zone - 1], 0, sizeof s_latch[0]);
+    s_cooldown_until[zone - 1] = 0;   /* adopt on the NEXT heartbeat, not after the cooldown */
     nmgr_cx_abort(zone);
 }
 
@@ -153,12 +176,19 @@ void nmgr_cfg_tick_1s(uint32_t now) {
         return;
     }
 
-    for (uint8_t id = 1; id <= HG_MAX_ZONES; id++) {
+    /* rule (a): start where the last decision left off, so no zone can be
+     * starved by a lower id that keeps finding work. */
+    for (uint8_t i = 0; i < HG_MAX_ZONES; i++) {
+        uint8_t id = (uint8_t)((s_rr_next - 1 + i) % HG_MAX_ZONES + 1);
         if (!s_fresh[id - 1]) continue;
         s_fresh[id - 1] = 0;   /* this fresh HB grants exactly one decision opportunity (important #2) */
         hg_node_t *nd = nmgr_node_by_id(id);
         if (!nd || !nd->used) continue;
         if (nd->health == NODE_H_OFFLINE || nd->health == NODE_H_UPDATING) continue;
+        /* rule (b): still cooling down after a non-terminal failure (wrap-safe) */
+        if (s_cooldown_until[id - 1] && (int32_t)(nmgr_now_ms() - s_cooldown_until[id - 1]) < 0) continue;
+        s_cooldown_until[id - 1] = 0;
+        s_rr_next = (uint8_t)(id % HG_MAX_ZONES + 1);
         if (try_start(id, nd)) return;
     }
 }
