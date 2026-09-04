@@ -86,4 +86,16 @@ Master COM17 + two zones (COM24/COM25) wired 19→18. Every one of these passed 
 
 **Bench results, 2026-09-04 (3 boards, bare jumpers):** enrolment of two fresh zones + id persistence across zone and master resets; forwarding (`ZONE_UNKNOWN`, ring-session `DEBUG … ENABLE`, unlock-gated rows, 125 B line-boundary truncation); §4.4 revert of a zone-console edit in 4 s while a master-forwarded SET sticks; `SET TIME` reaching both zones in < 5 s with `RING` as source; fleet OTA `SET FW ZONE 2` → rescue → pull from the master AP (245 kB) → ota_1 → `TRIAL PASS`, 8.6 s command-to-DONE; health ladder DEGRADED 5 s / OFFLINE 10 s / recovery ≤ 3 s with a zone held in reset. Not yet done: a true single-wire pull (both ends alive) — needs hands at the bench.
 
+**Installer note (spec-intended, bench-proven):** once a zone is enrolled, a config edit typed at the zone's own console is reverted by the master within ~2–4 s (`NOTIFY … CFG_REVERTED`). Bring-up edits go through the master (`SET ZONE <z> …`) or are made before the ring is connected.
+
+### SP4 entry checklist (from the SP3 final whole-branch review)
+1. **Web-apply primitives:** `node_mgr_cfg_set(zone, cfg)` as a request-flag write (gen bump + source stamp inside the node_mgr tick) and `node_mgr_cfg_get` / `node_mgr_hw_get` snapshot readers under the node_mgr lock — the web UI reads node state from the master's caches, never via forwarded `GET`s (one forward slot ⇒ `BUSY` under concurrent CLI use).
+2. **Master self-update path:** verify the master's `ota_trial` tick source (added in the SP3 fix wave) and the rescue breadcrumb end to end before any `SET FW MASTER`.
+3. **Vocabulary gaps:** `SET NODE <z> MAC <mac>` (pre-seed a ztab row — the only way to hand a replacement board an old id) and `GET PING` were deferred out of SP3.
+4. **Mixed-version fleets (zones first, master last):** treat `E_VERSION_*` on a config pull as terminal with a per-zone latch keyed on (hb_gen, hb_crc); HB/TIME_SYNC parsers already tolerate trailing bytes.
+5. **Fleet sequencer:** `uptime_low` alone qualifies as DONE — parse the served image's `esp_app_desc` version so real upgrades require `fw_changed`, and surface "fw regressed after DONE".
+6. **Store discipline:** `node_store_save` (NVS write) still runs on the node_mgr/cmd task; route through the store task when the master gains `mcfg`/profiles.
+7. **Test debt:** a fake-link harness for `node_mgr_cfg`'s decision table (feed HBs + ACK events, assert push/pull/latch) — both bench-found glue defects lived exactly in this unharnessed seam.
+8. Relayed NOTIFYs are emitted as the originating node (fix wave) — the web parser assumes one id per line. `httpd` `max_open_sockets` default 7 vs the §6.4 budget of 4; `SET WIFI AP` should be able to change the repo-published AP credentials before the HTTP API lands.
+
 **Bench technique that paid off:** `SET RING TRACE ON` on the master (per-frame src/dst/type/ttl rows) plus `SET LOG DEBUG` on both zones, captured concurrently with three pyserial threads; diagnose from *both* ends of the ring (COM24 proved the consume-by-id bug and the len-0 bug; COM25 proved the drop-self bug by the *absence* of type-0x12 rows). Never `python -c` with quotes on Windows for pyserial helpers — write .py files.

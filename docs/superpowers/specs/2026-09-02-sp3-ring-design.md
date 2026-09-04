@@ -7,7 +7,7 @@
 
 Deliver spec §7 SP3: `ring_proto` + `ring_link` + `node_mgr`, CLI forwarding, enrolment, config push/pull, TIME_SYNC, fleet FW_UPDATE — acceptance on the bench with Master + 2 zones (three DevKitC-V4, dupont-wire ring). Plus the minimal slice of SP4 pulled forward to make fleet OTA real (Decision 1).
 
-**Non-goals (explicitly deferred):** web UI/dashboard (SP4); persisted per-zone config caches and `zc1..zc8` NVS keys (SP4); the latched fault store and master fault codes as faults (SP2 builds `fault`; SP3 surfaces ring health only via NOTIFY + `GET RING`/`GET NODES`); `SET WIFI`/`SET TZ`/NTP (SP4/SP5 — AP creds fixed, TZ offset 0); RS-422 escalation; profiles.
+**Non-goals (explicitly deferred):** web UI/dashboard (SP4); persisted per-zone config caches and `zc1..zc8` NVS keys (SP4); the latched fault store and master fault codes as faults (SP2 builds `fault`; SP3 surfaces ring health only via NOTIFY + `GET RING`/`GET NODES`); `SET WIFI`/`SET TZ`/NTP (SP4/SP5 — AP creds fixed, TZ offset 0); RS-422 escalation; profiles; `SET NODE <z> MAC <mac>` (pre-seeding a node-table row for a replacement board) and `GET PING` (SP4 — recorded as deferred by the SP3 final review, 2026-09-04); master-side `node_mgr_cfg_set/get` web-apply primitives (SP4).
 
 ## Decisions (2026-09-02)
 
