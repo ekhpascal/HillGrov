@@ -62,6 +62,9 @@ void nmgr_fwd_on_ev(const ring_trk_ev_t *ev);
  * nmgr_cfg_request_clear() instead of calling it directly (important #3). */
 void nmgr_cfg_init(void);
 void nmgr_cfg_clear(uint8_t zone);                               /* node_mgr task only */
+void nmgr_cfg_invalidate(uint8_t zone);                          /* node_mgr task only: drop cfg+hw cache
+                                                                    and failure latch, keep the fresh-HB
+                                                                    flag -- master-originated edit (§4.4) */
 void nmgr_cfg_request_clear(uint8_t zone);                       /* foreign-task-safe: queues for the tick */
 void nmgr_cfg_note_fresh_hb(uint8_t zone);                       /* node_mgr task only (called from update_telemetry) */
 void nmgr_cfg_tick_1s(uint32_t now);

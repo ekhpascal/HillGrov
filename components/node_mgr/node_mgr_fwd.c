@@ -30,10 +30,35 @@ static uint16_t          s_seq;
 static uint8_t           s_status;
 static char              s_detail[126];
 static const char       *s_fail_token;   /* NULL = EV_DONE, else EV_FAIL's token */
+static uint8_t           s_zone;         /* the outstanding forward's target, for the §4.4 hook below */
+static uint8_t           s_verb_set;     /* its line's first token was SET */
+
+/* §4.4 bench ruling: an edit issued THROUGH the master is authoritative.
+ * The zone applies a forwarded SET as its own LOCAL edit and bumps its gen,
+ * so the reconciler would see "zone gen higher than my cache" and push the
+ * master's now-stale copy straight back over it -- the operator's own command
+ * answering OK and then undoing itself (bench: NOTIFY NODE 0 2 CFG_REVERTED).
+ * Dropping the cache on the OK ACK turns that next decision into the adopt
+ * branch instead, which pulls the value the operator just set. Only SET
+ * qualifies: GET/DEBUG/CLEAR change no config, and a non-OK reply means the
+ * zone rejected the edit and its config is unchanged. Cost when wrong is one
+ * extra CFG_GET round trip. */
+static int verb_is_set(const char *line) {
+    while (*line == ' ') line++;
+    return (line[0] == 'S' || line[0] == 's') && (line[1] == 'E' || line[1] == 'e') &&
+           (line[2] == 'T' || line[2] == 't') && (line[3] == ' ' || line[3] == '\0');
+}
+
+/* the zone's reply line, verbatim from the ACK detail: "OK" or "OK <rest>" */
+static int reply_is_ok(const char *detail) {
+    return detail[0] == 'O' && detail[1] == 'K' &&
+           (detail[2] == '\0' || detail[2] == ' ' || detail[2] == '\n');
+}
 
 void nmgr_fwd_init(void) { s_busy = xSemaphoreCreateMutex(); }
 
 void nmgr_fwd_on_ev(const ring_trk_ev_t *ev) {
+    uint8_t adopt_zone = 0;
     taskENTER_CRITICAL(&s_mux);
     if (!s_active || ev->seq != s_seq) { taskEXIT_CRITICAL(&s_mux); return; }   /* stale/foreign seq */
     s_active = 0;
@@ -42,12 +67,20 @@ void nmgr_fwd_on_ev(const ring_trk_ev_t *ev) {
         s_status = ev->status;
         snprintf(s_detail, sizeof s_detail, "%s", ev->detail);
         s_fail_token = NULL;
+        if (s_verb_set && ev->status == 0 && reply_is_ok(ev->detail)) adopt_zone = s_zone;
     } else {
         s_fail_token = ev->fail_token;   /* "ZONE_TIMEOUT" | "ZONE_UNKNOWN" */
     }
     TaskHandle_t w = s_waiter;
     taskEXIT_CRITICAL(&s_mux);
     if (w) xTaskNotifyGive(w);
+    /* This hook runs on the node_mgr task (node_mgr.c's handle_ack ->
+     * route_trk_ev), which is node_mgr_cfg's single writer, so the internal
+     * is called directly rather than queued through a request flag. It also
+     * makes the ordering exact: the ACK is on the wire ahead of the zone's
+     * gen-bumped heartbeat and both are consumed by this one task, so the
+     * cache is already gone before nmgr_cfg_tick_1s takes its next decision. */
+    if (adopt_zone) nmgr_cfg_invalidate(adopt_zone);
 }
 
 static int errline(char *resp, int len, const char *token) {
@@ -77,6 +110,7 @@ static int do_forward(uint8_t zone, const char *line, char *resp, int resp_len, 
 
     taskENTER_CRITICAL(&s_mux);
     s_seq = seq; s_active = 1; s_done = 0; s_fail_token = NULL;
+    s_zone = zone; s_verb_set = (uint8_t)verb_is_set(line);
     s_waiter = xTaskGetCurrentTaskHandle();
     taskEXIT_CRITICAL(&s_mux);
 

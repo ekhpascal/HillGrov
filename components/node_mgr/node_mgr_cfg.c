@@ -191,14 +191,26 @@ void nmgr_cfg_init(void) {
     ring_casm_init(&s_casm);
 }
 
-/* node_mgr task only -- see node_mgr_internal.h. */
-void nmgr_cfg_clear(uint8_t zone) {
+/* Drop everything that makes this zone's cached config authoritative, so
+ * try_start's next decision is "no cache -> adopt" (spec §4.4's enrolment
+ * branch) instead of a revert push. Also cancels an in-flight transfer for
+ * the zone, whose frozen identity is now stale. node_mgr task only. */
+void nmgr_cfg_invalidate(uint8_t zone) {
     if (zone < 1 || zone > HG_MAX_ZONES) return;
     memset(&s_cfg[zone - 1], 0, sizeof s_cfg[0]);
     memset(&s_hw[zone - 1], 0, sizeof s_hw[0]);
     memset(&s_latch[zone - 1], 0, sizeof s_latch[0]);
-    s_fresh[zone - 1] = 0;
     if (s_cx.state != CX_IDLE && s_cx.zone == zone) { memset(&s_cx, 0, sizeof s_cx); ring_casm_init(&s_casm); }
+}
+
+/* node_mgr task only -- see node_mgr_internal.h. Retiring an id additionally
+ * withdraws the pending decision opportunity: the row is gone, and whatever
+ * board answers on that id next is a different node whose own heartbeat must
+ * grant the next one. */
+void nmgr_cfg_clear(uint8_t zone) {
+    if (zone < 1 || zone > HG_MAX_ZONES) return;
+    nmgr_cfg_invalidate(zone);
+    s_fresh[zone - 1] = 0;
 }
 
 void nmgr_cfg_request_clear(uint8_t zone) {
