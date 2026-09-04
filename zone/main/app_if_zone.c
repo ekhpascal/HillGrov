@@ -9,6 +9,7 @@
 #include "bootloader_common.h"
 #include "board.h"
 #include "cli.h"
+#include "zone_ring.h"
 
 /* Reboots into the rescue image; the bootloader side of this handshake lands
  * in Task 15, which is expected to declare and consume this prototype from a
@@ -32,6 +33,15 @@ static int zone_status_lines(char *resp, int len) {
     cmd_linef(resp, len, "  Cfg gen : %u", (unsigned)cfg.generation);
     cmd_linef(resp, len, "  Restart pending : %d", hg_model_restart_pending());
     return 0;
+}
+
+/* ---- time ---- */
+
+/* A zone has a second clock source the shared body knows nothing about: the
+ * master's TIME_SYNC. Report it as RING (app_if.h's token set) whenever no
+ * local SET TIME is newer. */
+static int zone_time_get(char *buf, size_t n) {
+    return hg_app_time_get_ext(buf, n, "RING", zone_ring_time_synced_at());
 }
 
 /* ---- firmware ---- */
@@ -75,7 +85,7 @@ const app_if_t APP_IF_ZONE = {
     .uptime_s      = hg_app_uptime_s,
     .status_lines  = zone_status_lines,
     .log_set       = hg_app_log_set,
-    .time_get      = hg_app_time_get,
+    .time_get      = zone_time_get,
     .time_set      = hg_app_time_set,
     .save_flush    = hg_store_flush,
     .fw_info       = hg_app_fw_info,

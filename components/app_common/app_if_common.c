@@ -43,22 +43,40 @@ int hg_app_log_set(const char *level, const char *tag, char *eff, size_t n) {
     return 0;
 }
 
-/* ---- time: SP1 has no RTC/NTP/RING source, so the reported source is
- * always NONE (never set this boot) or SET (set once, age tracked locally) ---- */
+/* ---- time: the local source is SET (a console SET TIME this boot) or NONE.
+ * A node with an external source passes it to hg_app_time_get_ext -- SP3's
+ * zone does that with RING once a valid TIME_SYNC has stepped its clock. No
+ * RTC or NTP source exists yet. ---- */
 
-static uint8_t s_time_is_set;
-static time_t  s_time_set_at;
+static uint8_t  s_time_is_set;
+static uint32_t s_time_set_uptime;   /* uptime_s at the last local SET TIME */
 
-int hg_app_time_get(char *buf, size_t n) {
+int hg_app_time_get_ext(char *buf, size_t n, const char *src, uint32_t src_at) {
     time_t t = time(NULL);
     struct tm tmv;
     localtime_r(&t, &tmv);
-    uint32_t age = s_time_is_set ? (uint32_t)(t - s_time_set_at) : 0;
+
+    /* Both stamps are uptime seconds, NOT wall-clock: whoever set the clock
+     * last owns the token, and a source that steps the clock backwards (the
+     * ring correcting a wrong console SET) must not thereby look older than
+     * the value it just overwrote. Uptime also makes "age" mean what it says
+     * -- seconds since that source last spoke -- across any step. */
+    uint32_t now_up = hg_app_uptime_s();
+    const char *tok = "NONE";
+    uint32_t at = 0;
+    int have = 0;
+    if (s_time_is_set) { tok = "SET"; at = s_time_set_uptime; have = 1; }
+    if (src && src_at != 0 && (!have || src_at >= at)) { tok = src; at = src_at; have = 1; }
+
+    uint32_t age = have ? now_up - at : 0;
     snprintf(buf, n, "%04d-%02d-%02d %02d:%02d:%02d %s %u",
              tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
-             tmv.tm_hour, tmv.tm_min, tmv.tm_sec,
-             s_time_is_set ? "SET" : "NONE", (unsigned)age);
+             tmv.tm_hour, tmv.tm_min, tmv.tm_sec, tok, (unsigned)age);
     return 0;
+}
+
+int hg_app_time_get(char *buf, size_t n) {
+    return hg_app_time_get_ext(buf, n, NULL, 0);
 }
 
 int hg_app_time_set(int y, int mo, int d, int h, int mi, int s) {
@@ -78,7 +96,7 @@ int hg_app_time_set(int y, int mo, int d, int h, int mi, int s) {
     struct timeval tv = { .tv_sec = t, .tv_usec = 0 };
     if (settimeofday(&tv, NULL) != 0) return -1;
     s_time_is_set = 1;
-    s_time_set_at = t;
+    s_time_set_uptime = hg_app_uptime_s();
     return 0;
 }
 

@@ -16,6 +16,14 @@ void     hg_app_get_mac(uint8_t mac[6]);
 uint32_t hg_app_uptime_s(void);
 int      hg_app_log_set(const char *level, const char *tag, char *eff, size_t n);
 int      hg_app_time_get(char *buf, size_t n);
+/* Same line, but with an EXTERNAL clock source offered alongside the local
+ * SET TIME state: src is its app_if.h token ("RING" on a zone) and src_at the
+ * UPTIME second at which it last set the clock (0 = never -- a source landing
+ * inside the first second of uptime is simply reported one update late). The
+ * more recent of the two sources names the reported token and its age; NONE
+ * when neither has run. Kept here rather than in the caller so one function
+ * owns the "YYYY-MM-DD HH:MM:SS <SRC> <age_s>" format. */
+int      hg_app_time_get_ext(char *buf, size_t n, const char *src, uint32_t src_at);
 int      hg_app_time_set(int y, int mo, int d, int h, int mi, int s);
 int      hg_app_fw_info(char *buf, size_t n);
 int      hg_app_fw_rollback(void);

@@ -27,6 +27,7 @@ static uint16_t s_online_mask;                  /* last TIME_SYNC (SP3: stores +
 static uint8_t  s_inhibit_mask;
 static uint32_t s_inhibit_ms;                   /* age-out clock for s_inhibit_mask, spec 2.7 (600 s) */
 static uint8_t  s_time_synced;                  /* sticky: a valid ring TIME_SYNC has been received */
+static uint32_t s_time_synced_at;               /* wall clock at that moment, for GET TIME's source token */
 
 static uint32_t now_ms(void) { return s_core->now_ms(); }
 
@@ -48,6 +49,10 @@ void zsync_time_sync(const ring_frame_t *f, uint32_t now) {
             struct timeval tv = { .tv_sec = (time_t)t.utc, .tv_usec = 0 };
             settimeofday(&tv, NULL);
         }
+        s_time_synced_at = hg_app_uptime_s();   /* uptime, not wall clock: GET TIME compares this
+                                                   against the local SET TIME stamp to pick the
+                                                   more recent source, and a step must not make
+                                                   the stepping source look older */
     }
     s_ring_size     = t.ring_size;
     s_online_mask   = t.online_mask;
@@ -108,6 +113,9 @@ uint8_t zsync_time_quality(void) {
     if (s_time_synced) return 2;
     return time(NULL) > 1577836800 ? 1 : 0;
 }
+
+/* see zone_ring.h */
+uint32_t zone_ring_time_synced_at(void) { return s_time_synced_at; }
 
 uint8_t zsync_link_flags(uint32_t now, uint8_t zid) {
     uint8_t link = 0;

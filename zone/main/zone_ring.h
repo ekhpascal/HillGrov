@@ -17,3 +17,11 @@ void zone_ring_start(cmd_core_t *core);
  * zone_ring_start() has run at all (safe at any boot ordering relative to
  * whatever SP2 task ends up calling this). */
 uint8_t zone_ring_inhibit_mask(void);
+
+/* Uptime second at which a ring TIME_SYNC carrying time_valid last set this
+ * node's clock; 0 = never this boot. GET TIME uses it to report the source
+ * token RING (app_if.h's documented set) instead of NONE once the master's
+ * time has arrived -- the zone's own SET/NONE state knows nothing about the
+ * ring. Uptime, not wall clock, so a sync that steps the clock backwards
+ * still reads as the most recent source (see hg_app_time_get_ext). */
+uint32_t zone_ring_time_synced_at(void);
