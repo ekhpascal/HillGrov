@@ -50,6 +50,8 @@ int  node_mgr_unassigned(uint8_t macs[][6], int cap);           /* 0xFE heartbea
  * harmless (retry). */
 int  node_mgr_push_cfg(uint8_t zone);
 int  node_mgr_time_valid(void);                                 /* for GET RING display */
+int  node_mgr_cfg_sync_failed(uint8_t zone);                    /* 1 = latched §4.4 CFG_SYNC
+                                                                    failure; GET NODE display */
 void node_mgr_mark_updating(uint8_t zone, uint32_t hold_ms);    /* fleet sequencer (Task 15) */
 
 /* master's SET TIME hook (app_if_master.c's time_set wrapper): time_valid in

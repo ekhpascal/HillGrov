@@ -3,6 +3,11 @@
 #include <string.h>
 #include "cmd_core.h"
 
+/* SP3 spec §5.3: the caller's own wait on cmd_task_execute() is bounded to
+ * 3500 ms; the forward hook gets the same budget so a forwarded call can
+ * never outlive the request that made it. */
+#define ZONE_FWD_TIMEOUT_MS 3500u
+
 static const cmd_entry_t *match(const cmd_core_t *c, uint8_t vbit, const char *n1, const char *n2, int two) {
     for (int i = 0; i < c->table_len; i++) {
         const cmd_entry_t *e = &c->table[i];
@@ -83,7 +88,7 @@ int cmd_dispatch(const cmd_core_t *core, cmd_session_t *ses, const char *line, c
             off += (size_t)snprintf(tail + off, sizeof tail - off, " %s", tok[i]);
         if (core->role == CMD_ROLE_MASTER && z != 0) {
             if (!core->forward) return cmd_err(resp, resp_len, "ZONE_UNKNOWN");
-            return core->forward(core->forward_ctx, (uint8_t)z, tail, resp, resp_len);
+            return core->forward((uint8_t)z, tail, resp, resp_len, ZONE_FWD_TIMEOUT_MS);
         }
         if (core->role == CMD_ROLE_ZONE && z != 0 && z != core->zone_id)
             return cmd_err(resp, resp_len, "WRONG_ZONE");

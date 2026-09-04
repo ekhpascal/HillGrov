@@ -62,8 +62,13 @@ struct cmd_entry {
     const char     *desc;                /* <= 40 chars or NULL */
 };
 
-/* 0 = forwarded OK (resp holds the zone's reply line); -1 = resp holds an ERR line */
-typedef int (*cmd_forward_fn)(void *ctx, uint8_t zone, const char *line, char *resp, int len);
+/* Master only: forwards a ZONE-prefixed command over the ring (SP3).
+ * 0 = forwarded OK (resp holds the zone's reply line, already CLI-shaped);
+ * -1 = resp holds an ERR line. timeout_ms is cmd_dispatch's forward budget
+ * (SP3 ruling: 3500 ms). NULL on a zone build (never set there) or a master
+ * without a ring layer wired up yet -- cmd_dispatch then answers the SP1
+ * fallback ZONE_UNKNOWN locally instead of calling through. */
+typedef int (*cmd_forward_fn)(uint8_t zone, const char *line, char *resp, int len, uint32_t timeout_ms);
 
 struct cmd_core {
     const cmd_entry_t *table;
@@ -73,7 +78,6 @@ struct cmd_core {
                                            * HG_NODE_UNASSIGNED (254) until enrolled */
     uint32_t         (*now_ms)(void);
     cmd_forward_fn     forward;          /* master only; NULL elsewhere */
-    void              *forward_ctx;
     void             (*audit)(void *ctx, cmd_src_t src, const char *line);
     void              *audit_ctx;
     const char        *debug_key;        /* for cmd_common's DEBUG ENABLE row */

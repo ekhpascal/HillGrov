@@ -13,7 +13,8 @@ set(COMP ${CMAKE_CURRENT_SOURCE_DIR}/../../components)
 include_directories(
   ${COMP}/app_version ${COMP}/hg_blob ${COMP}/hg_cfg ${COMP}/hg_model
   ${COMP}/cli_line ${COMP}/notify ${COMP}/cmd_core ${COMP}/cmd_common
-  ${COMP}/zone_cmds ${COMP}/rescue_handover ${COMP}/ring_proto ${COMP}/node_store ${COMP}/ota_trial ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
+  ${COMP}/zone_cmds ${COMP}/rescue_handover ${COMP}/ring_proto ${COMP}/node_store ${COMP}/ota_trial
+  ${COMP}/master_cmds ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
 enable_testing()
 function(hg_test NAME)
   add_executable(${NAME} ${NAME}.c fakes/fake_clock.c ${ARGN})
@@ -46,3 +47,5 @@ hg_test(test_ring_cfgx ${COMP}/ring_proto/ring_cfgx.c)
 hg_test(test_ring_health ${COMP}/ring_proto/ring_health.c ${COMP}/ring_proto/ring_tlm_hb.c ${COMP}/ring_proto/ring_tlm.c)
 hg_test(test_node_store ${COMP}/node_store/ztab.c ${COMP}/hg_blob/hg_blob.c)
 hg_test(test_ota_trial ${COMP}/ota_trial/trial_eval.c ${COMP}/ota_trial/trial_cmds.c ${CMD_CORE_SRC})
+hg_test(test_master_cmds ${COMP}/master_cmds/master_cmds.c ${CMD_CORE_SRC} ${COMP}/notify/notify.c
+        ${COMP}/cmd_common/cmd_common.c ${COMP}/ota_trial/trial_cmds.c fakes/fake_node_ops.c)

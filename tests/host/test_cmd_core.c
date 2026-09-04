@@ -6,10 +6,10 @@
 
 /* ---- dispatch-test-only doubles (forward/audit callbacks) ---- */
 static int audit_calls, fwd_calls;
-static char fwd_line[CMD_LINE_MAX]; static uint8_t fwd_zone;
+static char fwd_line[CMD_LINE_MAX]; static uint8_t fwd_zone; static uint32_t fwd_timeout_ms;
 
-static int fwd(void *ctx, uint8_t zone, const char *line, char *resp, int len) {
-    (void)ctx; fwd_calls++; fwd_zone = zone;
+static int fwd(uint8_t zone, const char *line, char *resp, int len, uint32_t timeout_ms) {
+    fwd_calls++; fwd_zone = zone; fwd_timeout_ms = timeout_ms;
     snprintf(fwd_line, sizeof fwd_line, "%s", line);
     return cmd_okf(resp, len, "FORWARDED");
 }
@@ -102,15 +102,27 @@ static void test_zone_prefix(void) {
     TEST_ASSERT_EQUAL_STRING("ERR OUT_OF_RANGE\n", resp);
     TEST_ASSERT_EQUAL_INT(-1, run("SET ZONE 2"));
     TEST_ASSERT_EQUAL_STRING("ERR BAD_ARGS\n", resp);
-    /* master role: 0 local, others forwarded verbatim, case preserved */
+}
+
+/* SP3: master role forwards a non-zero ZONE prefix through core->forward with
+ * the reassembled tail (the original line minus the "ZONE <z>" insertion,
+ * case preserved) and the dispatcher's 3500 ms forward budget. */
+static void test_forward_hook_called_with_tail(void) {
     core.role = CMD_ROLE_MASTER; core.zone_id = 0;
     core.forward = fwd;
     TEST_ASSERT_EQUAL_INT(0, run("set ZONE 2 light 3 70 45 60"));
     TEST_ASSERT_EQUAL_INT(1, fwd_calls);
     TEST_ASSERT_EQUAL_UINT8(2, fwd_zone);
     TEST_ASSERT_EQUAL_STRING("set light 3 70 45 60", fwd_line);
+    TEST_ASSERT_EQUAL_UINT32(3500u, fwd_timeout_ms);
     TEST_ASSERT_EQUAL_STRING("OK FORWARDED\n", resp);
-    core.forward = NULL;                                    /* SP1 master without ring */
+}
+
+/* NULL forward (SP1 master without a ring layer wired up, or a role that
+ * never sets it) keeps the old local ZONE_UNKNOWN reply. */
+static void test_forward_hook_null_zone_unknown(void) {
+    core.role = CMD_ROLE_MASTER; core.zone_id = 0;
+    core.forward = NULL;
     TEST_ASSERT_EQUAL_INT(-1, run("SET ZONE 2 LIGHT 1 1 1 1"));
     TEST_ASSERT_EQUAL_STRING("ERR ZONE_UNKNOWN\n", resp);
 }
@@ -144,6 +156,8 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_arity_and_ranges);
     RUN_TEST(test_gates);
     RUN_TEST(test_zone_prefix);
+    RUN_TEST(test_forward_hook_called_with_tail);
+    RUN_TEST(test_forward_hook_null_zone_unknown);
     RUN_TEST(test_internal_and_audit);
     RUN_TEST(test_split_noun_single_lookahead);
     return UNITY_END(); }

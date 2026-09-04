@@ -297,3 +297,14 @@ int node_mgr_push_cfg(uint8_t zone) {
     nmgr_unlock();
     return 0;   /* accepted for processing -- async; the 1 Hz tick starts the actual push */
 }
+
+/* GET NODE's CfgSync field. s_latch stays node_mgr-task-owned (file header);
+ * nmgr_lock() here is a read-side rendezvous only, same tolerance as the
+ * unlocked reads above -- the writers don't take it either. */
+int node_mgr_cfg_sync_failed(uint8_t zone) {
+    if (zone < 1 || zone > HG_MAX_ZONES) return 0;
+    nmgr_lock();
+    int v = s_latch[zone - 1].valid;
+    nmgr_unlock();
+    return v;
+}

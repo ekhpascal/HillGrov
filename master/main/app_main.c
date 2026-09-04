@@ -31,6 +31,11 @@ void app_main(void) {
     core.role = CMD_ROLE_MASTER; core.zone_id = 0;
     core.now_ms = now_ms;
     core.debug_key = CONFIG_HILLGROW_DEBUG_KEY;
+    /* node_mgr_start() runs later in this function, but node_mgr_forward has
+     * its own boot guard (node_mgr_fwd.c: RING_DOWN until node_mgr_start()
+     * has run) -- setting it here alongside the other core fields, before
+     * cmd_task_start(), is safe and keeps this block in one place. */
+    core.forward = node_mgr_forward;
     cmd_task_start(&core);
     cli_init();
     cli_start();
