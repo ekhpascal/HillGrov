@@ -30,7 +30,7 @@ static int               s_is_master;
 static uint8_t          (*s_my_id_fn)(void);
 static uint8_t           s_my_mac[6];
 static QueueHandle_t     s_uart_evtq;
-static QueueHandle_t     s_consume_q;      /* items: ring_frame_t, depth 4 */
+static QueueHandle_t     s_consume_q;      /* items: ring_frame_t, depth RING_CONSUME_DEPTH (8) */
 static ring_counters_t   s_ctr;
 static volatile uint32_t s_ts_returned_ms;
 static volatile int      s_trace;

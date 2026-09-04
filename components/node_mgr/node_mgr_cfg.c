@@ -6,17 +6,14 @@
 #include "node_mgr_internal.h"
 
 /* §4.4 config reconciliation + push/pull machinery. The tracker (ring_trk)
- * allows only ONE in-flight tracked frame ring-wide, and push's CFG_CHUNKs
- * go out synchronously right before its tracked CFG_COMMIT -- so at most
- * one zone is ever mid-transfer at a time. This file mirrors that with a
- * single global "current transfer" slot (s_cx) and one shared pull
- * assembler, round-robining across zones on the 1 Hz tick instead of N
- * independent state machines (disclosed simplification, not a ring limit).
- *
+ * allows only ONE in-flight tracked frame ring-wide, and push's chunks go
+ * out synchronously right before the tracked CFG_COMMIT -- so at most one
+ * zone is ever mid-transfer. This file mirrors that with a single global
+ * "current transfer" slot (s_cx) and one shared pull assembler, round-
+ * robining zones on the 1 Hz tick (disclosed simplification).
  * Single-writer (important #3): s_cx/s_cfg/s_hw/s_casm/s_latch/s_fresh are
- * touched ONLY from the node_mgr task. Foreign-task entry points
- * (node_mgr_push_cfg, nmgr_cfg_request_clear) just set a request flag under
- * nmgr_lock(), consumed by the 1 Hz tick. */
+ * touched ONLY from the node_mgr task; foreign-task entry points just set a
+ * request flag under nmgr_lock(), consumed by the 1 Hz tick. */
 
 typedef struct {
     uint8_t  blob[HG_BLOB_HDR_LEN + sizeof(hg_zone_cfg_t)];   /* sized for the larger (CFG) plane */
@@ -28,11 +25,10 @@ static nmgr_cache_t s_cfg[HG_MAX_ZONES];   /* kind 1, slot = id-1 */
 static nmgr_cache_t s_hw[HG_MAX_ZONES];    /* kind 2 -- display/export only, never pushed (spec §4.4) */
 static uint8_t      s_fresh[HG_MAX_ZONES]; /* important #2: a fresh HB has arrived since the last decision */
 
-/* important #2: a push that failed on a never-retried ACK token (CFG_VERSION
- * / INVALID_FIELD) latches the (hb, cache) identity that produced it -- the
- * automatic reconciler won't try again for that zone until either identity
- * changes. A manual node_mgr_push_cfg() bypasses the latch (operator
- * override) but can still set a new one if it fails the same way. */
+/* important #2: a push failing on a never-retried ACK token (CFG_VERSION /
+ * INVALID_FIELD) latches the (hb, cache) identity that produced it -- the
+ * automatic reconciler won't retry that zone until either identity changes.
+ * A manual push bypasses the latch but can set a new one on the same fail. */
 typedef struct { uint8_t valid, kind; uint32_t hb_gen, hb_crc, cache_gen, cache_crc; } nmgr_latch_t;
 static nmgr_latch_t s_latch[HG_MAX_ZONES];
 
@@ -50,8 +46,15 @@ static cx_t       s_cx;
 static ring_casm_t s_casm;
 static const uint32_t BACKOFF_MS[3] = { 1000, 2000, 4000 };
 
-static volatile uint8_t s_push_req_zone;    /* 0 = none pending; set under nmgr_lock() (important #3) */
-static volatile uint8_t s_clear_req_zone;   /* 0 = none pending; set under nmgr_lock() */
+/* fix round 2 item 1: push stays single-slot/last-caller-wins -- s_cx can
+ * only run one push at a time regardless, and a superseded manual push is a
+ * cheap, operator-retriable no-op. Clear is a per-zone BITMASK: a single
+ * slot dropped the second of two CLEAR NODE requests in one tick window, so
+ * a replacement board enrolling on that id could inherit the retired
+ * board's cached config (§4.4 adopt violated) -- clears are cheap (no ring
+ * traffic), so every bit set gets consumed each pass. */
+static volatile uint8_t s_push_req_zone;    /* 0 = none pending; set under nmgr_lock() */
+static volatile uint8_t s_clear_mask;       /* bit (zone-1) set = clear pending; set under nmgr_lock() */
 
 static size_t cache_payload_len(uint8_t kind) { return kind == 1 ? sizeof(hg_zone_cfg_t) : sizeof(hg_zone_hw_t); }
 
@@ -101,16 +104,14 @@ static void accept_pull(void) {
 
     uint8_t  tmp[sizeof(hg_zone_cfg_t)];             /* CFG is the larger of the two planes */
     uint32_t gen = 0;
-    /* payload_cap = plen (not sizeof tmp): hg_blob_unwrap treats cap<actual
-     * wrapped length as HG_BLOB_MIGRATED regardless of version, so passing
-     * the oversized CFG scratch size here would misreport every HW unwrap
-     * as "migrated" even on an exact current-version match. */
+    /* payload_cap = plen, not sizeof tmp: cap<actual len reads as MIGRATED
+     * regardless of version, so the oversized CFG buffer would misreport
+     * every HW unwrap even on an exact current-version match. */
     hg_blob_rc_t rc = hg_blob_unwrap(magic, ver, vmin, s_casm.buf, s_casm.total, tmp, (uint16_t)plen, &gen);
     if (rc != HG_BLOB_OK && rc != HG_BLOB_MIGRATED) { fail_or_retry(0, 0); return; }
 
-    /* Re-wrap into our own canonical (current-version, fixed-size) envelope
-     * so the cache always matches cache_payload_len(kind) even when the
-     * zone's own wire envelope was an older MIGRATED layout. */
+    /* Re-wrap canonically so the cache always matches cache_payload_len(kind)
+     * even when the zone's own wire envelope was an older MIGRATED layout. */
     hg_blob_wrap(magic, ver, gen, tmp, (uint16_t)plen, c->blob, sizeof c->blob);
     c->gen   = (kind == 1) ? gen : 0;   /* ruling #7: HW carries no gen concept anywhere */
     c->crc   = hg_crc32(0, c->blob + HG_BLOB_HDR_LEN, plen);
@@ -201,8 +202,9 @@ void nmgr_cfg_clear(uint8_t zone) {
 }
 
 void nmgr_cfg_request_clear(uint8_t zone) {
+    if (zone < 1 || zone > HG_MAX_ZONES) return;
     nmgr_lock();
-    s_clear_req_zone = zone;
+    s_clear_mask |= (uint8_t)(1u << (zone - 1));
     nmgr_unlock();
 }
 
@@ -212,11 +214,15 @@ void nmgr_cfg_note_fresh_hb(uint8_t zone) {
 
 void nmgr_cfg_tick_1s(uint32_t now) {
     nmgr_lock();
-    uint8_t clear_zone = s_clear_req_zone; s_clear_req_zone = 0;
-    uint8_t push_zone  = s_push_req_zone;  s_push_req_zone  = 0;
+    uint8_t clear_mask = s_clear_mask;    s_clear_mask     = 0;
+    uint8_t push_zone  = s_push_req_zone; s_push_req_zone  = 0;
     nmgr_unlock();
 
-    if (clear_zone) nmgr_cfg_clear(clear_zone);
+    /* every bit set gets cleared this pass -- clears are cheap (no ring
+     * traffic), so there's no reason to throttle to one per tick the way
+     * push is (fix round 2 item 1). */
+    for (uint8_t id = 1; id <= HG_MAX_ZONES; id++)
+        if (clear_mask & (uint8_t)(1u << (id - 1))) nmgr_cfg_clear(id);
 
     if (s_cx.state == CX_PULL_STREAM) {
         if (ring_casm_idle_expired(&s_casm, now)) fail_or_retry(0, 0);
@@ -230,11 +236,9 @@ void nmgr_cfg_tick_1s(uint32_t now) {
     }
     if (s_cx.state != CX_IDLE) return;   /* PULL_ACK / PUSH_COMMIT: waiting on the tracker */
 
-    /* important #3: a manual push request is operator-initiated -- it
-     * bypasses the fresh-HB gate and the terminal latch below (both of
-     * which exist to throttle the *automatic* reconciler), but only starts
-     * once the cache is confirmed valid from inside this task (the public
-     * API's own check was an unlocked, best-effort single-word read). */
+    /* manual push bypasses the fresh-HB gate/latch below (both throttle the
+     * *automatic* reconciler); re-checks cache validity from this task,
+     * since the public API's own check was an unlocked, best-effort read. */
     if (push_zone && s_cfg[push_zone - 1].valid) {
         hg_node_t *nd = nmgr_node_by_id(push_zone);
         nmgr_cache_t *cfg = &s_cfg[push_zone - 1];
@@ -274,10 +278,8 @@ void nmgr_cfg_on_ev(const ring_trk_ev_t *ev) {
     }
     if (ev->kind == RING_TRK_EV_DONE && ev->status == 0) { accept_push(); return; }
     if (ev->kind == RING_TRK_EV_DONE) {
-        /* fix round important #1: "ERR INVALID_FIELD" is 17 bytes, not 18 --
-         * n=18 compared the literal's own NUL against the zone's always-
-         * present trailing " <path>" byte (never a match), so this branch
-         * never fired; see task-13-report.md for the byte-by-byte trace. */
+        /* "ERR INVALID_FIELD" is 17 bytes, not 18 (fix round important #1;
+         * trace in task-13-report.md) -- n=18 never matched. */
         int terminal = strncmp(ev->detail, "ERR CFG_VERSION", 15) == 0 ||
                        strncmp(ev->detail, "ERR INVALID_FIELD", 17) == 0;
         fail_or_retry(1, terminal);
@@ -288,9 +290,8 @@ void nmgr_cfg_on_ev(const ring_trk_ev_t *ev) {
 
 int node_mgr_push_cfg(uint8_t zone) {
     if (zone < 1 || zone > HG_MAX_ZONES) return -1;
-    if (!s_cfg[zone - 1].valid) return -1;   /* unlocked single-word read (disclosed, ruling important #3):
-                                                 a stale read either false-rejects (caller may retry) or
-                                                 false-accepts (the tick re-checks validity before pushing) */
+    if (!s_cfg[zone - 1].valid) return -1;   /* unlocked single-word read (disclosed): a stale value
+                                                 false-rejects/-accepts; the tick re-checks before pushing */
     nmgr_lock();
     s_push_req_zone = zone;
     nmgr_unlock();

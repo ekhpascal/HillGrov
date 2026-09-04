@@ -37,7 +37,18 @@ void node_mgr_ring_status(ring_status_t *out);
 int  node_mgr_set_name(uint8_t zone, const char *name);         /* -> ztab + node_store_save */
 int  node_mgr_clear(uint8_t zone);                              /* CLEAR NODE */
 int  node_mgr_unassigned(uint8_t macs[][6], int cap);           /* 0xFE heartbeaters awaiting slots (table full case) */
-int  node_mgr_push_cfg(uint8_t zone);                           /* operator/reconciliation push of cached blob; -1 no cache */
+
+/* Async (important #3): queues an operator/reconciliation push of the
+ * cached cfg blob for the node_mgr task's next 1 Hz tick -- it does not
+ * push, block, or touch the ring itself. 0 = queued for the tick (the row
+ * handler should phrase this to the operator as "push scheduled", not
+ * "pushed" -- the tick may still find the transfer slot busy at processing
+ * time and silently drop this request, single-slot/last-caller-wins, same
+ * as any other in-flight reconciliation); -1 = no cache for this zone yet,
+ * or zone out of range -- checked with an unlocked, best-effort read, so an
+ * occasional stale -1/0 near a concurrent cache change is possible and
+ * harmless (retry). */
+int  node_mgr_push_cfg(uint8_t zone);
 int  node_mgr_time_valid(void);                                 /* for GET RING display */
 void node_mgr_mark_updating(uint8_t zone, uint32_t hold_ms);    /* fleet sequencer (Task 15) */
 

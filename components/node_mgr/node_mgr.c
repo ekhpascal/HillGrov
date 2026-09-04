@@ -31,8 +31,13 @@ static SemaphoreHandle_t s_state_mux;              /* guards s_tab/s_ring_status
 
 /* ---- shared plumbing (node_mgr_internal.h) ---- */
 
-void nmgr_lock(void)   { xSemaphoreTake(s_state_mux, portMAX_DELAY); }
-void nmgr_unlock(void) { xSemaphoreGive(s_state_mux); }
+/* NULL-guarded (fix round 2 item 2): a caller reaching any of the eight
+ * public entry points before node_mgr_start() has run (s_state_mux still
+ * NULL) falls back to lock-free access to zeroed BSS -- exactly the
+ * pre-locking-round behavior, and harmless since nothing else touches this
+ * state yet -- instead of configASSERT-aborting on xSemaphoreTake(NULL,...). */
+void nmgr_lock(void)   { if (s_state_mux) xSemaphoreTake(s_state_mux, portMAX_DELAY); }
+void nmgr_unlock(void) { if (s_state_mux) xSemaphoreGive(s_state_mux); }
 
 uint32_t nmgr_now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -254,8 +259,10 @@ int node_mgr_clear(uint8_t zone) {
         if (nd) memset(nd, 0, sizeof *nd);
     }
     nmgr_unlock();
-    /* the RAM cfg cache (s_cx/s_cfg/s_hw/s_casm) belongs to the node_mgr
-     * task alone (important #3) -- queue it instead of touching it here. */
+    /* forget the RAM cfg cache too -- a re-enrolled id may be a different
+     * board, and a stale cache would otherwise get pushed onto it (§4.4
+     * adopt violated). s_cx/s_cfg/s_hw/s_casm belong to the node_mgr task
+     * alone (important #3) -- queue it instead of touching it here. */
     if (rc == 0) nmgr_cfg_request_clear(zone);
     return rc;
 }
