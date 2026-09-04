@@ -22,7 +22,8 @@ typedef struct {
     int     fw_abort_calls;
     int     fw_status_calls; char    fw_status_text[64];
 
-    int fail_set_name, fail_clear, fail_fw_zone, fail_fw_all, fail_fw_abort;
+    int fail_set_name, fail_clear;
+    int fw_zone_rc, fw_all_rc, fw_abort_rc;   /* canned return values: 0 ok, -1 invalid, -2 busy */
 } fake_node_ops_state_t;
 
 extern fake_node_ops_state_t g_fake_nodes;

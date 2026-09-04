@@ -68,19 +68,19 @@ static int f_fw_zone(uint8_t zone) {
     strcpy(g_fake_nodes.last_call, "fw_zone");
     g_fake_nodes.fw_zone_calls++;
     g_fake_nodes.fw_zone_arg = zone;
-    return g_fake_nodes.fail_fw_zone ? -1 : 0;
+    return g_fake_nodes.fw_zone_rc;
 }
 
 static int f_fw_all(void) {
     strcpy(g_fake_nodes.last_call, "fw_all");
     g_fake_nodes.fw_all_calls++;
-    return g_fake_nodes.fail_fw_all ? -1 : 0;
+    return g_fake_nodes.fw_all_rc;
 }
 
 static int f_fw_abort(void) {
     strcpy(g_fake_nodes.last_call, "fw_abort");
     g_fake_nodes.fw_abort_calls++;
-    return g_fake_nodes.fail_fw_abort ? -1 : 0;
+    return g_fake_nodes.fw_abort_rc;
 }
 
 static int f_fw_status(char *buf, size_t n) {

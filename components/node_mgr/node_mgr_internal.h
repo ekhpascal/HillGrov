@@ -80,8 +80,9 @@ void nmgr_cfg_on_ev(const ring_trk_ev_t *ev);
  *
  * Ladder per zone (controller ruling #3): PRECHECK (image_ok && online) ->
  * FA_START (mark_updating + NOTIFY UPDATING + submit tracked FW_UPDATE,
- * glue's job) -> ack ok -> WAIT_HB (new fw triple, or uptime-reset-with-
- * cfg-intact, within 180 s) -> FA_DONE; anything else -> FA_FAILED and the
+ * glue's job) -> ack ok -> WAIT_HB (an HB that ARRIVED AFTER the ack, with
+ * a new fw triple or uptime < 60 s, within 180 s -- fix round ruling, see
+ * fleet_tick's own comment) -> FA_DONE; anything else -> FA_FAILED and the
  * whole run stops (fw_all: "stop on first failure" resolves the brief's
  * own "target ONLINE else skip/fail" ambiguity toward "fail"). */
 typedef enum { FZS_IDLE = 0, FZS_PRECHECK, FZS_WAIT_ACK, FZS_WAIT_HB } fz_state_t;
@@ -91,34 +92,33 @@ typedef struct {
     uint8_t    active, cancel_req;
     fz_state_t st;
     uint32_t   deadline_ms;        /* WAIT_HB expiry */
+    uint32_t   ack_ms;             /* WAIT_HB entry time -- the freshness gate's reference point */
     uint16_t   seq;                /* tracked FW_UPDATE seq, WAIT_ACK/WAIT_HB */
     uint8_t    pre_fw[3];
-    uint32_t   pre_uptime, pre_cfg_gen;
 } fleet_t;
 
 typedef enum { FA_NONE = 0, FA_START, FA_FAILED, FA_DONE } fleet_act_kind_t;
 typedef struct { fleet_act_kind_t kind; uint8_t zone; uint8_t fw[3]; } fleet_act_t;
 
 void fleet_init(fleet_t *s);
-int  fleet_start(fleet_t *s, const uint8_t *zones, uint8_t n);   /* 0 ok, -1 already active */
+int  fleet_start(fleet_t *s, const uint8_t *zones, uint8_t n);   /* 0 ok, -2 already active, -1 invalid n */
 void fleet_cancel(fleet_t *s);                                    /* "between zones": in-flight zone finishes on its own */
 /* 1 Hz-ish tick: PRECHECK judged from image_ok/online (current zone);
-   WAIT_HB judged from hb_valid/hb_fw/hb_uptime/hb_cfg_gen (current zone) vs
-   now_ms and the recorded deadline. Returns 1 with *out on FA_START/
-   FA_DONE/FA_FAILED, else 0 (WAIT_ACK: nothing to do here, see
-   fleet_on_ack). */
+   WAIT_HB judged from hb_valid/hb_fw/hb_uptime/hb_arrived_ms (current
+   zone's HB snapshot + the ms timestamp it last arrived at) vs now_ms and
+   the recorded deadline. Returns 1 with *out on FA_START/FA_DONE/
+   FA_FAILED, else 0 (WAIT_ACK: nothing to do here, see fleet_on_ack). */
 int  fleet_tick(fleet_t *s, uint32_t now_ms, int image_ok, int online,
-                int hb_valid, const uint8_t hb_fw[3], uint32_t hb_uptime, uint32_t hb_cfg_gen,
+                int hb_valid, const uint8_t hb_fw[3], uint32_t hb_uptime, uint32_t hb_arrived_ms,
                 fleet_act_t *out);
 /* the tracked FW_UPDATE's ACK (or ZONE_TIMEOUT/ZONE_UNKNOWN, ok=0 either
    way) arrived; ignored outside WAIT_ACK or for a stale/foreign seq. */
-int  fleet_on_ack(fleet_t *s, uint16_t seq, int ok, fleet_act_t *out);
+int  fleet_on_ack(fleet_t *s, uint16_t seq, int ok, uint32_t now_ms, fleet_act_t *out);
 /* records the glue's actual nmgr_submit() outcome for an FA_START just
    issued; submitted=0 (tracker full/busy) fails the zone right there. */
 int  fleet_note_submitted(fleet_t *s, int submitted, uint16_t seq, uint32_t now_ms,
-                           const uint8_t pre_fw[3], uint32_t pre_uptime, uint32_t pre_cfg_gen,
-                           fleet_act_t *out);
-void fleet_status(const fleet_t *s, char *buf, size_t cap);       /* GET FW ZONE rendering */
+                           const uint8_t pre_fw[3], fleet_act_t *out);
+void fleet_status(const fleet_t *s, char *buf, size_t cap);       /* GET FW ZONE rendering, no leading "ZONE" */
 
 /* node_mgr_fleet.c: glue driving fleet_seq.c from node_mgr.c's task loop
    (mirrors nmgr_cfg_tick_1s/nmgr_cfg_on_ev's wiring). node_mgr_fw_zone/

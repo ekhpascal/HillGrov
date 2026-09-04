@@ -154,22 +154,29 @@ static int h_get_fw_zone(cmd_req_t *q, char *r, int l) {
 /* spec §5.3: "OK QUEUED" + NOTIFY style is SET FW ZONE's own contract (the
  * fleet sequencer genuinely outlives the request); mirrored here for
  * SET FW ZONES CONFIRM since it's the same fire-and-track shape, just
- * fleet-wide. A non-zero ops rc (the Task-15 stub's permanent -1 for now)
- * maps to NOT_IMPLEMENTED. */
+ * fleet-wide. Fix round ruling on ops rc: -2 (a sequence is already
+ * running) -> ERR FW_BUSY; -1 (bad zone / no assigned zones) -> ERR
+ * ZONE_UNKNOWN; 0 -> accepted. */
 static int h_set_fw_zone(cmd_req_t *q, char *r, int l) {
-    if (s_ops->fw_zone((uint8_t)q->val[0]) != 0) return cmd_err(r, l, "NOT_IMPLEMENTED");
+    int rc = s_ops->fw_zone((uint8_t)q->val[0]);
+    if (rc == -2) return cmd_err(r, l, "FW_BUSY");
+    if (rc != 0) return cmd_err(r, l, "ZONE_UNKNOWN");
     return cmd_okf(r, l, "QUEUED");
 }
 
 static int h_set_fw_zones(cmd_req_t *q, char *r, int l) {
     (void)q;
-    if (s_ops->fw_all() != 0) return cmd_err(r, l, "NOT_IMPLEMENTED");
+    int rc = s_ops->fw_all();
+    if (rc == -2) return cmd_err(r, l, "FW_BUSY");
+    if (rc != 0) return cmd_err(r, l, "ZONE_UNKNOWN");
     return cmd_okf(r, l, "QUEUED");
 }
 
+/* fw_abort's only failure is "nothing running" -> ERR NOT_READY (fix
+ * round ruling). */
 static int h_set_fw_abort(cmd_req_t *q, char *r, int l) {
     (void)q;
-    if (s_ops->fw_abort() != 0) return cmd_err(r, l, "NOT_IMPLEMENTED");
+    if (s_ops->fw_abort() != 0) return cmd_err(r, l, "NOT_READY");
     return cmd_okf(r, l, "FW ABORT");
 }
 

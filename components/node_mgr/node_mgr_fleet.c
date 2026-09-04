@@ -37,8 +37,11 @@ void nmgr_fleet_init(void) { s_fleet_mux = xSemaphoreCreateMutex(); }
  * judging (same tolerance node_mgr_get() uses: a torn multi-field read is
  * never observed, a one-tick-stale value is the accepted cost). used=0
  * (unassigned/cleared) reads back online=0, hb_valid=0 -- a zone cleared
- * mid-sequence can never look like a false success. */
-static void snap_zone(uint8_t zone, int *used, int *online, uint8_t fw[3], uint32_t *uptime, uint32_t *cfg_gen) {
+ * mid-sequence can never look like a false success. arrived_ms is the
+ * node table's own last_hb_ms -- fleet_tick's WAIT_HB freshness gate
+ * (fix round ruling) needs it to tell a genuinely new heartbeat apart from
+ * the stale pre-update one still sitting in the cache. */
+static void snap_zone(uint8_t zone, int *used, int *online, uint8_t fw[3], uint32_t *uptime, uint32_t *arrived_ms) {
     nmgr_lock();
     hg_node_t *nd = nmgr_node_by_id(zone);
     *used = nd && nd->used;
@@ -46,21 +49,30 @@ static void snap_zone(uint8_t zone, int *used, int *online, uint8_t fw[3], uint3
     if (*used) {
         fw[0] = nd->hb.fw_maj; fw[1] = nd->hb.fw_min; fw[2] = nd->hb.fw_patch;
         *uptime = nd->hb.uptime_s;
-        *cfg_gen = nd->hb.cfg_gen;
+        *arrived_ms = nd->last_hb_ms;
     } else {
-        fw[0] = fw[1] = fw[2] = 0; *uptime = 0; *cfg_gen = 0;
+        fw[0] = fw[1] = fw[2] = 0; *uptime = 0; *arrived_ms = 0;
     }
     nmgr_unlock();
 }
 
 static void notify_failed(uint8_t zone) { notify_emit(NTF_FW, zone, "ZONE %u UPDATE_FAILED", (unsigned)zone); }
 
+/* fix round ruling (minors 5+6): a zone stops being "UPDATING" the instant
+   its run resolves -- DONE (so health reflects ONLINE right away instead
+   of staying artificially UPDATING for the rest of the 180 s window) or
+   FAILED, including the case where mark_updating() already ran in
+   do_start() but nmgr_submit() then failed before any frame went out
+   (rolls that premature mark back). hold_ms=0 expires the hold
+   immediately -- the next health tick re-evaluates the zone normally. */
+static void clear_updating(uint8_t zone) { node_mgr_mark_updating(zone, 0); }
+
 /* Executes an FA_START action: mark_updating + NOTIFY UPDATING, pack+submit
    the tracked FW_UPDATE, then report the outcome back into the pure core.
    Runs on the node_mgr task, triggered from nmgr_fleet_tick_1s below. */
 static void do_start(uint8_t zone) {
-    int used, online; uint8_t fw[3]; uint32_t uptime, cfg_gen;
-    snap_zone(zone, &used, &online, fw, &uptime, &cfg_gen);
+    int used, online; uint8_t fw[3]; uint32_t uptime, arrived_ms;
+    snap_zone(zone, &used, &online, fw, &uptime, &arrived_ms);
 
     node_mgr_mark_updating(zone, FLEET_HOLD_MS);
     notify_emit(NTF_FW, zone, "ZONE %u UPDATING", (unsigned)zone);
@@ -77,9 +89,9 @@ static void do_start(uint8_t zone) {
 
     fleet_act_t act;
     flock();
-    int have = fleet_note_submitted(&s_fleet, ok, seq, nmgr_now_ms(), fw, uptime, cfg_gen, &act);
+    int have = fleet_note_submitted(&s_fleet, ok, seq, nmgr_now_ms(), fw, &act);
     funlock();
-    if (have && act.kind == FA_FAILED) notify_failed(act.zone);
+    if (have && act.kind == FA_FAILED) { clear_updating(act.zone); notify_failed(act.zone); }
 }
 
 void nmgr_fleet_tick_1s(uint32_t now) {
@@ -90,20 +102,26 @@ void nmgr_fleet_tick_1s(uint32_t now) {
     if (!active) return;
 
     int image_ok = fw_srv_image_ok();
-    int used, online; uint8_t fw[3]; uint32_t uptime, cfg_gen;
-    snap_zone(zone, &used, &online, fw, &uptime, &cfg_gen);
+    int used, online; uint8_t fw[3]; uint32_t uptime, arrived_ms;
+    snap_zone(zone, &used, &online, fw, &uptime, &arrived_ms);
 
     fleet_act_t act;
     flock();
-    int have = fleet_tick(&s_fleet, now, image_ok, online, used, fw, uptime, cfg_gen, &act);
+    int have = fleet_tick(&s_fleet, now, image_ok, online, used, fw, uptime, arrived_ms, &act);
     funlock();
     if (!have) return;
 
     switch (act.kind) {
     case FA_START:  do_start(act.zone); break;
-    case FA_DONE:   notify_emit(NTF_FW, act.zone, "ZONE %u DONE %u.%u.%u", (unsigned)act.zone,
-                                 (unsigned)act.fw[0], (unsigned)act.fw[1], (unsigned)act.fw[2]); break;
-    case FA_FAILED: notify_failed(act.zone); break;
+    case FA_DONE:
+        clear_updating(act.zone);
+        notify_emit(NTF_FW, act.zone, "ZONE %u DONE %u.%u.%u", (unsigned)act.zone,
+                    (unsigned)act.fw[0], (unsigned)act.fw[1], (unsigned)act.fw[2]);
+        break;
+    case FA_FAILED:
+        clear_updating(act.zone);
+        notify_failed(act.zone);
+        break;
     default: break;
     }
 }
@@ -112,9 +130,9 @@ void nmgr_fleet_on_ev(const ring_trk_ev_t *ev) {
     int ok = ev->kind == RING_TRK_EV_DONE && ev->status == 0;
     fleet_act_t act;
     flock();
-    int have = fleet_on_ack(&s_fleet, ev->seq, ok, &act);
+    int have = fleet_on_ack(&s_fleet, ev->seq, ok, nmgr_now_ms(), &act);
     funlock();
-    if (have && act.kind == FA_FAILED) notify_failed(act.zone);
+    if (have && act.kind == FA_FAILED) { clear_updating(act.zone); notify_failed(act.zone); }
 }
 
 int node_mgr_fw_zone(uint8_t zone) {

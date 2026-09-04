@@ -197,15 +197,31 @@ static void test_fw_zone_rows(void) {
     TEST_ASSERT_EQUAL_STRING("OK QUEUED\n", resp);
     TEST_ASSERT_EQUAL_UINT8(2, g_fake_nodes.fw_zone_arg);
 
-    /* the real cmd_table_master.c wiring maps its Task-15 stub's permanent -1
-     * to NOT_IMPLEMENTED (ruling #5) -- exercised here via fail_fw_*. */
-    g_fake_nodes.fail_fw_all = 1;
+    /* fix round ruling: real fw_zone/fw_all rc -1 (invalid zone / no
+     * assigned zones) maps to ERR ZONE_UNKNOWN -- exercised here via the
+     * fake's canned rc fields. */
+    g_fake_nodes.fw_all_rc = -1;
     TEST_ASSERT_EQUAL_INT(-1, run("SET FW ZONES CONFIRM"));
-    TEST_ASSERT_EQUAL_STRING("ERR NOT_IMPLEMENTED\n", resp);
+    TEST_ASSERT_EQUAL_STRING("ERR ZONE_UNKNOWN\n", resp);
 
+    /* -2 (a sequence is already running) maps to ERR FW_BUSY -- the
+     * busy-path test the fix round asked for. */
+    g_fake_nodes.fw_zone_rc = -2;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET FW ZONE 3"));
+    TEST_ASSERT_EQUAL_STRING("ERR FW_BUSY\n", resp);
+    g_fake_nodes.fw_all_rc = -2;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET FW ZONES CONFIRM"));
+    TEST_ASSERT_EQUAL_STRING("ERR FW_BUSY\n", resp);
+
+    /* fw_abort's only failure (nothing running) maps to ERR NOT_READY. */
+    g_fake_nodes.fw_abort_rc = -1;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET FW ABORT"));
+    TEST_ASSERT_EQUAL_STRING("ERR NOT_READY\n", resp);
+
+    g_fake_nodes.fw_abort_rc = 0;
     TEST_ASSERT_EQUAL_INT(0, run("SET FW ABORT"));
     TEST_ASSERT_EQUAL_STRING("OK FW ABORT\n", resp);
-    TEST_ASSERT_EQUAL_INT(1, g_fake_nodes.fw_abort_calls);
+    TEST_ASSERT_EQUAL_INT(2, g_fake_nodes.fw_abort_calls);
 
     snprintf(g_fake_nodes.fw_status_text, sizeof g_fake_nodes.fw_status_text, "IDLE");
     TEST_ASSERT_EQUAL_INT(0, run("GET FW ZONE"));

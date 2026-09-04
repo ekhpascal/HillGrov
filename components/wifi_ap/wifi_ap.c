@@ -27,7 +27,16 @@ int wifi_ap_start(void) {
         ESP_LOGE(TAG, "esp_netif_init failed: %s", esp_err_to_name(err));
         return -1;
     }
-    if ((err = esp_event_loop_create_default()) != ESP_OK) {
+    /* fix round ruling: ESP_ERR_INVALID_STATE means the default event loop
+     * already exists (some other component -- e.g. a later SP's own boot
+     * step -- created it first), which is harmless and not this
+     * function's business to treat as failure; the rescue_wifi.c
+     * precedent doesn't even check this return at all. Anything else
+     * really is fatal: without a report path here, a real failure would
+     * silently leave wifi_ap_start() looking like it's making progress
+     * with no way to ever bring the AP up, and (per ruling #1/#7) the
+     * caller must see -1 so it never calls ota_trial_drivers_ok(). */
+    if ((err = esp_event_loop_create_default()) != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "esp_event_loop_create_default failed: %s", esp_err_to_name(err));
         return -1;
     }
