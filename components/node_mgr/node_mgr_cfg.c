@@ -5,15 +5,18 @@
 #include "node_mgr.h"
 #include "node_mgr_internal.h"
 
-/* §4.4 config reconciliation + push/pull machinery. The ring's pending
- * tracker (ring_trk) allows only ONE in-flight tracked frame ring-wide
- * (stop-and-wait), and push's CFG_CHUNKs are sent synchronously right
- * before its tracked CFG_COMMIT -- so at most one zone is ever mid-transfer
- * at a time. This file mirrors that with a single global "current transfer"
- * slot (s_cx) and a single shared pull assembler, round-robining across
- * zones on the 1 Hz tick rather than running N independent state machines --
- * a deliberate simplification (disclosed in the task report), not a
- * per-zone concurrency limit the ring itself doesn't already impose. */
+/* §4.4 config reconciliation + push/pull machinery. The tracker (ring_trk)
+ * allows only ONE in-flight tracked frame ring-wide, and push's CFG_CHUNKs
+ * go out synchronously right before its tracked CFG_COMMIT -- so at most
+ * one zone is ever mid-transfer at a time. This file mirrors that with a
+ * single global "current transfer" slot (s_cx) and one shared pull
+ * assembler, round-robining across zones on the 1 Hz tick instead of N
+ * independent state machines (disclosed simplification, not a ring limit).
+ *
+ * Single-writer (important #3): s_cx/s_cfg/s_hw/s_casm/s_latch/s_fresh are
+ * touched ONLY from the node_mgr task. Foreign-task entry points
+ * (node_mgr_push_cfg, nmgr_cfg_request_clear) just set a request flag under
+ * nmgr_lock(), consumed by the 1 Hz tick. */
 
 typedef struct {
     uint8_t  blob[HG_BLOB_HDR_LEN + sizeof(hg_zone_cfg_t)];   /* sized for the larger (CFG) plane */
@@ -23,6 +26,15 @@ typedef struct {
 
 static nmgr_cache_t s_cfg[HG_MAX_ZONES];   /* kind 1, slot = id-1 */
 static nmgr_cache_t s_hw[HG_MAX_ZONES];    /* kind 2 -- display/export only, never pushed (spec §4.4) */
+static uint8_t      s_fresh[HG_MAX_ZONES]; /* important #2: a fresh HB has arrived since the last decision */
+
+/* important #2: a push that failed on a never-retried ACK token (CFG_VERSION
+ * / INVALID_FIELD) latches the (hb, cache) identity that produced it -- the
+ * automatic reconciler won't try again for that zone until either identity
+ * changes. A manual node_mgr_push_cfg() bypasses the latch (operator
+ * override) but can still set a new one if it fails the same way. */
+typedef struct { uint8_t valid, kind; uint32_t hb_gen, hb_crc, cache_gen, cache_crc; } nmgr_latch_t;
+static nmgr_latch_t s_latch[HG_MAX_ZONES];
 
 typedef enum { CX_IDLE = 0, CX_PULL_ACK, CX_PULL_STREAM, CX_PUSH_COMMIT, CX_RETRY_PULL, CX_RETRY_PUSH } cx_state_t;
 typedef struct {
@@ -31,26 +43,36 @@ typedef struct {
     uint8_t  attempt;          /* 1..4 (initial try + 3 retries, backoff 1/2/4 s between them) */
     uint32_t retry_at_ms;
     uint16_t trk_seq;
-    uint32_t push_gen;         /* push only */
+    uint32_t push_gen;                                   /* push only */
+    uint32_t hb_gen, hb_crc, cache_gen, cache_crc;        /* push only: frozen latch identity, ruling important #2 */
 } cx_t;
 static cx_t       s_cx;
 static ring_casm_t s_casm;
 static const uint32_t BACKOFF_MS[3] = { 1000, 2000, 4000 };
 
+static volatile uint8_t s_push_req_zone;    /* 0 = none pending; set under nmgr_lock() (important #3) */
+static volatile uint8_t s_clear_req_zone;   /* 0 = none pending; set under nmgr_lock() */
+
 static size_t cache_payload_len(uint8_t kind) { return kind == 1 ? sizeof(hg_zone_cfg_t) : sizeof(hg_zone_hw_t); }
 
-static void finish_failed(uint8_t zone) {
+static void finish_failed(uint8_t zone, int terminal) {
     notify_emit(NTF_NODE, zone, "%u CFG_SYNC_FAILED", zone);
     hg_node_t *nd = nmgr_node_by_id(zone);
     if (nd && nd->cmd_timeouts < 3) nd->cmd_timeouts = 3;   /* DEGRADED via ring_health_eval's own rule */
+    if (terminal) {
+        nmgr_latch_t *L = &s_latch[zone - 1];
+        L->valid = 1; L->kind = s_cx.kind;
+        L->hb_gen = s_cx.hb_gen; L->hb_crc = s_cx.hb_crc;
+        L->cache_gen = s_cx.cache_gen; L->cache_crc = s_cx.cache_crc;
+    }
     memset(&s_cx, 0, sizeof s_cx);
     ring_casm_init(&s_casm);
 }
 
-/* terminal=1 skips the retry ladder entirely (ruling #5: CFG_VERSION /
- * INVALID_FIELD ACK details are never retried). */
+/* terminal=1 skips the retry ladder entirely and latches (ruling #5:
+ * CFG_VERSION / INVALID_FIELD ACK details are never retried). */
 static void fail_or_retry(int is_push, int terminal) {
-    if (terminal || s_cx.attempt >= 4) { finish_failed(s_cx.zone); return; }
+    if (terminal || s_cx.attempt >= 4) { finish_failed(s_cx.zone, terminal); return; }
     uint32_t wait = BACKOFF_MS[s_cx.attempt - 1];
     s_cx.attempt = (uint8_t)(s_cx.attempt + 1);
     s_cx.state = is_push ? CX_RETRY_PUSH : CX_RETRY_PULL;
@@ -60,13 +82,13 @@ static void fail_or_retry(int is_push, int terminal) {
 static void start_pull(uint8_t zone, uint8_t kind, uint8_t attempt) {
     uint8_t payload[1] = { kind };
     uint16_t seq;
+    s_cx.zone = zone; s_cx.kind = kind; s_cx.attempt = attempt;
     if (nmgr_submit(zone, RING_T_CFG_GET, payload, 1, &seq) != 0) {
-        s_cx.zone = zone; s_cx.kind = kind; s_cx.attempt = attempt;
         s_cx.state = CX_RETRY_PULL; s_cx.retry_at_ms = nmgr_now_ms() + 1000;   /* tracker full: no attempt burned */
         return;
     }
     ring_casm_init(&s_casm);
-    s_cx.state = CX_PULL_ACK; s_cx.zone = zone; s_cx.kind = kind; s_cx.attempt = attempt; s_cx.trk_seq = seq;
+    s_cx.state = CX_PULL_ACK; s_cx.trk_seq = seq;
 }
 
 static void accept_pull(void) {
@@ -93,11 +115,13 @@ static void accept_pull(void) {
     c->gen   = (kind == 1) ? gen : 0;   /* ruling #7: HW carries no gen concept anywhere */
     c->crc   = hg_crc32(0, c->blob + HG_BLOB_HDR_LEN, plen);
     c->valid = 1;
+    memset(&s_latch[zone - 1], 0, sizeof s_latch[0]);   /* cache identity changed: any old latch is stale */
     memset(&s_cx, 0, sizeof s_cx);
     ring_casm_init(&s_casm);
 }
 
-static void start_push(uint8_t zone, uint32_t gen, uint8_t attempt) {
+static void start_push(uint8_t zone, uint32_t gen, uint8_t attempt,
+                        uint32_t hb_gen, uint32_t hb_crc, uint32_t cache_gen, uint32_t cache_crc) {
     nmgr_cache_t *c = &s_cfg[zone - 1];
     hg_zone_cfg_t work;
     memcpy(&work, c->blob + HG_BLOB_HDR_LEN, sizeof work);
@@ -113,15 +137,16 @@ static void start_push(uint8_t zone, uint32_t gen, uint8_t attempt) {
         nmgr_send_raw(zone, RING_T_CFG_CHUNK, payload, (uint8_t)n);   /* unACKed, back-to-back (spec §2.9) */
     }
 
+    s_cx.zone = zone; s_cx.kind = 1; s_cx.attempt = attempt; s_cx.push_gen = gen;
+    s_cx.hb_gen = hb_gen; s_cx.hb_crc = hb_crc; s_cx.cache_gen = cache_gen; s_cx.cache_crc = cache_crc;
+
     uint8_t commit[5] = { 1, (uint8_t)gen, (uint8_t)(gen >> 8), (uint8_t)(gen >> 16), (uint8_t)(gen >> 24) };
     uint16_t seq;
     if (nmgr_submit(zone, RING_T_CFG_COMMIT, commit, 5, &seq) != 0) {
-        s_cx.zone = zone; s_cx.kind = 1; s_cx.attempt = attempt; s_cx.push_gen = gen;
         s_cx.state = CX_RETRY_PUSH; s_cx.retry_at_ms = nmgr_now_ms() + 1000;
         return;
     }
-    s_cx.state = CX_PUSH_COMMIT; s_cx.zone = zone; s_cx.kind = 1;
-    s_cx.attempt = attempt; s_cx.trk_seq = seq; s_cx.push_gen = gen;
+    s_cx.state = CX_PUSH_COMMIT; s_cx.trk_seq = seq;
 }
 
 static void accept_push(void) {
@@ -129,10 +154,11 @@ static void accept_push(void) {
     c->gen   = s_cx.push_gen;
     c->crc   = hg_crc32(0, c->blob + HG_BLOB_HDR_LEN, sizeof(hg_zone_cfg_t));   /* ruling #4: recompute post-ACK */
     c->valid = 1;
+    memset(&s_latch[s_cx.zone - 1], 0, sizeof s_latch[0]);
     memset(&s_cx, 0, sizeof s_cx);
 }
 
-/* one reconciliation decision per used, reachable zone -- spec §4.4 */
+/* one reconciliation decision per fresh-HB'd, reachable zone -- spec §4.4 */
 static int try_start(uint8_t zone, const hg_node_t *nd) {
     nmgr_cache_t *cfg = &s_cfg[zone - 1];
     nmgr_cache_t *hw  = &s_hw[zone - 1];
@@ -140,43 +166,88 @@ static int try_start(uint8_t zone, const hg_node_t *nd) {
     if (!hw->valid || nd->hb.hw_crc != hw->crc) { start_pull(zone, 2, 1); return 1; }
 
     if (nd->hb.cfg_gen == cfg->gen && nd->hb.cfg_crc == cfg->crc) return 0;   /* in sync */
+
+    nmgr_latch_t *L = &s_latch[zone - 1];
+    if (L->valid && L->hb_gen == nd->hb.cfg_gen && L->hb_crc == nd->hb.cfg_crc &&
+        L->cache_gen == cfg->gen && L->cache_crc == cfg->crc)
+        return 0;   /* this exact identity already failed terminally -- wait for a change */
+
     uint32_t new_gen = (nd->hb.cfg_gen > cfg->gen ? nd->hb.cfg_gen : cfg->gen) + 1;
     if (nd->hb.cfg_gen == cfg->gen)
         notify_emit(NTF_NODE, zone, "%u CFG_FORK", zone);
     else if (nd->hb.cfg_gen > cfg->gen)
         notify_emit(NTF_NODE, zone, "%u CFG_REVERTED %lu", zone, (unsigned long)new_gen);
-    start_push(zone, new_gen, 1);
+    start_push(zone, new_gen, 1, nd->hb.cfg_gen, nd->hb.cfg_crc, cfg->gen, cfg->crc);
     return 1;
 }
 
 void nmgr_cfg_init(void) {
     memset(s_cfg, 0, sizeof s_cfg);
     memset(s_hw, 0, sizeof s_hw);
+    memset(s_latch, 0, sizeof s_latch);
+    memset(s_fresh, 0, sizeof s_fresh);
     memset(&s_cx, 0, sizeof s_cx);
     ring_casm_init(&s_casm);
 }
 
+/* node_mgr task only -- see node_mgr_internal.h. */
 void nmgr_cfg_clear(uint8_t zone) {
     if (zone < 1 || zone > HG_MAX_ZONES) return;
     memset(&s_cfg[zone - 1], 0, sizeof s_cfg[0]);
     memset(&s_hw[zone - 1], 0, sizeof s_hw[0]);
+    memset(&s_latch[zone - 1], 0, sizeof s_latch[0]);
+    s_fresh[zone - 1] = 0;
     if (s_cx.state != CX_IDLE && s_cx.zone == zone) { memset(&s_cx, 0, sizeof s_cx); ring_casm_init(&s_casm); }
 }
 
+void nmgr_cfg_request_clear(uint8_t zone) {
+    nmgr_lock();
+    s_clear_req_zone = zone;
+    nmgr_unlock();
+}
+
+void nmgr_cfg_note_fresh_hb(uint8_t zone) {
+    if (zone >= 1 && zone <= HG_MAX_ZONES) s_fresh[zone - 1] = 1;
+}
+
 void nmgr_cfg_tick_1s(uint32_t now) {
+    nmgr_lock();
+    uint8_t clear_zone = s_clear_req_zone; s_clear_req_zone = 0;
+    uint8_t push_zone  = s_push_req_zone;  s_push_req_zone  = 0;
+    nmgr_unlock();
+
+    if (clear_zone) nmgr_cfg_clear(clear_zone);
+
     if (s_cx.state == CX_PULL_STREAM) {
         if (ring_casm_idle_expired(&s_casm, now)) fail_or_retry(0, 0);
         return;
     }
     if (s_cx.state == CX_RETRY_PULL || s_cx.state == CX_RETRY_PUSH) {
-        if (now < s_cx.retry_at_ms) return;
+        if ((int32_t)(now - s_cx.retry_at_ms) < 0) return;   /* wrap-safe: minor #5 */
         if (s_cx.state == CX_RETRY_PULL) start_pull(s_cx.zone, s_cx.kind, s_cx.attempt);
-        else                             start_push(s_cx.zone, s_cx.push_gen, s_cx.attempt);
+        else start_push(s_cx.zone, s_cx.push_gen, s_cx.attempt, s_cx.hb_gen, s_cx.hb_crc, s_cx.cache_gen, s_cx.cache_crc);
         return;
     }
     if (s_cx.state != CX_IDLE) return;   /* PULL_ACK / PUSH_COMMIT: waiting on the tracker */
 
+    /* important #3: a manual push request is operator-initiated -- it
+     * bypasses the fresh-HB gate and the terminal latch below (both of
+     * which exist to throttle the *automatic* reconciler), but only starts
+     * once the cache is confirmed valid from inside this task (the public
+     * API's own check was an unlocked, best-effort single-word read). */
+    if (push_zone && s_cfg[push_zone - 1].valid) {
+        hg_node_t *nd = nmgr_node_by_id(push_zone);
+        nmgr_cache_t *cfg = &s_cfg[push_zone - 1];
+        uint32_t hb_gen = (nd && nd->used) ? nd->hb.cfg_gen : 0;
+        uint32_t hb_crc = (nd && nd->used) ? nd->hb.cfg_crc : 0;
+        uint32_t new_gen = (hb_gen > cfg->gen ? hb_gen : cfg->gen) + 1;
+        start_push(push_zone, new_gen, 1, hb_gen, hb_crc, cfg->gen, cfg->crc);
+        return;
+    }
+
     for (uint8_t id = 1; id <= HG_MAX_ZONES; id++) {
+        if (!s_fresh[id - 1]) continue;
+        s_fresh[id - 1] = 0;   /* this fresh HB grants exactly one decision opportunity (important #2) */
         hg_node_t *nd = nmgr_node_by_id(id);
         if (!nd || !nd->used) continue;
         if (nd->health == NODE_H_OFFLINE || nd->health == NODE_H_UPDATING) continue;
@@ -203,8 +274,12 @@ void nmgr_cfg_on_ev(const ring_trk_ev_t *ev) {
     }
     if (ev->kind == RING_TRK_EV_DONE && ev->status == 0) { accept_push(); return; }
     if (ev->kind == RING_TRK_EV_DONE) {
+        /* fix round important #1: "ERR INVALID_FIELD" is 17 bytes, not 18 --
+         * n=18 compared the literal's own NUL against the zone's always-
+         * present trailing " <path>" byte (never a match), so this branch
+         * never fired; see task-13-report.md for the byte-by-byte trace. */
         int terminal = strncmp(ev->detail, "ERR CFG_VERSION", 15) == 0 ||
-                       strncmp(ev->detail, "ERR INVALID_FIELD", 18) == 0;
+                       strncmp(ev->detail, "ERR INVALID_FIELD", 17) == 0;
         fail_or_retry(1, terminal);
     } else {
         fail_or_retry(1, 0);   /* ZONE_TIMEOUT / ZONE_UNKNOWN: always retryable */
@@ -212,11 +287,12 @@ void nmgr_cfg_on_ev(const ring_trk_ev_t *ev) {
 }
 
 int node_mgr_push_cfg(uint8_t zone) {
-    if (zone < 1 || zone > HG_MAX_ZONES || s_cx.state != CX_IDLE) return -1;
-    nmgr_cache_t *cfg = &s_cfg[zone - 1];
-    if (!cfg->valid) return -1;
-    hg_node_t *nd = nmgr_node_by_id(zone);
-    uint32_t hb_gen = (nd && nd->used) ? nd->hb.cfg_gen : 0;
-    start_push(zone, (hb_gen > cfg->gen ? hb_gen : cfg->gen) + 1, 1);
-    return 0;
+    if (zone < 1 || zone > HG_MAX_ZONES) return -1;
+    if (!s_cfg[zone - 1].valid) return -1;   /* unlocked single-word read (disclosed, ruling important #3):
+                                                 a stale read either false-rejects (caller may retry) or
+                                                 false-accepts (the tick re-checks validity before pushing) */
+    nmgr_lock();
+    s_push_req_zone = zone;
+    nmgr_unlock();
+    return 0;   /* accepted for processing -- async; the 1 Hz tick starts the actual push */
 }

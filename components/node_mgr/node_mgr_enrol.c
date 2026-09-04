@@ -10,7 +10,15 @@
 /* ztab ownership, HB-driven enrolment (spec §2.8), TIME_SYNC broadcast and
  * ring_health_eval's line formatting -- split out of node_mgr.c purely to
  * keep both files under the ~300-line cap (the natural "identity/time"
- * grouping, mirroring zone_ring_sync.c's split in Task 12). */
+ * grouping, mirroring zone_ring_sync.c's split in Task 12).
+ *
+ * Locking: every function here that mutates s_ztab, a hg_node_t slot, or
+ * s_unassigned_* runs under nmgr_lock() -- ztab and the node table are read
+ * cross-task by node_mgr_get/set_name/clear (node_mgr.c) and by
+ * node_mgr_forward (node_mgr_fwd.c), so the node_mgr task's own writes here
+ * must take the same mutex those callers use (fix round important #3 /
+ * minor #7). s_last_seq/s_seq_known are node_mgr-task-only (never read
+ * cross-task) and stay unlocked. */
 
 static ztab_t   s_ztab;
 static uint16_t s_last_seq[HG_MAX_ZONES];      /* HB seq-gap accounting (ruling #6) */
@@ -25,6 +33,7 @@ void nmgr_enrol_boot_init(void) {
     memset(s_last_seq, 0, sizeof s_last_seq);
     memset(s_seq_known, 0, sizeof s_seq_known);
     uint32_t now = nmgr_now_ms();
+    nmgr_lock();
     for (int i = 0; i < HG_MAX_ZONES; i++) {
         const ztab_ent_t *e = &s_ztab.e[i];
         if (!(e->flags & ZTAB_F_ASSIGNED) || e->id < 1 || e->id > HG_MAX_ZONES) continue;
@@ -35,21 +44,26 @@ void nmgr_enrol_boot_init(void) {
         nd->unconfigured = (e->flags & ZTAB_F_UNCONFIGURED) ? 1 : 0;
         nd->last_hb_ms = now;   /* boot grace: a real OFFLINE alarm needs ~10 s of silence from here */
     }
+    nmgr_unlock();
 }
 
+/* caller holds nmgr_lock() */
 int nmgr_ztab_set_name(uint8_t zone, const char *name) {
     if (ztab_set_name(&s_ztab, zone, name) != 0) return -1;
     return node_store_save(&s_ztab);
 }
 
+/* caller holds nmgr_lock() */
 int nmgr_ztab_clear(uint8_t zone) {
     if (ztab_clear(&s_ztab, zone) != 0) return -1;
     return node_store_save(&s_ztab);
 }
 
 int nmgr_unassigned_copy(uint8_t macs[][6], int cap) {
+    nmgr_lock();
     int n = s_unassigned_n < cap ? s_unassigned_n : cap;
     for (int i = 0; i < n; i++) memcpy(macs[i], s_unassigned_mac[i], 6);
+    nmgr_unlock();
     return n;
 }
 
@@ -64,6 +78,7 @@ static void mac_str(const uint8_t mac[6], char out[18]) {
     snprintf(out, 18, "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
+/* caller holds nmgr_lock() */
 static void track_unassigned(const uint8_t mac[6]) {
     for (int i = 0; i < s_unassigned_n; i++)
         if (memcmp(s_unassigned_mac[i], mac, 6) == 0) return;
@@ -71,24 +86,41 @@ static void track_unassigned(const uint8_t mac[6]) {
     if (!s_unassigned_notified) { s_unassigned_notified = 1; notify_emit(NTF_NODE, 0, "TABLE_FULL"); }
 }
 
+/* minor #9: a mac that later gets a real slot must stop showing up in
+ * GET UNASSIGNED. caller holds nmgr_lock(). */
+static void purge_unassigned(const uint8_t mac[6]) {
+    for (int i = 0; i < s_unassigned_n; i++) {
+        if (memcmp(s_unassigned_mac[i], mac, 6) == 0) {
+            memcpy(s_unassigned_mac[i], s_unassigned_mac[s_unassigned_n - 1], 6);   /* swap-remove: order doesn't matter */
+            s_unassigned_n--;
+            return;
+        }
+    }
+}
+
+/* caller holds nmgr_lock() */
 static void update_telemetry(hg_node_t *nd, uint8_t zone_id, const ring_hdr_t *hdr, const hg_hb_t *hb) {
     nd->hops         = (uint8_t)(RING_TTL_INIT - hdr->ttl);
     nd->link_flags   = hb->link_flags;
     nd->fault_flag   = hb->active_faults != 0;
     nd->cmd_timeouts = 0;                          /* any HB clears forward-failure accounting */
     nd->last_hb_ms   = nmgr_now_ms();
-    nd->hb           = *hb;
 
-    /* a forward jump of hdr.seq beyond +1 folds the gap into this HB's own
-     * rx_drop tally (ruling #6); a backward/huge jump (zone reboot resetting
-     * its tx_seq) is not a "gap" over the ring -- just resync quietly. */
+    /* seq-gap accounting (ruling #6 / minor #4): fold into the RAM-only,
+     * monotonically-accumulating seq_drop_tally BEFORE the hb copy below --
+     * unlike the old rx_drop-splicing approach, this field is never
+     * overwritten by the wire hb, so it survives across heartbeats instead
+     * of resetting every 2 s. */
     uint8_t idx = (uint8_t)(zone_id - 1);
     if (s_seq_known[idx]) {
         uint16_t delta = (uint16_t)(hdr->seq - s_last_seq[idx]);
-        if (delta > 1 && delta < 32768u) nd->hb.rx_drop = (uint16_t)(nd->hb.rx_drop + (delta - 1));
+        if (delta > 1 && delta < 32768u) nd->seq_drop_tally += (uint32_t)(delta - 1);
     }
     s_last_seq[idx] = hdr->seq;
     s_seq_known[idx] = 1;
+
+    nd->hb = *hb;
+    nmgr_cfg_note_fresh_hb(zone_id);   /* important #2: gate the reconciler to fresh-HB edges only */
 }
 
 void nmgr_enrol_handle_hb(const ring_frame_t *f) {
@@ -96,26 +128,35 @@ void nmgr_enrol_handle_hb(const ring_frame_t *f) {
     if (hg_hb_parse(f->payload, f->hdr.len, &hb) != 0) return;
 
     uint8_t out_id = 0;
+    nmgr_lock();
     ztab_en_t v = ztab_enrol(&s_ztab, hb.mac, f->hdr.src, &out_id);
-    if (v == ZTAB_EN_FULL) { track_unassigned(hb.mac); return; }
+    if (v == ZTAB_EN_FULL) {
+        track_unassigned(hb.mac);
+        nmgr_unlock();
+        return;
+    }
     if (v == ZTAB_EN_CONFLICT) {
-        send_assign(hb.mac, RING_ID_UNASSIGNED);       /* intruder reset to 0xFE (spec §2.8) */
         notify_emit(NTF_NODE, out_id, "%u ID_CONFLICT", out_id);
+        nmgr_unlock();
+        send_assign(hb.mac, RING_ID_UNASSIGNED);       /* intruder reset to 0xFE (spec §2.8) */
         return;                                        /* the real owner's row is untouched */
     }
 
     hg_node_t *nd = nmgr_node_by_id(out_id);
-    if (!nd) return;                                    /* defensive: out_id always 1..8 above */
+    if (!nd) { nmgr_unlock(); return; }                 /* defensive: out_id always 1..8 above */
 
     if (v == ZTAB_EN_ASSIGNED) {
+        purge_unassigned(hb.mac);
         node_store_save(&s_ztab);
         memset(nd, 0, sizeof *nd);
         nd->used = 1; nd->id = out_id; nd->unconfigured = 1;
         char ms[18]; mac_str(hb.mac, ms);
         notify_emit(NTF_NODE, out_id, "%u NEW %s", out_id, ms);
     }
-    send_assign(hb.mac, out_id);   /* KNOWN/STALE/ASSIGNED all (re)assert the same id, spec §2.8 */
     update_telemetry(nd, out_id, &f->hdr, &hb);
+    nmgr_unlock();
+
+    send_assign(hb.mac, out_id);   /* KNOWN/STALE/ASSIGNED all (re)assert the same id, spec §2.8 */
 }
 
 void nmgr_broadcast_time_sync(uint32_t now) {
@@ -124,7 +165,9 @@ void nmgr_broadcast_time_sync(uint32_t now) {
     t.utc_offset_s = 0;
     t.flags        = node_mgr_time_valid() ? 0x01 : 0x00;
     t.ring_size    = nmgr_ring_size();
+    nmgr_lock();
     t.online_mask  = ring_online_mask(nmgr_table(), HG_MAX_ZONES, now);
+    nmgr_unlock();
     t.inhibit_mask = 0;   /* SP5 */
     uint8_t payload[13];
     int n = hg_ts_pack(&t, payload);
@@ -135,7 +178,10 @@ void nmgr_broadcast_time_sync(uint32_t now) {
  * / "RING CLOSED" (spec §2.7) -- strip the leading type word it already
  * carries so notify_emit's own type-name prefix isn't duplicated. See the
  * design note in node_mgr.c's NOTIFY passthrough for why the master's own
- * id (0) still shows up ahead of the real zone id in the final line. */
+ * id (0) still shows up ahead of the real zone id in the final line. Called
+ * from node_mgr.c's task loop while nmgr_lock() is already held (it's
+ * ring_health_eval's own callback, invoked synchronously from inside that
+ * locked call). */
 void nmgr_health_cb(void *ctx, const char *line) {
     (void)ctx;
     if (strncmp(line, "NODE ", 5) == 0) {

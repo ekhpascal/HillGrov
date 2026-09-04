@@ -184,6 +184,13 @@ typedef struct {
     uint32_t last_hb_ms, updating_until_ms;
     uint8_t  hops, link_flags, cmd_timeouts;
     hg_hb_t  hb;                        /* last full heartbeat */
+    /* RAM-side only (never on the wire, never read by ring_health.c): a
+       master-side accumulator of HB hdr.seq gaps (delta-1 per jump beyond
+       +1), folded in BEFORE each fresh hb copy overwrites the zone's own
+       self-reported rx_drop -- so this tally survives across heartbeats
+       instead of being reset by every hb copy. node_mgr_cfg's GET NODE
+       consumer (Task 14) renders it. */
+    uint32_t seq_drop_tally;
 } hg_node_t;
 
 typedef enum { RING_ST_IDLE = 0, RING_ST_OK, RING_ST_OPEN } ring_state_t;

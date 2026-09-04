@@ -17,7 +17,13 @@ static const char *TAG = "ring_link";
 #define RING_EVTQ_DEPTH     16
 #define RING_RX_BUF         2048
 #define RING_TX_BUF         1024
-#define RING_CONSUME_DEPTH  4
+/* fix round minor #6: was 4. A CFG_GET pull's chunk burst (up to
+ * RING_CFG_MAX_CHUNKS = 7 CFG_CHUNK frames, back-to-back and unACKed) can
+ * land in this queue at the same moment a HEARTBEAT or ACK arrives from a
+ * different zone; depth 4 risked rx_drop on that collision alone, before
+ * node_mgr's consumer even got a chance to drain. 8 gives headroom for a
+ * full chunk burst plus one more frame. */
+#define RING_CONSUME_DEPTH  8
 #define RING_READ_CHUNK     64
 
 static int               s_is_master;

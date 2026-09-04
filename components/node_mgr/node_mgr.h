@@ -18,7 +18,16 @@ void node_mgr_start(void);
  * state, submits a CMD frame via the tracker (BUSY when the tracker/forward
  * slot is full/busy), blocks up to timeout_ms on a per-call semaphore, then
  * copies the ACK detail verbatim into resp (already CLI-shaped) or an
- * "ERR <token>\n" line. Returns 0/-1 exactly like cmd_dispatch. */
+ * "ERR <token>\n" line. Returns 0/-1 exactly like cmd_dispatch.
+ * timeout_ms is clamped to 5000 ms internally (minor #8) -- a caller cannot
+ * block this call, or the forward slot it holds, past that regardless of
+ * what it passes. RING_DOWN before node_mgr_start() has run (boot window).
+ * At-most-once: the ring's own dup cache means a forwarded command is never
+ * re-executed at the zone even across a client-side retry; a ZONE_TIMEOUT
+ * here only means the ACK was lost/late, not that the zone didn't run it --
+ * this layer never retries automatically (spec §5.3: doses aren't
+ * idempotent), so a caller that itself retries after ZONE_TIMEOUT can cause
+ * a real double-execution and must not do so blindly. */
 int  node_mgr_forward(uint8_t zone, const char *line, char *resp, int resp_len, uint32_t timeout_ms);
 
 int  node_mgr_node_count(void);                                /* count of used/assigned table slots */

@@ -27,7 +27,12 @@ static uint8_t       s_time_valid;
 static uint16_t      s_seq;
 static portMUX_TYPE  s_seq_mux = portMUX_INITIALIZER_UNLOCKED;
 
+static SemaphoreHandle_t s_state_mux;              /* guards s_tab/s_ring_status/ztab + cfg's request flags */
+
 /* ---- shared plumbing (node_mgr_internal.h) ---- */
+
+void nmgr_lock(void)   { xSemaphoreTake(s_state_mux, portMAX_DELAY); }
+void nmgr_unlock(void) { xSemaphoreGive(s_state_mux); }
 
 uint32_t nmgr_now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -182,8 +187,10 @@ static void node_mgr_task(void *arg) {
 
         if (now - last_1s >= 1000) {
             last_1s = now;
+            nmgr_lock();
             ring_health_eval(s_tab, HG_MAX_ZONES, now, ring_link_ts_returned_ms(), &s_ring_status,
                               nmgr_health_cb, NULL);
+            nmgr_unlock();
             nmgr_cfg_tick_1s(now);
         }
         if (now - last_2s >= 2000) { last_2s = now; nmgr_broadcast_time_sync(now); }
@@ -194,39 +201,63 @@ static void node_mgr_task(void *arg) {
 
 void node_mgr_start(void) {
     s_trk_mux = xSemaphoreCreateMutex();
+    s_state_mux = xSemaphoreCreateMutex();
     nmgr_fwd_init();
     xTaskCreatePinnedToCore(node_mgr_task, "node_mgr", 6144, NULL, 4, NULL, 1);
 }
 
-/* ---- public accessors ---- */
+/* ---- public accessors ----
+ * node_mgr_get/ring_status/node_count copy under nmgr_lock() -- the same
+ * mutex node_mgr_cfg.c's pending-request flags use -- so a caller never
+ * observes a torn snapshot (fix round minor #7); the values themselves can
+ * still be one tick stale, which is exactly what "snapshot" already means. */
 
 int node_mgr_node_count(void) {
+    nmgr_lock();
     int n = 0;
     for (int i = 0; i < HG_MAX_ZONES; i++) if (s_tab[i].used) n++;
+    nmgr_unlock();
     return n;
 }
 
 int node_mgr_get(int slot, hg_node_t *out) {
-    if (slot < 0 || slot >= HG_MAX_ZONES || !s_tab[slot].used) return -1;
-    *out = s_tab[slot];
-    return 0;
+    if (slot < 0 || slot >= HG_MAX_ZONES) return -1;
+    nmgr_lock();
+    int used = s_tab[slot].used;
+    if (used) *out = s_tab[slot];
+    nmgr_unlock();
+    return used ? 0 : -1;
 }
 
-void node_mgr_ring_status(ring_status_t *out) { *out = s_ring_status; }
+void node_mgr_ring_status(ring_status_t *out) {
+    nmgr_lock();
+    *out = s_ring_status;
+    nmgr_unlock();
+}
 
 int node_mgr_set_name(uint8_t zone, const char *name) {
-    if (nmgr_ztab_set_name(zone, name) != 0) return -1;
-    hg_node_t *nd = nmgr_node_by_id(zone);
-    if (nd && nd->used) snprintf(nd->name, sizeof nd->name, "%s", name);
-    return 0;
+    nmgr_lock();
+    int rc = nmgr_ztab_set_name(zone, name);
+    if (rc == 0) {
+        hg_node_t *nd = nmgr_node_by_id(zone);
+        if (nd && nd->used) snprintf(nd->name, sizeof nd->name, "%s", name);
+    }
+    nmgr_unlock();
+    return rc;
 }
 
 int node_mgr_clear(uint8_t zone) {
-    if (nmgr_ztab_clear(zone) != 0) return -1;
-    hg_node_t *nd = nmgr_node_by_id(zone);
-    if (nd) memset(nd, 0, sizeof *nd);
-    nmgr_cfg_clear(zone);   /* forget the RAM cache too -- a re-enrolled id may be a different board */
-    return 0;
+    nmgr_lock();
+    int rc = nmgr_ztab_clear(zone);
+    if (rc == 0) {
+        hg_node_t *nd = nmgr_node_by_id(zone);
+        if (nd) memset(nd, 0, sizeof *nd);
+    }
+    nmgr_unlock();
+    /* the RAM cfg cache (s_cx/s_cfg/s_hw/s_casm) belongs to the node_mgr
+     * task alone (important #3) -- queue it instead of touching it here. */
+    if (rc == 0) nmgr_cfg_request_clear(zone);
+    return rc;
 }
 
 int node_mgr_unassigned(uint8_t macs[][6], int cap) { return nmgr_unassigned_copy(macs, cap); }
@@ -235,6 +266,8 @@ int node_mgr_time_valid(void) { return s_time_valid; }
 void node_mgr_time_was_set(void) { s_time_valid = 1; }
 
 void node_mgr_mark_updating(uint8_t zone, uint32_t hold_ms) {
+    nmgr_lock();
     hg_node_t *nd = nmgr_node_by_id(zone);
     if (nd) nd->updating_until_ms = nmgr_now_ms() + hold_ms;
+    nmgr_unlock();
 }
