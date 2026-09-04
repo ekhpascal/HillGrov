@@ -181,6 +181,11 @@ void nmgr_enrol_handle_hb(const ring_frame_t *f) {
         memset(nd, 0, sizeof *nd);
         s_seq_known[out_id - 1] = 0;   /* a different board on this id: its counter is unrelated */
         nd->used = 1; nd->id = out_id; nd->unconfigured = 1;
+        /* The RAM row's MAC comes from the heartbeat that just enrolled this
+         * board. Without this the row carried 00:00:00:00:00:00 in GET NODES /
+         * GET NODE until the next master reboot re-read the ztab from NVS --
+         * found on the G1 bench (the ztab entry itself was always correct). */
+        memcpy(nd->mac, hb.mac, 6);
         char ms[18]; mac_str(hb.mac, ms);
         notify_emit_as(out_id, NTF_NODE, out_id, "NEW %s", ms);
     }
