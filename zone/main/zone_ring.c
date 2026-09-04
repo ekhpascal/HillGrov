@@ -110,10 +110,7 @@ static uint8_t build_ack_detail(const char *resp, char out[126]) {
 /* At-most-once cache (spec 2.6), shared by the two tracked, side-effecting
  * frame types the master sends: CMD and CFG_COMMIT. One slot is enough because
  * the master keeps exactly ONE tracked frame outstanding ring-wide (ring_trk is
- * stop-and-wait), so two of them are never mid-execution here at the same time.
- * 1 = this frame was a retransmit and is fully handled (absorbed while the
- * original is still running, or the cached reply re-sent); 0 = the caller must
- * execute it and then report the outcome through zring_dup_finish(). */
+ * stop-and-wait), so two are never mid-execution here at the same time. */
 int zring_dup_begin(const ring_frame_t *f, uint32_t now) {
     int st = ring_dup_check(&s_dup, f->hdr.seq, now);
     if (st == RING_DUP_ABSORB) return 1;                   /* in-progress dup: nothing */
@@ -225,12 +222,11 @@ static void send_hb(uint32_t now) {
     uint8_t payload[62 + 14 * HG_MAX_SHELVES];
     int n = hg_hb_pack(&h, payload, sizeof payload);
     if (n >= 0) {
-        /* Heartbeats carry their OWN sequence counter. The master's gap tally
+        /* Heartbeats carry their OWN sequence counter: the master's gap tally
          * (GET NODE's SeqDrops) samples HEARTBEAT headers only, so a counter
-         * shared with CFG_CHUNK/ACK/NOTIFY traffic made every config transfer
-         * read as ~9 lost heartbeats -- a metric artifact, never loss. Only
-         * zone_ring_task sends heartbeats, so this one needs no critical
-         * section (unlike zring_next_seq, which several tasks reach). */
+         * shared with CFG_CHUNK/ACK/NOTIFY traffic read every config transfer
+         * as ~9 lost heartbeats. Only zone_ring_task sends heartbeats, so no
+         * critical section (unlike zring_next_seq, reached by several tasks). */
         ring_hdr_t hdr = { .src = hg_store_zid(), .dst = RING_ID_MASTER, .type = RING_T_HEARTBEAT,
                             .flags = 0, .ttl = RING_TTL_INIT, .len = (uint8_t)n, .seq = ++s_hb_seq };
         ring_link_send(&hdr, payload);

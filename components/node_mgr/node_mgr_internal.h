@@ -57,11 +57,13 @@ int  nmgr_unassigned_copy(uint8_t macs[][6], int cap);           /* locks intern
 void nmgr_fwd_init(void);
 void nmgr_fwd_on_ev(const ring_trk_ev_t *ev);
 
-/* node_mgr_cfg.c: cache init, the 1 Hz reconciliation/retry driver, the
- * CFG_CHUNK feed (pull assembler) and the tracker completion hook for
- * RING_T_CFG_GET / RING_T_CFG_COMMIT. nmgr_cfg_clear() touches s_cx/s_cfg/
- * s_hw/s_casm directly and must only ever run on the node_mgr task (via the
- * 1 Hz tick, itself, or boot) -- node_mgr_clear() queues it through
+/* §4.4 config reconciliation, split in two (node_mgr_cfg_internal.h owns the
+ * seam): node_mgr_cfg.c is the latch/decision half -- cache init, the 1 Hz
+ * decision, the failure latch; node_mgr_cfgx.c is the transfer half and owns
+ * the CFG_CHUNK feed (pull assembler) plus the tracker completion hook for
+ * RING_T_CFG_GET / RING_T_CFG_COMMIT. Everything below touches state that must
+ * only ever be reached from the node_mgr task (via the 1 Hz tick, the frame
+ * dispatch, or boot) -- node_mgr_clear() queues its work through
  * nmgr_cfg_request_clear() instead of calling it directly (important #3). */
 void nmgr_cfg_init(void);
 void nmgr_cfg_clear(uint8_t zone);                               /* node_mgr task only */
