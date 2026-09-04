@@ -124,7 +124,9 @@ int zring_dup_begin(const ring_frame_t *f, uint32_t now) {
 }
 
 void zring_dup_finish(uint16_t seq, uint8_t status, const char *detail) {
-    ring_dup_done(&s_dup, seq, status, detail);
+    /* A FRESH clock read: the 3000 ms replay window runs from completion, and a
+     * CMD may have been executing for seconds since the dequeue timestamp. */
+    ring_dup_done(&s_dup, seq, status, detail, now_ms());
 }
 
 static void handle_cmd(const ring_frame_t *f, uint32_t now) {
@@ -155,7 +157,7 @@ static void handle_cmd(const ring_frame_t *f, uint32_t now) {
      * an accepted SP1 tradeoff, not something this read needs to guard. */
     uint8_t dlen = build_ack_detail(s_resp, detail);
     detail[dlen] = '\0';
-    ring_dup_done(&s_dup, f->hdr.seq, status, detail);
+    zring_dup_finish(f->hdr.seq, status, detail);
     zring_send_ack(f->hdr.src, f->hdr.seq, status, detail, dlen);
 }
 

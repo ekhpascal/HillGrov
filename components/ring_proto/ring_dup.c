@@ -20,7 +20,8 @@ int ring_dup_check(ring_dup_t *c, uint16_t seq, uint32_t now_ms)
     }
 
     if (c->state == RING_DUP_REPLAY) {
-        /* Execution complete: check if within 3000 ms window (inclusive) */
+        /* Execution complete: within 3000 ms of COMPLETION (inclusive) -- see
+           ring_dup_done for why the window cannot run from the start instead */
         if (now_ms - c->t_ms <= 3000) {
             return RING_DUP_REPLAY;
         }
@@ -41,7 +42,7 @@ void ring_dup_start(ring_dup_t *c, uint16_t seq, uint32_t now_ms)
     memset(c->detail, 0, sizeof(c->detail));
 }
 
-void ring_dup_done(ring_dup_t *c, uint16_t seq, uint8_t status, const char *detail)
+void ring_dup_done(ring_dup_t *c, uint16_t seq, uint8_t status, const char *detail, uint32_t now_ms)
 {
     /* Only update if this completion matches the cached sequence;
        stale completions (e.g. from a slow handler after cache eviction) are ignored */
@@ -49,6 +50,13 @@ void ring_dup_done(ring_dup_t *c, uint16_t seq, uint8_t status, const char *deta
         return;
     }
     c->state = RING_DUP_REPLAY;
+    /* The 3000 ms replay window runs from COMPLETION, not from start. A command
+       can take up to cmd_task's 3500 ms abandon timeout, and the zone checks the
+       cache with the clock read when it DEQUEUED the frame: a retransmit queued
+       at +520 ms and dequeued after that abandon would have seen "> 3000 ms since
+       start" and executed the command a second time -- spec 2.6's at-most-once
+       violated on exactly the slow, already-unhappy path. */
+    c->t_ms = now_ms;
     c->status = status;
     if (detail) {
         strncpy(c->detail, detail, sizeof(c->detail) - 1);

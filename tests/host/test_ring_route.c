@@ -235,7 +235,7 @@ static void test_dup_check_new_seq_returns_exec(void) {
     ring_dup_t c;
     ring_dup_init(&c);
     ring_dup_start(&c, 100, 1000);
-    ring_dup_done(&c, 100, 0, "");
+    ring_dup_done(&c, 100, 0, "", 1000);
     int result = ring_dup_check(&c, 101, 1000);
     TEST_ASSERT_EQUAL_INT(RING_DUP_EXEC, result);
 }
@@ -252,7 +252,7 @@ static void test_dup_check_same_seq_done_within_window_replay(void) {
     ring_dup_t c;
     ring_dup_init(&c);
     ring_dup_start(&c, 100, 1000);
-    ring_dup_done(&c, 100, 0, "test");
+    ring_dup_done(&c, 100, 0, "test", 1000);
     int result = ring_dup_check(&c, 100, 2000);
     TEST_ASSERT_EQUAL_INT(RING_DUP_REPLAY, result);
 }
@@ -261,7 +261,7 @@ static void test_dup_check_same_seq_done_outside_window_exec(void) {
     ring_dup_t c;
     ring_dup_init(&c);
     ring_dup_start(&c, 100, 1000);
-    ring_dup_done(&c, 100, 0, "test");
+    ring_dup_done(&c, 100, 0, "test", 1000);
     int result = ring_dup_check(&c, 100, 4001);
     TEST_ASSERT_EQUAL_INT(RING_DUP_EXEC, result);
 }
@@ -279,10 +279,26 @@ static void test_dup_done_marks_complete(void) {
     ring_dup_t c;
     ring_dup_init(&c);
     ring_dup_start(&c, 42, 5000);
-    ring_dup_done(&c, 42, 5, "operation succeeded");
+    ring_dup_done(&c, 42, 5, "operation succeeded", 5200);
     TEST_ASSERT_EQUAL_UINT8(RING_DUP_REPLAY, c.state);  /* DONE = REPLAY state */
     TEST_ASSERT_EQUAL_UINT8(5, c.status);
     TEST_ASSERT_EQUAL_INT(0, strcmp(c.detail, "operation succeeded"));
+    TEST_ASSERT_EQUAL_UINT32(5200, c.t_ms);             /* stamped at COMPLETION, not at start */
+}
+
+/* The abandon timeline the final review found: a CMD that runs to cmd_task's
+   3500 ms internal timeout, whose retransmit is only dequeued afterwards. With
+   the window measured from the START it read as expired and the command would
+   have EXECUTED a second time (spec 2.6 at-most-once violated). */
+static void test_dup_window_survives_a_3500_ms_abandon(void) {
+    ring_dup_t c;
+    ring_dup_init(&c);
+    ring_dup_start(&c, 100, 0);              /* dequeued and dispatched at t=0 */
+    ring_dup_done(&c, 100, 1, "ERR INTERNAL", 3500);   /* cmd_task gave up at t=3500 */
+
+    TEST_ASSERT_EQUAL_INT(RING_DUP_REPLAY, ring_dup_check(&c, 100, 3520));
+    TEST_ASSERT_EQUAL_INT(RING_DUP_REPLAY, ring_dup_check(&c, 100, 6500));   /* window edge */
+    TEST_ASSERT_EQUAL_INT(RING_DUP_EXEC, ring_dup_check(&c, 100, 6501));     /* past it */
 }
 
 static void test_dup_detail_preserved_exactly(void) {
@@ -290,7 +306,7 @@ static void test_dup_detail_preserved_exactly(void) {
     ring_dup_init(&c);
     const char *detail_msg = "zone 3 reports sensor timeout on channel 2";
     ring_dup_start(&c, 50, 2000);
-    ring_dup_done(&c, 50, 1, detail_msg);
+    ring_dup_done(&c, 50, 1, detail_msg, 2000);
     TEST_ASSERT_EQUAL_MEMORY(detail_msg, c.detail, strlen(detail_msg) + 1);
 }
 
@@ -298,7 +314,7 @@ static void test_dup_new_seq_overwrites_old(void) {
     ring_dup_t c;
     ring_dup_init(&c);
     ring_dup_start(&c, 100, 1000);
-    ring_dup_done(&c, 100, 0, "old entry");
+    ring_dup_done(&c, 100, 0, "old entry", 1000);
     ring_dup_start(&c, 200, 2000);
     TEST_ASSERT_EQUAL_UINT16(200, c.seq);
     TEST_ASSERT_EQUAL_UINT32(2000, c.t_ms);
@@ -310,10 +326,10 @@ static void test_dup_cache_single_slot_only(void) {
     ring_dup_init(&c);
     /* Start with seq 100, finish it */
     ring_dup_start(&c, 100, 1000);
-    ring_dup_done(&c, 100, 0, "first");
+    ring_dup_done(&c, 100, 0, "first", 1000);
     /* Start with seq 200, should overwrite */
     ring_dup_start(&c, 200, 2000);
-    ring_dup_done(&c, 200, 0, "second");
+    ring_dup_done(&c, 200, 0, "second", 2000);
     /* Check seq 100 is gone (returns EXEC, not REPLAY) */
     int result = ring_dup_check(&c, 100, 2500);
     TEST_ASSERT_EQUAL_INT(RING_DUP_EXEC, result);
@@ -323,7 +339,7 @@ static void test_dup_window_boundary_at_3000_ms_replay(void) {
     ring_dup_t c;
     ring_dup_init(&c);
     ring_dup_start(&c, 100, 1000);
-    ring_dup_done(&c, 100, 0, "test");
+    ring_dup_done(&c, 100, 0, "test", 1000);
     /* Exactly 3000 ms elapsed: should still be REPLAY */
     int result = ring_dup_check(&c, 100, 4000);
     TEST_ASSERT_EQUAL_INT(RING_DUP_REPLAY, result);
@@ -333,7 +349,7 @@ static void test_dup_window_boundary_after_3000_ms_exec(void) {
     ring_dup_t c;
     ring_dup_init(&c);
     ring_dup_start(&c, 100, 1000);
-    ring_dup_done(&c, 100, 0, "test");
+    ring_dup_done(&c, 100, 0, "test", 1000);
     /* 3001 ms elapsed: should be EXEC (outside window) */
     int result = ring_dup_check(&c, 100, 4001);
     TEST_ASSERT_EQUAL_INT(RING_DUP_EXEC, result);
@@ -344,11 +360,11 @@ static void test_dup_done_stale_completion_ignored(void) {
     ring_dup_init(&c);
     /* Start seq 100 and complete it */
     ring_dup_start(&c, 100, 1000);
-    ring_dup_done(&c, 100, 0, "seq 100 done");
+    ring_dup_done(&c, 100, 0, "seq 100 done", 1000);
     /* Start seq 200 (overwrites 100) */
     ring_dup_start(&c, 200, 2000);
     /* Stale completion for seq 100 arrives — should be NO-OP */
-    ring_dup_done(&c, 100, 5, "old handler finished");
+    ring_dup_done(&c, 100, 5, "old handler finished", 2500);
     /* Check that seq 200 is still in progress (ABSORB) */
     int result_200 = ring_dup_check(&c, 200, 2000);
     TEST_ASSERT_EQUAL_INT(RING_DUP_ABSORB, result_200);
@@ -399,5 +415,6 @@ int main(void) {
     RUN_TEST(test_dup_window_boundary_at_3000_ms_replay);
     RUN_TEST(test_dup_window_boundary_after_3000_ms_exec);
     RUN_TEST(test_dup_done_stale_completion_ignored);
+    RUN_TEST(test_dup_window_survives_a_3500_ms_abandon);
     return UNITY_END();
 }

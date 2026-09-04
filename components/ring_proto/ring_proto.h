@@ -52,10 +52,13 @@ enum { RING_DUP_EXEC = 0, RING_DUP_ABSORB = 1, RING_DUP_REPLAY = 2 };
 typedef struct { uint16_t seq; uint8_t state, status; uint32_t t_ms; char detail[126]; } ring_dup_t;
 void ring_dup_init(ring_dup_t *c);
 int  ring_dup_check(ring_dup_t *c, uint16_t seq, uint32_t now_ms);
-     /* EXEC (new seq, or same seq older than 3000 ms) / ABSORB (same seq, IN_PROGRESS)
-        / REPLAY (same seq, DONE, within window) */
+     /* EXEC (new seq, or same seq completed more than 3000 ms ago) / ABSORB (same seq,
+        IN_PROGRESS) / REPLAY (same seq, DONE, within window) */
 void ring_dup_start(ring_dup_t *c, uint16_t seq, uint32_t now_ms);   /* BEFORE dispatch (spec §2.6) */
-void ring_dup_done(ring_dup_t *c, uint16_t seq, uint8_t status, const char *detail);
+void ring_dup_done(ring_dup_t *c, uint16_t seq, uint8_t status, const char *detail, uint32_t now_ms);
+     /* AFTER dispatch: now_ms stamps the COMPLETION time and the replay window runs
+        from it -- a command may run for up to cmd_task's 3500 ms abandon timeout, so a
+        window measured from the start could expire before the reply even exists */
 
 #define RING_TRK_DEPTH 8
 uint32_t ring_ack_timeout_ms(uint8_t ring_size);   /* clamp(200 + 40*ring_size, 400, 900) */
