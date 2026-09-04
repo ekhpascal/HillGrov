@@ -121,8 +121,17 @@ static void update_telemetry(hg_node_t *nd, uint8_t zone_id, const ring_hdr_t *h
      * monotonically-accumulating seq_drop_tally BEFORE the hb copy below --
      * unlike the old rx_drop-splicing approach, this field is never
      * overwritten by the wire hb, so it survives across heartbeats instead
-     * of resetting every 2 s. */
+     * of resetting every 2 s. The zone stamps heartbeats from a counter of
+     * their own (zone_ring.c's s_hb_seq), so this measures HEARTBEAT loss and
+     * nothing else.
+     *
+     * A zone reboot restarts that counter at 1 while our baseline still holds
+     * the pre-reboot value: past 32768 heartbeats the backwards step reads as a
+     * ~25 k forward jump and would book ~25 k bogus drops. hb.uptime_s is
+     * monotonic within a boot, so a REGRESSION is the reboot signal -- drop the
+     * baseline and re-learn it from this heartbeat. */
     uint8_t idx = (uint8_t)(zone_id - 1);
+    if (hb->uptime_s < nd->hb.uptime_s) s_seq_known[idx] = 0;
     if (s_seq_known[idx]) {
         uint16_t delta = (uint16_t)(hdr->seq - s_last_seq[idx]);
         if (delta > 1 && delta < 32768u) nd->seq_drop_tally += (uint32_t)(delta - 1);
@@ -160,6 +169,7 @@ void nmgr_enrol_handle_hb(const ring_frame_t *f) {
         purge_unassigned(hb.mac);
         node_store_save(&s_ztab);
         memset(nd, 0, sizeof *nd);
+        s_seq_known[out_id - 1] = 0;   /* a different board on this id: its counter is unrelated */
         nd->used = 1; nd->id = out_id; nd->unconfigured = 1;
         char ms[18]; mac_str(hb.mac, ms);
         notify_emit(NTF_NODE, out_id, "%u NEW %s", out_id, ms);

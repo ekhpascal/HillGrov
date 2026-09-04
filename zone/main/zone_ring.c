@@ -33,6 +33,7 @@ static cmd_session_t s_ring_ses = { .source = CMD_SRC_RING, .echo = 0, .notify_m
 static char           s_resp[CMD_RESP_MAX];
 static ring_dup_t     s_dup;
 static uint16_t       s_tx_seq;
+static uint16_t       s_hb_seq;                /* heartbeats only -- see send_hb */
 static portMUX_TYPE   s_seq_mux = portMUX_INITIALIZER_UNLOCKED;
 static uint8_t        s_mac[6];
 static uint8_t        s_reset_reason;
@@ -223,7 +224,17 @@ static void send_hb(uint32_t now) {
     build_hb(&h, now);
     uint8_t payload[62 + 14 * HG_MAX_SHELVES];
     int n = hg_hb_pack(&h, payload, sizeof payload);
-    if (n >= 0) zring_send(RING_ID_MASTER, RING_T_HEARTBEAT, payload, (uint8_t)n);
+    if (n >= 0) {
+        /* Heartbeats carry their OWN sequence counter. The master's gap tally
+         * (GET NODE's SeqDrops) samples HEARTBEAT headers only, so a counter
+         * shared with CFG_CHUNK/ACK/NOTIFY traffic made every config transfer
+         * read as ~9 lost heartbeats -- a metric artifact, never loss. Only
+         * zone_ring_task sends heartbeats, so this one needs no critical
+         * section (unlike zring_next_seq, which several tasks reach). */
+        ring_hdr_t hdr = { .src = hg_store_zid(), .dst = RING_ID_MASTER, .type = RING_T_HEARTBEAT,
+                            .flags = 0, .ttl = RING_TTL_INIT, .len = (uint8_t)n, .seq = ++s_hb_seq };
+        ring_link_send(&hdr, payload);
+    }
     s_last_hb_ms = now;
     s_hb_now = 0;
 }
