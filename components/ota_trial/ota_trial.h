@@ -50,7 +50,12 @@ int trial_eval(const trial_probes_t *p, uint8_t expect_link, uint32_t start_ms, 
  * when it calls ota_trial_drivers_ok(). */
 void ota_trial_start(int is_master);
 void ota_trial_master_frame(void);   /* ring glue: any valid master-sourced frame seen */
-void ota_trial_tick(void);           /* app's periodic task: one liveness tick */
+/* One liveness tick. EVERY app that calls ota_trial_start() MUST call this from
+ * a periodic task, or trial_eval's "ticks >= TRIAL_MIN_TICKS" gate can never be
+ * met and a PENDING_VERIFY image will never self-confirm -- the bootloader
+ * rolls it back instead. Zone: zone_ring's loop. Master: node_mgr's 50 ms loop
+ * (50 ticks = 2.5 s). It is a cheap no-op when no trial is running. */
+void ota_trial_tick(void);
 void ota_trial_drivers_ok(void);     /* ring driver (+ master: AP/httpd) is up */
 int  ota_trial_confirm(void);        /* SET OTA CONFIRM hook; -1 if no trial active */
 

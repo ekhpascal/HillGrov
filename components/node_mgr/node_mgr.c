@@ -8,6 +8,7 @@
 #include "esp_timer.h"
 #include "ring_link.h"
 #include "notify.h"
+#include "ota_trial.h"
 #include "node_mgr.h"
 #include "node_mgr_internal.h"
 
@@ -184,6 +185,12 @@ static void node_mgr_task(void *arg) {
     uint32_t last_2s = last_1s;
     for (;;) {
         esp_task_wdt_reset();
+        /* The master's OTA-trial liveness tick (spec §3.10). Without a tick
+         * source trial_eval's "ticks >= TRIAL_MIN_TICKS" gate can never be met,
+         * so a PENDING_VERIFY master image would sit unconfirmed until the
+         * bootloader rolled it back -- the zone had zone_ring's loop, the master
+         * had nobody. This 50 ms loop reaches 50 ticks in 2.5 s. */
+        ota_trial_tick();
         uint32_t now = nmgr_now_ms();
 
         ring_trk_ev_t ev;
