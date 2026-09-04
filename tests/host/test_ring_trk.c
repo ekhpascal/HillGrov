@@ -291,6 +291,52 @@ static void test_send_wire_matches_direct_encode(void) {
     TEST_ASSERT_EQUAL_UINT8(RING_T_CMD, ev.type);
 }
 
+/* ========== cancel(): withdraws a QUEUED entry, never an in-flight one ========== */
+
+static void test_cancel_queued_entry_removed_order_kept(void) {
+    ring_trk_t t; ring_trk_init(&t);
+    /* head in flight (a CMD), then two queued CFG entries -- exactly the §4.4
+       revert-race shape: the COMMIT sits behind the forwarded CMD. */
+    ring_hdr_t hm = { .src = 0, .dst = 1, .type = RING_T_CMD,        .flags = RING_F_ACK_REQ, .ttl = 16, .len = 0, .seq = 80 };
+    ring_hdr_t hc = { .src = 0, .dst = 2, .type = RING_T_CFG_COMMIT, .flags = RING_F_ACK_REQ, .ttl = 16, .len = 0, .seq = 81 };
+    ring_hdr_t hg = { .src = 0, .dst = 3, .type = RING_T_CFG_GET,    .flags = RING_F_ACK_REQ, .ttl = 16, .len = 0, .seq = 82 };
+    ring_trk_submit(&t, &hm, NULL, 0);
+    ring_trk_submit(&t, &hc, NULL, 0);
+    ring_trk_submit(&t, &hg, NULL, 0);
+
+    ring_trk_ev_t ev;
+    TEST_ASSERT_EQUAL_INT(1, ring_trk_tick(&t, 0, 8, &ev));      /* CMD 80 goes out */
+    TEST_ASSERT_EQUAL_UINT16(80, ev.seq);
+
+    TEST_ASSERT_EQUAL_INT(0, ring_trk_cancel(&t, 81));           /* withdraw the queued COMMIT */
+    TEST_ASSERT_EQUAL_UINT8(2, t.n);
+
+    TEST_ASSERT_EQUAL_INT(1, ring_trk_ack(&t, 80, 0, "OK", 2, &ev));
+    TEST_ASSERT_EQUAL_INT(1, ring_trk_tick(&t, 1, 8, &ev));      /* next is 82, not the cancelled 81 */
+    TEST_ASSERT_EQUAL_UINT16(82, ev.seq);
+}
+
+static void test_cancel_inflight_entry_refused(void) {
+    ring_trk_t t; ring_trk_init(&t);
+    ring_hdr_t hc = { .src = 0, .dst = 2, .type = RING_T_CFG_COMMIT, .flags = RING_F_ACK_REQ, .ttl = 16, .len = 0, .seq = 90 };
+    ring_trk_submit(&t, &hc, NULL, 0);
+    ring_trk_ev_t ev;
+    TEST_ASSERT_EQUAL_INT(1, ring_trk_tick(&t, 0, 8, &ev));      /* now in flight */
+
+    TEST_ASSERT_EQUAL_INT(-1, ring_trk_cancel(&t, 90));
+    TEST_ASSERT_EQUAL_UINT8(1, t.n);                              /* untouched: its ACK is still coming */
+    TEST_ASSERT_EQUAL_INT(1, ring_trk_ack(&t, 90, 0, "OK", 2, &ev));
+}
+
+static void test_cancel_unknown_seq_returns_minus1(void) {
+    ring_trk_t t; ring_trk_init(&t);
+    TEST_ASSERT_EQUAL_INT(-1, ring_trk_cancel(&t, 7));            /* empty queue */
+    ring_hdr_t hc = { .src = 0, .dst = 2, .type = RING_T_CFG_COMMIT, .flags = RING_F_ACK_REQ, .ttl = 16, .len = 0, .seq = 91 };
+    ring_trk_submit(&t, &hc, NULL, 0);
+    TEST_ASSERT_EQUAL_INT(-1, ring_trk_cancel(&t, 7));
+    TEST_ASSERT_EQUAL_UINT8(1, t.n);
+}
+
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -311,5 +357,8 @@ int main(void) {
     RUN_TEST(test_ack_detail_preserved_at_125_bytes);
     RUN_TEST(test_ack_detail_truncated_beyond_125_bytes);
     RUN_TEST(test_send_wire_matches_direct_encode);
+    RUN_TEST(test_cancel_queued_entry_removed_order_kept);
+    RUN_TEST(test_cancel_inflight_entry_refused);
+    RUN_TEST(test_cancel_unknown_seq_returns_minus1);
     return UNITY_END();
 }

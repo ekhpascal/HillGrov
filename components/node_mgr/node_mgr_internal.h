@@ -32,6 +32,9 @@ void nmgr_unlock(void);
  * queues it on the shared tracker. 0 + *seq_out on success, -1 = BUSY (queue
  * full -- ring_trk_submit's own return). */
 int  nmgr_submit(uint8_t dst, uint8_t type, const uint8_t *payload, uint8_t len, uint16_t *seq_out);
+/* Withdraws a submitted frame that has NOT been sent yet (ring_trk_cancel's
+   contract): 0 = withdrawn, -1 = unknown seq or already in flight. */
+int  nmgr_cancel(uint16_t seq);
 /* Unicast, unACKed, sent straight to the wire with a fresh seq (TIME_SYNC,
  * ASSIGN_ID, and push's CFG_CHUNKs are never tracked -- spec §2.9). */
 void nmgr_send_raw(uint8_t dst, uint8_t type, const uint8_t *payload, uint8_t len);

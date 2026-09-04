@@ -69,6 +69,13 @@ int nmgr_submit(uint8_t dst, uint8_t type, const uint8_t *payload, uint8_t len, 
     return 0;
 }
 
+int nmgr_cancel(uint16_t seq) {
+    xSemaphoreTake(s_trk_mux, portMAX_DELAY);
+    int rc = ring_trk_cancel(&s_trk, seq);
+    xSemaphoreGive(s_trk_mux);
+    return rc;
+}
+
 void nmgr_send_raw(uint8_t dst, uint8_t type, const uint8_t *payload, uint8_t len) {
     ring_hdr_t h = { .src = RING_ID_MASTER, .dst = dst, .type = type, .flags = 0,
                       .ttl = RING_TTL_INIT, .len = len, .seq = nmgr_next_seq() };

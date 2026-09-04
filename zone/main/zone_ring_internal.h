@@ -16,6 +16,14 @@ void     zring_send_ack(uint8_t dst, uint16_t acked_seq, uint8_t status,
                         const char *detail, uint8_t dlen);
 void     zring_request_immediate_hb(void);
 
+/* zone_ring.c: the single at-most-once (spec 2.6) cache, shared by CMD and
+ * CFG_COMMIT -- the only two tracked, side-effecting types the master sends,
+ * and it keeps one tracked frame outstanding ring-wide. begin() returns 1 when
+ * the frame was a retransmit and has already been dealt with (absorbed, or the
+ * cached reply re-sent); finish() records the reply a retransmit will replay. */
+int      zring_dup_begin(const ring_frame_t *f, uint32_t now);
+void     zring_dup_finish(uint16_t seq, uint8_t status, const char *detail);
+
 /* zone_ring_cfg.c: CFG_CHUNK/CFG_COMMIT/CFG_GET (assembler + streamer). */
 void zone_ring_cfg_init(void);
 void zone_ring_cfg_chunk(const ring_frame_t *f, uint32_t now);

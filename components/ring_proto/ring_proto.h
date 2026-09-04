@@ -95,6 +95,9 @@ int  ring_trk_ack(ring_trk_t *t, uint16_t acked_seq, uint8_t status, const char 
                   uint8_t detail_len, ring_trk_ev_t *ev);   /* 1 = EV_DONE for the in-flight frame; late/unknown ACK -> 0 */
 int  ring_trk_unclaimed(ring_trk_t *t, const ring_hdr_t *returned, ring_trk_ev_t *ev);
      /* master saw its own ACK_REQ unicast come back: immediate EV_FAIL ZONE_UNKNOWN */
+int  ring_trk_cancel(ring_trk_t *t, uint16_t seq);
+     /* withdraw a still-QUEUED entry (attempts == 0): 0 = removed, -1 = unknown seq or
+        already in flight (its ACK/timeout must still run its course) */
 
 /* Telemetry payload codecs (ring_tlm.c) */
 

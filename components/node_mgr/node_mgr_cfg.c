@@ -200,7 +200,19 @@ void nmgr_cfg_invalidate(uint8_t zone) {
     memset(&s_cfg[zone - 1], 0, sizeof s_cfg[0]);
     memset(&s_hw[zone - 1], 0, sizeof s_hw[0]);
     memset(&s_latch[zone - 1], 0, sizeof s_latch[0]);
-    if (s_cx.state != CX_IDLE && s_cx.zone == zone) { memset(&s_cx, 0, sizeof s_cx); ring_casm_init(&s_casm); }
+    if (s_cx.state != CX_IDLE && s_cx.zone == zone) {
+        /* Withdraw the tracked frame this transfer is waiting on if it is still
+         * QUEUED (attempts == 0) -- which is exactly the §4.4 revert race: the
+         * CFG_COMMIT of a revert push sits behind the operator's forwarded CMD,
+         * and without this it would go out AFTER that SET's OK ACK and overwrite
+         * the value the operator just set. An entry already in flight can't be
+         * withdrawn (nmgr_cancel returns -1); its ACK/timeout still routes here
+         * and is dropped by the seq check in nmgr_cfg_on_ev, while the zone's own
+         * gen guard rejects the now-stale COMMIT with ERR CFG_VERSION. */
+        if (s_cx.state == CX_PULL_ACK || s_cx.state == CX_PUSH_COMMIT) nmgr_cancel(s_cx.trk_seq);
+        memset(&s_cx, 0, sizeof s_cx);
+        ring_casm_init(&s_casm);
+    }
 }
 
 /* node_mgr task only -- see node_mgr_internal.h. Retiring an id additionally

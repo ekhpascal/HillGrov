@@ -106,15 +106,31 @@ static uint8_t build_ack_detail(const char *resp, char out[126]) {
     return (uint8_t)total;
 }
 
-static void handle_cmd(const ring_frame_t *f, uint32_t now) {
+/* At-most-once cache (spec 2.6), shared by the two tracked, side-effecting
+ * frame types the master sends: CMD and CFG_COMMIT. One slot is enough because
+ * the master keeps exactly ONE tracked frame outstanding ring-wide (ring_trk is
+ * stop-and-wait), so two of them are never mid-execution here at the same time.
+ * 1 = this frame was a retransmit and is fully handled (absorbed while the
+ * original is still running, or the cached reply re-sent); 0 = the caller must
+ * execute it and then report the outcome through zring_dup_finish(). */
+int zring_dup_begin(const ring_frame_t *f, uint32_t now) {
     int st = ring_dup_check(&s_dup, f->hdr.seq, now);
-    if (st == RING_DUP_ABSORB) return;                     /* in-progress dup: nothing */
+    if (st == RING_DUP_ABSORB) return 1;                   /* in-progress dup: nothing */
     if (st == RING_DUP_REPLAY) {
         uint8_t dlen = (uint8_t)strnlen(s_dup.detail, sizeof s_dup.detail - 1);
         zring_send_ack(f->hdr.src, f->hdr.seq, s_dup.status, s_dup.detail, dlen);
-        return;
+        return 1;
     }
     ring_dup_start(&s_dup, f->hdr.seq, now);
+    return 0;
+}
+
+void zring_dup_finish(uint16_t seq, uint8_t status, const char *detail) {
+    ring_dup_done(&s_dup, seq, status, detail);
+}
+
+static void handle_cmd(const ring_frame_t *f, uint32_t now) {
+    if (zring_dup_begin(f, now)) return;
     char line[RING_MAX_PAYLOAD + 1];
     size_t n = f->hdr.len > RING_MAX_PAYLOAD ? RING_MAX_PAYLOAD : f->hdr.len;
     memcpy(line, f->payload, n);

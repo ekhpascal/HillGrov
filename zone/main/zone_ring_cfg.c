@@ -30,16 +30,30 @@ void zone_ring_cfg_chunk(const ring_frame_t *f, uint32_t now) {
     ring_casm_feed(&s_casm, f->payload, f->hdr.len, now);   /* unACKed: no response either way */
 }
 
+/* Every CFG_COMMIT reply also goes into the shared at-most-once cache, so the
+ * master's retransmit after a lost ACK replays this exact answer instead of
+ * hitting the (already consumed) assembler and reading back MISSING_CHUNK. */
+static void commit_reply(const ring_frame_t *f, uint8_t status, const char *detail, uint8_t dlen) {
+    char cached[126];
+    if (dlen > 125) dlen = 125;
+    memcpy(cached, detail, dlen);
+    cached[dlen] = '\0';
+    zring_dup_finish(f->hdr.seq, status, cached);
+    zring_send_ack(f->hdr.src, f->hdr.seq, status, detail, dlen);
+}
+
 static void commit_fail(const ring_frame_t *f, const char *detail, uint8_t dlen) {
-    zring_send_ack(f->hdr.src, f->hdr.seq, 1, detail, dlen);
+    commit_reply(f, 1, detail, dlen);
     ring_casm_init(&s_casm);
 }
 
-static void commit_ok(const ring_frame_t *f) {
-    hg_store_flush(2000);
-    zring_send_ack(f->hdr.src, f->hdr.seq, 0, "OK", 2);
+static void commit_ok(const ring_frame_t *f, int applied) {
+    if (applied) hg_store_flush(2000);
+    commit_reply(f, 0, "OK", 2);
     ring_casm_init(&s_casm);
 }
+
+#define COMMIT_FAIL(f, tok) commit_fail((f), (tok), (uint8_t)(sizeof(tok) - 1))
 
 /* HG_BLOB_E_VERSION_NEWER/_OLD are a real version mismatch (spec 2.9's
  * "CFG_VERSION never retried" token, distinct from wire corruption); every
@@ -51,8 +65,39 @@ static void commit_fail_unwrap(const ring_frame_t *f, hg_blob_rc_t rc) {
         commit_fail(f, "ERR CRC_FAIL", (uint8_t)(sizeof("ERR CRC_FAIL") - 1));
 }
 
+/* §4.4 revert-push race (final review): a push whose CFG_CHUNKs are already on
+ * the wire, with its CFG_COMMIT queued in the master's tracker behind a
+ * forwarded CMD, commits AFTER that CMD's own SET has been applied here -- the
+ * zone's generation has moved past the pushed payload, which would otherwise be
+ * applied silently over the operator's own edit.
+ *
+ * Every legitimate push carries max(hb_gen, cache_gen)+1 (node_mgr_cfg.c's
+ * try_start, the manual-push branch, and a retry replaying the same push_gen --
+ * confirmed, no path sends gen <= the zone's), i.e. a gen strictly ABOVE this
+ * zone's, so:
+ *   gen <  cur  -> stale push, never applied: ERR CFG_VERSION (never retried).
+ *   gen == cur  -> exactly one benign origin, the master's COMMIT retry after a
+ *                  LOST OK ACK: the payload is byte-identical to what is live,
+ *                  so ACK OK WITHOUT re-applying (a re-apply would re-dirty the
+ *                  plane and re-stamp NVS for no change). A gen == cur payload
+ *                  that DIFFERS is an aliased/stale push: ERR CFG_VERSION.
+ *   gen >  cur  -> the existing four-way path below.
+ * A plain "gen <= cur -> reject" would have latched CFG_SYNC_FAILED on that
+ * lost-ACK retry, which is why the identity test is the gate at gen == cur. */
+static int commit_stale(const ring_frame_t *f, uint32_t gen, uint32_t cur,
+                        const void *payload, const void *live, size_t n) {
+    if (gen > cur) return 0;                                 /* normal push: carry on */
+    if (gen == cur && memcmp(payload, live, n) == 0) {
+        commit_ok(f, 0);                                     /* lost-ACK retry: replay OK, no re-apply */
+        return 1;
+    }
+    COMMIT_FAIL(f, "ERR CFG_VERSION");
+    return 1;
+}
+
 void zone_ring_cfg_commit(const ring_frame_t *f, uint32_t now) {
     if (f->hdr.len < 5) return;                              /* malformed: never crash on a short frame */
+    if (zring_dup_begin(f, now)) return;                     /* retransmit: absorbed / cached ACK replayed */
     if (ring_casm_idle_expired(&s_casm, now)) ring_casm_init(&s_casm);
 
     uint8_t  kind = f->payload[0];
@@ -70,6 +115,9 @@ void zone_ring_cfg_commit(const ring_frame_t *f, uint32_t now) {
         hg_blob_rc_t rc = hg_blob_unwrap(HG_MAGIC_CFG, HG_CFG_VER, HG_CFG_VER_MIN,
                                           s_casm.buf, s_casm.total, &cfg, sizeof cfg, &env_gen);
         if (rc != HG_BLOB_OK && rc != HG_BLOB_MIGRATED) { commit_fail_unwrap(f, rc); return; }
+        hg_zone_cfg_t live;
+        hg_model_snapshot_cfg(&live, NULL);          /* live.generation == hg_model_cfg_info's gen */
+        if (commit_stale(f, gen, live.generation, &cfg, &live, sizeof cfg)) return;
         /* Full gen chain must agree before apply (identity contract, verbatim
          * apply): COMMIT.gen == assembler gen (already tied above, since the
          * completeness check above required s_casm.gen == gen), envelope gen
@@ -95,6 +143,17 @@ void zone_ring_cfg_commit(const ring_frame_t *f, uint32_t now) {
         hg_blob_rc_t rc = hg_blob_unwrap(HG_MAGIC_HW, HG_HW_VER, HG_HW_VER_MIN,
                                           s_casm.buf, s_casm.total, &hw, sizeof hw, NULL);
         if (rc != HG_BLOB_OK && rc != HG_BLOB_MIGRATED) { commit_fail_unwrap(f, rc); return; }
+        /* The HW plane carries NO generation anywhere (zone_ring_cfg_get sends
+         * gen 0, node_mgr caches gen 0), so the gen ordering above cannot
+         * discriminate stale from fresh here -- gen == cur == 0 always. Only
+         * the identity half of the ruling applies: an identical payload is the
+         * lost-ACK retry and is ACKed without re-applying; a DIFFERING payload
+         * is a normal HW push and must not be rejected as CFG_VERSION (which,
+         * at a permanently equal gen, would reject every HW push there will
+         * ever be). Reported as a deviation from the brief's letter. */
+        hg_zone_hw_t live;
+        hg_model_snapshot_hw(&live);
+        if (memcmp(&hw, &live, sizeof hw) == 0) { commit_ok(f, 0); return; }
         /* hg_model_apply_hw validates (hw alone, then the *current* cfg
          * against this *new* hw -- atomicity) before writing anything. */
         if (hg_model_apply_hw(&hw, err, sizeof err) != 0) {
@@ -106,7 +165,7 @@ void zone_ring_cfg_commit(const ring_frame_t *f, uint32_t now) {
         commit_fail(f, "ERR MISSING_CHUNK", (uint8_t)(sizeof("ERR MISSING_CHUNK") - 1));
         return;
     }
-    commit_ok(f);
+    commit_ok(f, 1);
 }
 
 void zone_ring_cfg_get(const ring_frame_t *f, uint32_t now) {

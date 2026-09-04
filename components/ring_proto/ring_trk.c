@@ -123,6 +123,23 @@ int ring_trk_ack(ring_trk_t *t, uint16_t acked_seq, uint8_t status, const char *
     return 1;
 }
 
+/* Withdraw a QUEUED entry (attempts == 0 -- never put on the wire). An entry
+   already in flight cannot be withdrawn: its ACK or timeout is still coming and
+   the submitter's own state machine has to see it, so -1 and the queue is left
+   exactly as it was. Used by the §4.4 reconciler when a master-originated edit
+   supersedes a push whose CFG_COMMIT is still waiting behind an in-flight CMD. */
+int ring_trk_cancel(ring_trk_t *t, uint16_t seq)
+{
+    for (uint8_t i = 0; i < t->n; i++) {
+        if (t->q[i].seq != seq) continue;
+        if (t->q[i].attempts != 0) return -1;
+        for (uint8_t j = (uint8_t)(i + 1); j < t->n; j++) t->q[j - 1] = t->q[j];
+        t->n--;
+        return 0;
+    }
+    return -1;
+}
+
 int ring_trk_unclaimed(ring_trk_t *t, const ring_hdr_t *returned, ring_trk_ev_t *ev)
 {
     if (t->n == 0) return 0;
