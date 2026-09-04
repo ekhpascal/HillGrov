@@ -164,7 +164,7 @@ Master node health: ONLINE → DEGRADED after 5 s without HB (or 3 command timeo
 
 ### 2.8 Enrolment
 
-No NVS id → boots as 0xFE (forwarding needs no id, the ring stays closed), heartbeats MAC. Master: known MAC → re-ASSIGN_ID; unknown → auto-assign lowest free id, persist flagged *unconfigured*, `NOTIFY NODE_NEW` — observable immediately, 0 shelves until configured. Stale id → corrected by MAC. Two boards on one id → `ID_CONFLICT`, intruder reset to 0xFE.
+No NVS id → boots as 0xFE (forwarding needs no id, the ring stays closed), heartbeats MAC. Master: known MAC → re-ASSIGN_ID; unknown → auto-assign lowest free id, persist flagged *unconfigured*, `NOTIFY NODE_NEW` — observable immediately, 0 shelves until configured. Stale id → corrected by MAC. Two boards on one id → `ID_CONFLICT`, intruder reset to 0xFE. *Bench ruling 2026-09-04 (SP3 Task 16):* the Master sends ASSIGN_ID only when the heartbeat’s src differs from the id the node table resolves (unassigned, stale or conflicting sender); a zone treats an ASSIGN_ID carrying its current id as a no-op. Re-asserting on every heartbeat closed an HB↔ASSIGN_ID loop at ring speed.
 
 ### 2.9 Config transfer and FW_UPDATE
 
