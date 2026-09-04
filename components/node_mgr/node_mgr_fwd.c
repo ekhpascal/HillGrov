@@ -41,8 +41,12 @@ static uint8_t           s_verb_set;     /* its line's first token was SET */
  * Dropping the cache on the OK ACK turns that next decision into the adopt
  * branch instead, which pulls the value the operator just set. Only SET
  * qualifies: GET/DEBUG/CLEAR change no config, and a non-OK reply means the
- * zone rejected the edit and its config is unchanged. Cost when wrong is one
- * extra CFG_GET round trip. */
+ * zone rejected the edit and its config is unchanged. Cost when wrong is TWO
+ * extra CFG_GET round trips, not one: both planes are invalidated, so the
+ * next decisions re-pull cfg AND hw (kept deliberately -- whole-cache
+ * invalidation is simple and provably correct, and the console path is
+ * low-volume; revisit when SP2 override rows ride the ring at dashboard
+ * rates). */
 static int verb_is_set(const char *line) {
     while (*line == ' ') line++;
     return (line[0] == 'S' || line[0] == 's') && (line[1] == 'E' || line[1] == 'e') &&

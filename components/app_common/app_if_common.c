@@ -66,7 +66,13 @@ int hg_app_log_set(const char *level, const char *tag, char *eff, size_t n) {
 /* ---- time: the local source is SET (a console SET TIME this boot) or NONE.
  * A node with an external source passes it to hg_app_time_get_ext -- SP3's
  * zone does that with RING once a valid TIME_SYNC has stepped its clock. No
- * RTC or NTP source exists yet. ---- */
+ * RTC or NTP source exists yet.
+ *
+ * By design, a console SET TIME on a synced zone owns the token only until the
+ * master's next TIME_SYNC (<= 2 s, spec §2.7 cadence), which re-stamps RING as
+ * the more recent source: the ring is authoritative, so GET TIME on a synced
+ * zone effectively never shows SET. That is the intended answer, not a lost
+ * edit -- the operator's value was applied, and the ring then corrected it. ---- */
 
 static uint8_t  s_time_is_set;
 static uint32_t s_time_set_uptime;   /* uptime_s at the last local SET TIME */

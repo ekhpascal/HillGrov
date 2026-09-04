@@ -2,6 +2,9 @@
 #include <stdint.h>
 #include "cmd_core.h"
 #include "ring_link.h"
+#include "zone_ring.h"   /* the public half: every TU here also DEFINES part of it
+                            (zone_ring_time_synced_at, zone_ring_inhibit_mask), so its
+                            prototypes must be visible where the definitions are */
 
 /* Private to zone_ring.c / zone_ring_cfg.c / zone_ring_sync.c -- not part of
  * the component's public surface (zone_ring.h). Split purely to keep each
