@@ -502,7 +502,7 @@
                 <mxCell id="pmasterg12r2" value="• POSIX timezone → local-time offset (DST handled), distributed to all zones over the ring" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg12" vertex="1">
                     <mxGeometry x="4" y="80" width="482" height="40" as="geometry"/>
                 </mxCell>
-                <mxCell id="pmasterg13" value="Ring master / node manager — SP3" style="swimlane;rounded=1;startSize=30;fontSize=13;fontStyle=1;fillColor=#ffe6cc;strokeColor=#d79b00;swimlaneFillColor=#ffffff;horizontal=1;arcSize=6;" parent="1" vertex="1">
+                <mxCell id="pmasterg13" value="Ring master / node manager — SP3 (bench-verified 2026-09-04, 3-board ring)" style="swimlane;rounded=1;startSize=30;fontSize=13;fontStyle=1;fillColor=#ffe6cc;strokeColor=#d79b00;swimlaneFillColor=#ffffff;horizontal=1;arcSize=6;" parent="1" vertex="1">
                     <mxGeometry x="1080" y="1234" width="490" height="318" as="geometry"/>
                 </mxCell>
                 <mxCell id="pmasterg13r0" value="• Discovery &amp; enrolment: new board heartbeats its MAC → auto-assigned lowest free id → appears in UI unconfigured" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg13" vertex="1">
@@ -1199,7 +1199,7 @@
                 <mxCell id="pzoneg8r6" value="• Faults: fixed severity (warn / blocks-scope / SAFE), latched ones need explicit clear, all visible in heartbeat + GET FAULTS" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pzoneg8" vertex="1">
                     <mxGeometry x="4" y="304" width="482" height="40" as="geometry"/>
                 </mxCell>
-                <mxCell id="pzoneg9" value="Ring node — SP3" style="swimlane;rounded=1;startSize=30;fontSize=13;fontStyle=1;fillColor=#ffe6cc;strokeColor=#d79b00;swimlaneFillColor=#ffffff;horizontal=1;arcSize=6;" parent="1" vertex="1">
+                <mxCell id="pzoneg9" value="Ring node — SP3 (bench-verified 2026-09-04)" style="swimlane;rounded=1;startSize=30;fontSize=13;fontStyle=1;fillColor=#ffe6cc;strokeColor=#d79b00;swimlaneFillColor=#ffffff;horizontal=1;arcSize=6;" parent="1" vertex="1">
                     <mxGeometry x="1080" y="464" width="490" height="302" as="geometry"/>
                 </mxCell>
                 <mxCell id="pzoneg9r0" value="• Store-and-forward relay: COBS framing, CRC-16 recomputed per hop, TTL, break-tolerant (unpowered upstream handled)" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pzoneg9" vertex="1">

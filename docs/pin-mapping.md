@@ -90,7 +90,7 @@ The DevKitC master tables above remain the SP3-bench reality until the migration
 - [ ] **Every PCF8575 load is active-low** (relay/driver input LOW = energised). The expander powers up all-HIGH and keeps its last word through an ESP32 reset — an active-high load would energise at power-up. Verify with a meter before connecting loads.
 - [ ] 10 kΩ pull-up 3.3 V → PCA9685 **OE** (GPIO23): LED outputs must be disabled from power-on until firmware enables them.
 - [ ] LED MOSFET gate drivers are non-inverting (gate low = LED off).
-- [ ] 10 kΩ pull-up on every ring **RX** (GPIO18) so an unpowered upstream reads idle-high; twisted pair + GND per link; 3.3 V TTL point-to-point.
+- [ ] 10 kΩ pull-up on every ring **RX** (GPIO18) so an unpowered upstream reads idle-high; twisted pair + GND per link; 3.3 V TTL point-to-point. — *Ring protocol itself bench-verified 2026-09-04 on a 3-board DevKitC ring (master + 2 zones, bare jumper wires, no external pull-ups): enrolment, forwarding, reconciliation, time sync. The pull-up rule is about the unpowered-neighbour case and is still unverified.*
 - [ ] 100 kΩ pull-down on **every soil ADC input** — an unplugged SEN0193 must read ≈ 0 (open-sensor detection depends on it).
 - [ ] 4.7 kΩ I²C pull-ups on GPIO21/22 (once per bus). Master: audit every breakout's onboard pull-ups (DS3231, STCC4, AHT20/BMP280, SC16IS752 boards all ship their own) — strip extras so the parallel total stays ≈ 2.2–4.7 kΩ; run 100 kHz; keep total SDA/SCL wiring < ~1 m (far sensors belong on the field bus).
 - [x] Rescue button: momentary switch GPIO15 → GND. — **bench-verified 2026-09-02**: 3.6 s hold → `erase nvs` + defaults; 10 s hold → rescue boot with no WDT reset; ROM-log silence during the hold confirmed (MTDO).
