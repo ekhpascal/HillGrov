@@ -246,11 +246,14 @@ void ring_health_eval(hg_node_t *tab, int n_slots, uint32_t now_ms,
          witness at all -> D is the master, i.e. its own RX leg closes the segment.
      U = the most DOWNSTREAM OFFLINE node that has been heard at least once (smallest hops);
          a row never heard from is a phantom, not a suspect.  None -> U is the master.
-   If D exists and still reports master_alive (link_flags b1, the "master silent" flag), the
-   break is ABOVE it and the nodes up there have not finished falling OFFLINE: the evidence
-   is UNRIPE and blame is "no node reports a fault" -- the same answer as no evidence at all
-   (no offline node and no witness).  Otherwise "wire M->Z<d>" when U is the master (nothing
-   is offline, so nothing can be dead), else "Z<u> dead or wire Z<u>->Z<d|M>".
+   The evidence is UNRIPE -- blame "no node reports a fault" -- when D still reports
+   master_alive (link_flags b1, the "master silent" flag): the break is ABOVE it and the nodes
+   up there have not finished falling OFFLINE.  Also when there is no witness at all but some
+   used, heard, non-OFFLINE row (mid-OTA, or inside its boot grace) sits DOWNSTREAM of U: it
+   cannot testify, yet the segment would have to run past it to the master's RX.  And when
+   there is neither an offline node nor a witness: nothing to point at.  Otherwise
+   "wire M->Z<d>" when U is the master (nothing is offline, so nothing can be dead), else
+   "Z<u> dead or wire Z<u>->Z<d|M>".
    Ordering is by MEASURED hops (counted at the master's RX: 0 feeds it, highest is the first
    hop after its TX); id order only for a node with hops_valid 0.
    The verdict is RE-DERIVED every tick while the ring is open, and a CHANGED one is adopted

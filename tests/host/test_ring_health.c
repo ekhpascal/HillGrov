@@ -307,20 +307,40 @@ static void test_blame_four_node_middle_cut_scrambled_ids(void) {
 }
 
 /* Two breaks at once: the one nearest the master's RX is named. Fix it and the
-   next one surfaces. M -> Z1 -| Z2 -> Z3 -| Z4 -> M, so Z1 (blocked by the
-   upper cut), Z2 and Z3 (blocked by the lower one) are all offline and only Z4
-   still delivers heartbeats. Pinned as documentation of the ordering. */
+   next one surfaces. M -> Z1 -| Z2 -> Z3 -| Z4 -> M: Z1 is blocked by the upper
+   cut, Z2 and Z3 by the lower one, and only Z4 still delivers heartbeats.
+   Z4 hears NOTHING (LINK_DARK) even though Z3 is alive and transmitting -- the
+   named segment is the cable between them, so nothing Z3 sends can arrive.
+   Pinned as documentation of the ordering. */
 static void test_blame_two_cuts_names_the_downstream_break(void) {
     hg_node_t tab[4];
     tab[0] = row(1, 3, HB_DEAD,  LINK_OK);       /* still hears the master, cannot be heard */
     tab[1] = row(2, 2, HB_DEAD,  LINK_DARK);
-    tab[2] = row(3, 1, HB_DEAD,  LINK_SILENT);
-    tab[3] = row(4, 0, HB_FRESH, LINK_DARK);     /* the only witness */
+    tab[2] = row(3, 1, HB_DEAD,  LINK_SILENT);   /* fed by Z2, which is alive above it */
+    tab[3] = row(4, 0, HB_FRESH, LINK_DARK);     /* the only witness, and it hears nothing */
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 4, NOW, 0, &st, cap_cb, &cap);
 
     TEST_ASSERT_EQUAL_STRING("Z3 dead or wire Z3->Z4", st.blame);
+}
+
+/* Same rule, breaks one node higher: M -> Z1 -| Z2 -| Z3 -> Z4 -> M. Now Z3 is
+   the top witness (it hears nothing) and Z4 below it is fed by Z3's forwarding,
+   so Z4 reports b0 set with b1 clear -- the one arrangement in which a node
+   below the break is NOT dark. The named segment is again the downstream one. */
+static void test_blame_two_cuts_witness_below_the_break_is_fed_by_forwarding(void) {
+    hg_node_t tab[4];
+    tab[0] = row(1, 3, HB_DEAD,  LINK_OK);       /* hears the master, blocked by the upper cut */
+    tab[1] = row(2, 2, HB_DEAD,  LINK_DARK);     /* blocked by the lower cut, hears nothing */
+    tab[2] = row(3, 1, HB_FRESH, LINK_DARK);     /* alive: its heartbeats go down to the master */
+    tab[3] = row(4, 0, HB_FRESH, LINK_SILENT);   /* Z3 forwards into it, none of it the master's */
+    ring_status_t st = { .state = RING_ST_OK };
+
+    ring_health_eval(tab, 4, NOW, 0, &st, cap_cb, &cap);
+
+    TEST_ASSERT_EQUAL_STRING("Z2 dead or wire Z2->Z3", st.blame);
+    TEST_ASSERT_EQUAL_HEX16(0x0018, st.online_mask);
 }
 
 /* ---- An OFFLINE node's link_flags are whatever it last managed to send, i.e.
@@ -430,6 +450,34 @@ static void test_blame_unripe_until_the_top_hop_falls_offline(void) {
     TEST_ASSERT_EQUAL_STRING("RING OPEN Z2 dead or wire Z2->Z3", cap.lines[2]);
 }
 
+/* The same timeline on the 2-board bench, pinned from the 2026-09-09 capture
+   (blame_round1_capture.txt, 34.5 -> 41.6 s: COM24 held in reset). Z1 keeps
+   delivering heartbeats throughout -- its leg to the master's RX is intact --
+   so only Z2's stop. */
+static void test_blame_bench_hold_timeline(void) {
+    hg_node_t tab[2];
+    tab[0] = row(1, 0, HB_FRESH, LINK_OK);       /* 5 s in: Z1 has not noticed yet */
+    tab[1] = row(2, 1, HB_DEGR,  LINK_OK);       /* Z2 late; its stale flags still say master-alive */
+    ring_status_t st = { .state = RING_ST_OK };
+
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);         /* the 5 s alarm */
+    TEST_ASSERT_EQUAL_INT(RING_ST_OPEN, st.state);
+    TEST_ASSERT_EQUAL_STRING(NO_FAULT, st.blame);
+    TEST_ASSERT_EQUAL_STRING("RING OPEN " NO_FAULT, cap.lines[0]);
+
+    tab[1].last_hb_ms = HB_DEAD;                                 /* 10 s in: Z2 goes OFFLINE... */
+    tab[0].link_flags = LINK_DARK;                               /* ...and Z1 reports the silence */
+
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+
+    TEST_ASSERT_EQUAL_STRING("Z2 dead or wire Z2->Z1", st.blame);
+    TEST_ASSERT_EQUAL_INT(3, cap.count);
+    TEST_ASSERT_EQUAL_STRING("NODE 2 OFFLINE", cap.lines[1]);
+    TEST_ASSERT_EQUAL_STRING("RING OPEN Z2 dead or wire Z2->Z1", cap.lines[2]);
+}
+
 /* ---- Dwell: a verdict that flickers for a tick or two and reverts is never
         adopted; three consecutive ticks of the same new verdict are. ---- */
 
@@ -489,6 +537,59 @@ static void test_blame_boot_grace_zone_is_not_a_witness(void) {
     ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
     ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
     TEST_ASSERT_EQUAL_STRING("wire M->Z2", st.blame);            /* now it is evidence */
+}
+
+/* ---- The master's own RX leg can only close the segment when NOTHING alive
+        stands between U and that RX. A zone that is mid-OTA, or still inside
+        its boot grace, cannot testify -- but it is on the cable, so the break
+        may be anywhere from U down to it, and "U dead or wire U->M" would jump
+        over it. ---- */
+
+static void test_blame_updating_zone_below_u_withholds_the_master_leg(void) {
+    hg_node_t tab[2];
+    tab[0] = row(1, 0, HB_FRESH, LINK_DARK);     /* the last hop, alive but mid-OTA */
+    tab[0].updating_until_ms = NOW + 10000;
+    tab[0].health = NODE_H_UPDATING;             /* what the ladder will compute: no event */
+    tab[1] = row(2, 1, HB_DEAD,  LINK_OK);       /* U: the first hop is offline */
+    ring_status_t st = { .state = RING_ST_OK };
+
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+
+    TEST_ASSERT_EQUAL_INT(NODE_H_UPDATING, tab[0].health);
+    TEST_ASSERT_EQUAL_STRING(NO_FAULT, st.blame);                /* not "Z2 dead or wire Z2->M" */
+
+    /* The OTA window ends and Z1 turns out to be silent too: now nothing alive
+       is left between Z2 and the master's RX, so the segment reaches the master
+       -- and U moves down to Z1, the most-downstream offline node. */
+    tab[0].updating_until_ms = 0;
+    tab[0].last_hb_ms = HB_DEAD;
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);         /* dwell */
+
+    TEST_ASSERT_EQUAL_STRING("Z1 dead or wire Z1->M", st.blame);
+    TEST_ASSERT_EQUAL_INT(3, cap.count);
+    TEST_ASSERT_EQUAL_STRING("NODE 1 OFFLINE", cap.lines[1]);
+    TEST_ASSERT_EQUAL_STRING("RING OPEN Z1 dead or wire Z1->M", cap.lines[2]);
+}
+
+static void test_blame_boot_grace_zone_below_u_withholds_the_master_leg(void) {
+    hg_node_t tab[2];
+    tab[0] = row(1, 0, HB_FRESH, LINK_DARK);     /* heartbeats arriving, but only just booted */
+    tab[0].hb.uptime_s = 1;
+    tab[1] = row(2, 1, HB_DEAD,  LINK_OK);       /* U */
+    ring_status_t st = { .state = RING_ST_OK };
+
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+
+    TEST_ASSERT_EQUAL_STRING(NO_FAULT, st.blame);                /* not "Z2 dead or wire Z2->M" */
+
+    tab[0].hb.uptime_s = 30;                                     /* now it can testify */
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+
+    TEST_ASSERT_EQUAL_STRING("Z2 dead or wire Z2->Z1", st.blame);
 }
 
 /* ---- A row the master has never heard from is not a suspect: it has no hops
@@ -570,14 +671,18 @@ int main(void) {
     RUN_TEST(test_blame_four_node_middle_cut);
     RUN_TEST(test_blame_four_node_middle_cut_scrambled_ids);
     RUN_TEST(test_blame_two_cuts_names_the_downstream_break);
+    RUN_TEST(test_blame_two_cuts_witness_below_the_break_is_fed_by_forwarding);
     RUN_TEST(test_blame_offline_nodes_stale_flags_are_not_trusted);
     RUN_TEST(test_blame_degraded_node_can_be_the_silent_end);
     RUN_TEST(test_blame_updating_zone_is_ignored);
     RUN_TEST(test_blame_no_witness_at_all_names_nothing);
     RUN_TEST(test_blame_no_node_reports_a_fault);
     RUN_TEST(test_blame_unripe_until_the_top_hop_falls_offline);
+    RUN_TEST(test_blame_bench_hold_timeline);
     RUN_TEST(test_blame_dwell_ignores_a_short_flicker);
     RUN_TEST(test_blame_boot_grace_zone_is_not_a_witness);
+    RUN_TEST(test_blame_updating_zone_below_u_withholds_the_master_leg);
+    RUN_TEST(test_blame_boot_grace_zone_below_u_withholds_the_master_leg);
     RUN_TEST(test_blame_never_heard_row_is_not_u);
     RUN_TEST(test_blame_all_rows_never_heard_names_nothing);
     RUN_TEST(test_ring_stays_open_until_probe_returns_then_closes);

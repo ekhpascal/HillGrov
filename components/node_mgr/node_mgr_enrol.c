@@ -244,7 +244,10 @@ void nmgr_health_cb(void *ctx, const char *line) {
          * the CLOSED that says the ring is whole again, leaving the operator
          * looking at a stale break. Same technique as the relayed BOOT reset
          * in node_mgr.c; the zones' own relayed W_LINK_LOST lines use their
-         * zone idx and are untouched. */
+         * zone idx and are untouched. With the latch reset on every state edge,
+         * the only thing bounding RING line volume is ring_health's own 3-tick
+         * dwell on a changed verdict -- so that dwell is load-bearing here, not
+         * just cosmetic. */
         notify_reset(NTF_RING, 0);
         notify_emit(NTF_RING, 0, "%s", line + 5);
     }

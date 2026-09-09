@@ -76,18 +76,19 @@ static uint8_t chain_pos(const hg_node_t *tab, int n_slots, const hg_node_t *k) 
 
 /* U: the most DOWNSTREAM offline node (smallest chain_pos), NULL = none.
  *
- * A row the master has NEVER heard from (no hops measurement and no heartbeat
- * ever: an id enrolled from NVS whose board is not on the ring) reads OFFLINE
- * the moment the ladder runs, but it has no place on the chain and no cable of
- * its own to accuse -- it is a phantom, not a suspect, and blaming it would
- * point at a segment that does not exist. */
+ * A row the master has NEVER heard from reads OFFLINE the moment the ladder
+ * runs, but it has no place on the chain and no cable of its own to accuse --
+ * it is a phantom, not a suspect, and blaming it would point at a segment that
+ * does not exist. hops_valid is stamped by every heartbeat, so its absence is
+ * exactly "never heard": an id enrolled from NVS whose board is not on the
+ * ring. */
 static const hg_node_t *most_downstream_offline(const hg_node_t *tab, int n_slots) {
     const hg_node_t *best = NULL;
     uint8_t best_pos = 0;
     for (int i = 0; i < n_slots; i++) {
         const hg_node_t *nd = &tab[i];
         if (!nd->used || nd->health != NODE_H_OFFLINE) continue;   /* UPDATING is not a fault */
-        if (!nd->hops_valid && nd->last_hb_ms == 0) continue;      /* phantom: never heard */
+        if (!nd->hops_valid) continue;                             /* phantom: never heard */
         uint8_t pos = chain_pos(tab, n_slots, nd);
         /* equal positions cannot happen physically; order by id to stay deterministic */
         if (!best || pos < best_pos || (pos == best_pos && nd->id < best->id)) { best = nd; best_pos = pos; }
@@ -104,6 +105,22 @@ static int is_witness(const hg_node_t *nd) {
     if (nd->health != NODE_H_ONLINE && nd->health != NODE_H_DEGRADED) return 0;
     if (nd->hb.uptime_s < WITNESS_MIN_UPTIME_S) return 0;
     return 1;
+}
+
+/* Is anything still ALIVE (or merely mid-OTA) between U and the master's RX,
+ * i.e. at a smaller chain_pos than U? Such a node cannot testify -- that is
+ * why it is not the witness D -- but it is on the cable, so the break may be
+ * anywhere from U down to it, and "U dead or wire U->M" would name a leg past
+ * a node that might itself be the far end. Phantoms are skipped: they have no
+ * place on the chain. */
+static int anything_alive_below(const hg_node_t *tab, int n_slots, uint8_t u_pos) {
+    for (int i = 0; i < n_slots; i++) {
+        const hg_node_t *nd = &tab[i];
+        if (!nd->used || !nd->hops_valid) continue;
+        if (nd->health == NODE_H_OFFLINE || nd->health == NODE_H_EMPTY) continue;
+        if (chain_pos(tab, n_slots, nd) < u_pos) return 1;
+    }
+    return 0;
 }
 
 /* D: the most UPSTREAM witness (largest chain_pos), NULL when the ring holds
@@ -146,16 +163,27 @@ static void ring_blame(const hg_node_t *tab, int n_slots, char *out, size_t outs
     const hg_node_t *u = most_downstream_offline(tab, n_slots);
     const hg_node_t *d = most_upstream_witness(tab, n_slots);
 
-    /* RIPENESS. If the most-upstream witness still hears the master, the break
-     * lies ABOVE it, among nodes whose heartbeats have stopped but which have
-     * not finished falling OFFLINE (10 s) -- so U is not known yet and naming
-     * the segment down to this witness would accuse a cable that is not even
-     * in the path. Wait for the ladder instead.
-     * The same answer covers "nothing to point at": no offline node and no
-     * witness at all (every zone mid-OTA, or every row a phantom). Name no
-     * cable rather than the wrong one -- naming the wrong one is the bug being
-     * fixed here. */
-    if ((d && (d->link_flags & LINK_MASTER_ALIVE)) || (!u && !d)) {
+    /* RIPENESS -- three ways the evidence does not (yet) support naming a
+     * cable, all answered the same way. Name no cable rather than the wrong
+     * one: naming the wrong one is the bug being fixed here. */
+    int unripe;
+    if (d) {
+        /* The most-upstream witness still hears the master: the break lies
+         * ABOVE it, among nodes whose heartbeats have stopped but which have
+         * not finished falling OFFLINE (10 s), so U is not known yet. Naming
+         * the segment down to this witness would accuse a cable that is not
+         * even in the path. Wait for the ladder. */
+        unripe = (d->link_flags & LINK_MASTER_ALIVE) != 0;
+    } else if (u) {
+        /* No witness at all, so the segment would end at the master's own RX
+         * leg -- which only holds if nothing alive stands between U and that
+         * RX. A zone that is mid-OTA or still inside its boot grace is exactly
+         * that: present on the cable, unable to say what it hears. */
+        unripe = anything_alive_below(tab, n_slots, chain_pos(tab, n_slots, u));
+    } else {
+        unripe = 1;   /* nothing offline and nobody to ask: nothing to point at */
+    }
+    if (unripe) {
         snprintf(out, outsz, "no node reports a fault");
         return;
     }
@@ -217,6 +245,8 @@ void ring_health_eval(hg_node_t *tab, int n_slots, uint32_t now_ms,
     if (used_count == 0) {
         st->state = RING_ST_IDLE;
         st->blame[0] = '\0';
+        st->pending_blame[0] = '\0';   /* same clearing as the CLOSED branch: a table */
+        st->pending_ticks = 0;         /* emptied mid-break leaves no half-counted verdict */
         return;
     }
 
