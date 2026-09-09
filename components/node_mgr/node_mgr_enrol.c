@@ -38,6 +38,7 @@ void nmgr_enrol_boot_init(void) {
         const ztab_ent_t *e = &s_ztab.e[i];
         if (!(e->flags & ZTAB_F_ASSIGNED) || e->id < 1 || e->id > HG_MAX_ZONES) continue;
         hg_node_t *nd = nmgr_node_by_id(e->id);
+        memset(nd, 0, sizeof *nd);   /* hops_valid = 0 falls out of this: no HB heard yet this boot */
         nd->used = 1; nd->id = e->id;
         memcpy(nd->mac, e->mac, 6);
         memcpy(nd->name, e->name, sizeof nd->name);

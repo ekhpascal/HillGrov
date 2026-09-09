@@ -46,7 +46,6 @@ void nmgr_cfg_note_failed(uint8_t zone, uint8_t kind, int terminal,
 /* ---- transfer half, called by the decision half ---- */
 
 void nmgr_cx_init(void);
-int  nmgr_cx_idle(void);                 /* 1 = nothing in flight, a new decision may start */
 int  nmgr_cx_tick_1s(uint32_t now);      /* 1 = the tick belonged to a transfer (stream/retry/awaiting ACK) */
 void nmgr_cx_pull(uint8_t zone, uint8_t kind);
 void nmgr_cx_push(uint8_t zone, uint32_t gen,

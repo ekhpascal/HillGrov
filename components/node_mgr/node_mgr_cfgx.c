@@ -47,8 +47,6 @@ void nmgr_cx_init(void) {
     ring_casm_init(&s_casm);
 }
 
-int nmgr_cx_idle(void) { return s_cx.state == CX_IDLE; }
-
 static void finish_failed(int terminal) {
     nmgr_cfg_note_failed(s_cx.zone, s_cx.kind, terminal,
                           s_cx.hb_gen, s_cx.hb_crc, s_cx.cache_gen, s_cx.cache_crc);

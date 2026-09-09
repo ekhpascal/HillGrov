@@ -126,3 +126,9 @@ void notify_emit_as(uint8_t node_id, ntf_type_t t, uint8_t idx, const char *fmt,
     emit_v(t, idx, node_id, fmt, ap);
     va_end(ap);
 }
+
+void notify_reset(ntf_type_t t, uint8_t idx) {
+    if (t < 0 || t >= NTF_COUNT) return;
+    uint8_t i = idx > 7 ? 7 : idx;
+    s_last_ms[t][i] = NTF_NEVER;
+}

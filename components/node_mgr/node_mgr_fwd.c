@@ -37,7 +37,7 @@ static uint8_t           s_verb_set;     /* its line's first token was SET */
  * The zone applies a forwarded SET as its own LOCAL edit and bumps its gen,
  * so the reconciler would see "zone gen higher than my cache" and push the
  * master's now-stale copy straight back over it -- the operator's own command
- * answering OK and then undoing itself (bench: NOTIFY NODE 0 2 CFG_REVERTED).
+ * answering OK and then undoing itself (bench: NOTIFY NODE 2 CFG_REVERTED <gen>).
  * Dropping the cache on the OK ACK turns that next decision into the adopt
  * branch instead, which pulls the value the operator just set. Only SET
  * qualifies: GET/DEBUG/CLEAR change no config, and a non-OK reply means the
@@ -124,7 +124,7 @@ static int do_forward(uint8_t zone, const char *line, char *resp, int resp_len, 
             s_waiter = NULL;             /* orphan: nmgr_fwd_on_ev sees s_active clear and drops it */
             s_active = 0;
             taskEXIT_CRITICAL(&s_mux);
-            nmgr_lock(); nd->cmd_timeouts++; nmgr_unlock();   /* DEGRADED via cmd_timeouts fed by forward failures */
+            nmgr_lock(); if (nd->cmd_timeouts < 255) nd->cmd_timeouts++; nmgr_unlock();   /* DEGRADED via cmd_timeouts fed by forward failures */
             return errline(resp, resp_len, "ZONE_TIMEOUT");
         }
         taskEXIT_CRITICAL(&s_mux);
@@ -136,7 +136,7 @@ static int do_forward(uint8_t zone, const char *line, char *resp, int resp_len, 
 
     if (s_fail_token) {
         nmgr_lock();
-        nd->cmd_timeouts++;
+        if (nd->cmd_timeouts < 255) nd->cmd_timeouts++;
         /* ring_trk reports an unclaimed frame as ZONE_UNKNOWN, but this zone IS
          * in the table (checked above): nobody answered for an id that exists,
          * which is OFFLINE, not UNKNOWN (final review G5). */

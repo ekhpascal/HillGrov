@@ -69,7 +69,7 @@ void nmgr_cfg_note_synced(uint8_t zone) {
      * note_failed sets to force DEGRADED. Heartbeats no longer clear it (see
      * node_mgr_enrol.c), so a success has to. */
     hg_node_t *nd = nmgr_node_by_id(zone);
-    if (nd) nd->cmd_timeouts = 0;
+    if (nd) { nmgr_lock(); nd->cmd_timeouts = 0; nmgr_unlock(); }
 }
 
 void nmgr_cfg_note_failed(uint8_t zone, uint8_t kind, int terminal,
@@ -78,7 +78,11 @@ void nmgr_cfg_note_failed(uint8_t zone, uint8_t kind, int terminal,
     if (zone < 1 || zone > HG_MAX_ZONES) return;
     notify_emit_as(zone, NTF_NODE, zone, "CFG_SYNC_FAILED");
     hg_node_t *nd = nmgr_node_by_id(zone);
-    if (nd && nd->cmd_timeouts < 3) nd->cmd_timeouts = 3;   /* DEGRADED via ring_health_eval's own rule */
+    if (nd) {
+        nmgr_lock();
+        if (nd->cmd_timeouts < 3) nd->cmd_timeouts = 3;   /* DEGRADED via ring_health_eval's own rule */
+        nmgr_unlock();
+    }
     if (!terminal) s_cooldown_until[zone - 1] = nmgr_now_ms() + CFG_COOLDOWN_MS;   /* rule (b) */
     if (terminal) {
         nmgr_latch_t *L = &s_latch[zone - 1];

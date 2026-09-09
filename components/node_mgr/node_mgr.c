@@ -135,6 +135,14 @@ static void handle_notify_frame(const ring_frame_t *f) {
     int type = notify_parse(p);
     if (type < 0 || type >= NTF_COUNT) return;
     long id = strtol(id_str, NULL, 10);
+    /* BOOT is NTF_NEVER on the master's own (type,idx) latch too -- "once per
+     * boot" -- so a zone's SECOND reboot would relay fine off the wire but get
+     * silently eaten here, since the master saw this zone's BOOT once already
+     * and never reboots itself. A relayed BOOT means the ZONE just rebooted,
+     * which is exactly the event this latch exists to report once per --
+     * reset it right before emitting so each zone reboot gets through. Master's
+     * own lines are untouched: this only fires on the relay path. */
+    if (type == NTF_BOOT) notify_reset(NTF_BOOT, (uint8_t)id);
     notify_emit_as((uint8_t)id, (ntf_type_t)type, (uint8_t)id, "%s", rest);
 }
 

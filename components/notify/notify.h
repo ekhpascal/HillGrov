@@ -28,6 +28,14 @@ void        notify_emit(ntf_type_t t, uint8_t idx, const char *fmt, ...);
    line reads "NOTIFY <TYPE> <zone> <rest>" and not "NOTIFY <TYPE> 0 <zone>
    <rest>". Rate limiting still keys on (type, idx). */
 void        notify_emit_as(uint8_t node_id, ntf_type_t t, uint8_t idx, const char *fmt, ...);
+/* Clear the (t, idx) rate-limit latch so the NEXT emit for that (type, idx)
+   goes out regardless of s_interval_ms -- for a relay that must reproduce an
+   event the sending node already rate-limited on its own side (e.g. a zone's
+   BOOT, which is NTF_NEVER = "once per boot" on the zone's OWN throttle, so a
+   second zone reboot's BOOT line would otherwise be silently eaten a second
+   time by the MASTER's copy of the same once-ever latch). No-op for t out of
+   range. */
+void        notify_reset(ntf_type_t t, uint8_t idx);
 
 #ifdef __cplusplus
 }
