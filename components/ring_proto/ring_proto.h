@@ -230,10 +230,17 @@ void ring_health_eval(hg_node_t *tab, int n_slots, uint32_t now_ms,
 /* Rules (spec §2.7): per node ONLINE -> DEGRADED after 5000 ms without HB (or cmd_timeouts>=3)
    -> OFFLINE after 10000 ms (event once); UPDATING until updating_until_ms (no HB alarms).
    Ring: no used nodes -> IDLE (no open alarm).  Used nodes and master's own TIME_SYNC not
-   returned for 5000 ms -> OPEN + blame; blame = first gap in the hop sequence: the node with
-   the smallest hops whose upstream_alive bit is clear, else the lowest-id silent node:
-   "Z<k> dead or wire Z<u|M>->Z<k>".  The suspect leg is named by MEASURED HOP ORDER -- u is
-   the node with hops+1 (hops counts forwards to the master's RX, so upstream = hops up), the
-   master when there is none, and id order only for a node with hops_valid 0.
-   Events fire on TRANSITIONS only. */
+   returned for 5000 ms -> OPEN + blame.  Blame (bench ruling 2026-09-09) names the segment
+   between U and D: U = the most DOWNSTREAM offline node (smallest hops), the master if none;
+   D = the most UPSTREAM ONLINE/DEGRADED node whose master_alive bit (link_flags b1, the
+   "master silent" flag) is clear, the master if none.  "wire M->Z<d>" when U is the master
+   (nothing is offline, so nothing can be dead), else "Z<u> dead or wire Z<u>->Z<d|M>"; with
+   neither end found -- or while a zone's heartbeats have stopped without reaching OFFLINE
+   yet, which would falsify the "M->Z<d>" reading -- "ring open (no node reports a fault)".  Ordering is by MEASURED hops
+   (counted at the master's RX: 0 feeds it, highest is the first hop after its TX), id order
+   only for a node with hops_valid 0.  UPDATING zones are ignored at both ends.
+   The verdict is RE-DERIVED every tick while the ring is open (at the 5000 ms mark nothing
+   is OFFLINE yet and no zone has had time to report master-silent, so it starts vague and
+   sharpens); a CHANGED verdict emits another "RING OPEN <blame>", an unchanged one is
+   silent, so a stable break still notifies once.  Events fire on TRANSITIONS only. */
 uint16_t ring_online_mask(const hg_node_t *tab, int n_slots, uint32_t now_ms);  /* HB within 5000 ms */
