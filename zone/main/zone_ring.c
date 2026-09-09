@@ -270,7 +270,9 @@ static void zone_ring_task(void *arg) {
         ring_frame_t f;
         if (ring_link_recv(&f, 100) == 0) {
             uint32_t now = now_ms();
-            zsync_note_rx(now);
+            /* no upstream-leg stamp here: link_flags b0 comes from
+               ring_link_last_rx_ms(), which sees FORWARDED frames too --
+               this queue only ever hands us what was addressed to us. */
             if (f.hdr.src == RING_ID_MASTER) { ota_trial_master_frame(); zsync_note_master(now); }
             dispatch_frame(&f, now);
         }

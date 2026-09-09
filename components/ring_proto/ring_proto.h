@@ -220,7 +220,15 @@ typedef struct {
 } hg_node_t;
 
 typedef enum { RING_ST_IDLE = 0, RING_ST_OK, RING_ST_OPEN } ring_state_t;
-typedef struct { ring_state_t state; uint8_t size; uint16_t online_mask; char blame[48]; } ring_status_t;
+typedef struct {
+    ring_state_t state; uint8_t size; uint16_t online_mask;
+    char blame[48];                     /* the published verdict; "" unless OPEN */
+    /* Dwell bookkeeping, master RAM only -- never displayed, never on the wire:
+       a changed verdict must repeat on 3 consecutive health ticks before it
+       replaces blame (see ring_health_eval). Zero-initialised with the rest. */
+    char    pending_blame[48];
+    uint8_t pending_ticks;
+} ring_status_t;
 
 /* Pure evaluator: inputs are the table + clocks; outputs = new health values + events.  */
 typedef void (*ring_health_ev_cb)(void *ctx, const char *notify_line);   /* "RING OPEN Z2 dead or wire Z2->Z3" etc. */
@@ -230,17 +238,23 @@ void ring_health_eval(hg_node_t *tab, int n_slots, uint32_t now_ms,
 /* Rules (spec §2.7): per node ONLINE -> DEGRADED after 5000 ms without HB (or cmd_timeouts>=3)
    -> OFFLINE after 10000 ms (event once); UPDATING until updating_until_ms (no HB alarms).
    Ring: no used nodes -> IDLE (no open alarm).  Used nodes and master's own TIME_SYNC not
-   returned for 5000 ms -> OPEN + blame.  Blame (bench ruling 2026-09-09) names the segment
-   between U and D: U = the most DOWNSTREAM offline node (smallest hops), the master if none;
-   D = the most UPSTREAM ONLINE/DEGRADED node whose master_alive bit (link_flags b1, the
-   "master silent" flag) is clear, the master if none.  "wire M->Z<d>" when U is the master
-   (nothing is offline, so nothing can be dead), else "Z<u> dead or wire Z<u>->Z<d|M>"; with
-   neither end found -- or while a zone's heartbeats have stopped without reaching OFFLINE
-   yet, which would falsify the "M->Z<d>" reading -- "ring open (no node reports a fault)".  Ordering is by MEASURED hops
-   (counted at the master's RX: 0 feeds it, highest is the first hop after its TX), id order
-   only for a node with hops_valid 0.  UPDATING zones are ignored at both ends.
-   The verdict is RE-DERIVED every tick while the ring is open (at the 5000 ms mark nothing
-   is OFFLINE yet and no zone has had time to report master-silent, so it starts vague and
-   sharpens); a CHANGED verdict emits another "RING OPEN <blame>", an unchanged one is
-   silent, so a stable break still notifies once.  Events fire on TRANSITIONS only. */
+   returned for 5000 ms -> OPEN + blame.  Blame (bench rulings 2026-09-09) names the segment
+   between U and D:
+     D = the most UPSTREAM WITNESS (largest measured hops), a witness being a used node that
+         is ONLINE/DEGRADED, not UPDATING, and up for >= 10 s (hb.uptime_s -- a just-booted
+         or never-heard zone reports "no master seen yet" and must not be believed).  No
+         witness at all -> D is the master, i.e. its own RX leg closes the segment.
+     U = the most DOWNSTREAM OFFLINE node that has been heard at least once (smallest hops);
+         a row never heard from is a phantom, not a suspect.  None -> U is the master.
+   If D exists and still reports master_alive (link_flags b1, the "master silent" flag), the
+   break is ABOVE it and the nodes up there have not finished falling OFFLINE: the evidence
+   is UNRIPE and blame is "no node reports a fault" -- the same answer as no evidence at all
+   (no offline node and no witness).  Otherwise "wire M->Z<d>" when U is the master (nothing
+   is offline, so nothing can be dead), else "Z<u> dead or wire Z<u>->Z<d|M>".
+   Ordering is by MEASURED hops (counted at the master's RX: 0 feeds it, highest is the first
+   hop after its TX); id order only for a node with hops_valid 0.
+   The verdict is RE-DERIVED every tick while the ring is open, and a CHANGED one is adopted
+   (and re-announced as another "RING OPEN <blame>") only after repeating on 3 consecutive
+   ticks -- flicker while a ring recovers is dropped, a stable break notifies once.  The
+   OK->OPEN edge itself is never delayed.  Events fire on TRANSITIONS only. */
 uint16_t ring_online_mask(const hg_node_t *tab, int n_slots, uint32_t now_ms);  /* HB within 5000 ms */

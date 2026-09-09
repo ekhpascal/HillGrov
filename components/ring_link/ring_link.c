@@ -33,6 +33,7 @@ static QueueHandle_t     s_uart_evtq;
 static QueueHandle_t     s_consume_q;      /* items: ring_frame_t, depth RING_CONSUME_DEPTH (8) */
 static ring_counters_t   s_ctr;
 static volatile uint32_t s_ts_returned_ms;
+static volatile uint32_t s_last_rx_ms;     /* any validated arrival, every route */
 static volatile int      s_trace;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
@@ -69,6 +70,15 @@ static void ring_link_enqueue(const ring_hdr_t *h, const uint8_t *payload) {
 }
 
 static void ring_link_dispatch(const ring_hdr_t *h, const uint8_t *payload) {
+    /* "Something valid reached this board's receiver", stamped for EVERY route
+     * -- consumed, forwarded, dropped as our own, dropped on ttl. That is what
+     * the zone's upstream_alive flag (link_flags b0) is supposed to mean: the
+     * cable into this node is carrying traffic. Deriving it from the consume
+     * queue instead (the old zone-side stamp) made it a duplicate of
+     * master_alive, since on a healthy ring the only frames a zone consumes
+     * are the master's -- a forwarding-only neighbour looked identical to a
+     * cut. Stamped before routing so no route can forget it. */
+    s_last_rx_ms = now_ms();
     uint8_t my_id = s_my_id_fn();   /* read fresh: a zone's id can change on ASSIGN_ID without restart */
     ring_rt_t rt = ring_route(s_is_master, my_id, s_my_mac, h, payload);
     if (s_trace)
@@ -208,5 +218,7 @@ int ring_link_send_raw(const uint8_t *wire, size_t len) {
 void ring_link_counters(ring_counters_t *out) { *out = s_ctr; }
 
 uint32_t ring_link_ts_returned_ms(void) { return s_ts_returned_ms; }
+
+uint32_t ring_link_last_rx_ms(void) { return s_last_rx_ms; }
 
 void ring_link_trace(int on) { s_trace = on; }

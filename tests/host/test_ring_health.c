@@ -3,15 +3,18 @@
 #include "ring_proto.h"
 
 /* hg_node_t.link_flags is the zone's own heartbeat field, copied verbatim:
- *   b0 upstream_alive -- ANY frame arrived from the upstream leg within 6 s
+ *   b0 upstream_alive -- ANY validated frame reached this zone's link layer
+ *                        within 6 s, forwards included
  *   b1 master_alive   -- a MASTER-SOURCED frame within 6 s; losing this is
  *                        what makes the zone shout W_LINK_LOST "master silent"
- * Blame reads b1 only (bench ruling 2026-09-09): b0 stayed SET on every node
- * whose upstream leg had just been pulled, so it cannot see a break. */
+ * Blame reads b1 only. b0 is carried in these tables purely to keep them
+ * physically truthful (a node whose upstream leg is cut receives nothing at
+ * all, so it reports neither bit) and to pin that no verdict depends on it. */
 #define LINK_UPSTREAM_ALIVE  0x01
 #define LINK_MASTER_ALIVE    0x02
 #define LINK_OK              (LINK_UPSTREAM_ALIVE | LINK_MASTER_ALIVE)
-#define LINK_SILENT          LINK_UPSTREAM_ALIVE   /* alive leg, no master frames */
+#define LINK_SILENT          LINK_UPSTREAM_ALIVE   /* frames arrive, none of them the master's */
+#define LINK_DARK            0x00                  /* nothing arrives at all */
 
 typedef struct { char lines[16][64]; int count; } cap_t;
 static cap_t cap;
@@ -112,10 +115,15 @@ static void test_empty_table_stays_idle_no_events(void) {
 }
 
 /* ================================ Ring OPEN blame ================================
-   Blame names the segment between U and D (spec 2.7, bench ruling 2026-09-09):
-     U = the most DOWNSTREAM offline node (smallest hops), the master if none
-     D = the most UPSTREAM alive node reporting master-silent (largest hops),
-         the master if none
+   Blame names the segment between U and D (spec 2.7, bench rulings 2026-09-09):
+     D = the most UPSTREAM node that is a witness -- alive (ONLINE/DEGRADED,
+         not UPDATING) and up for >= 10 s -- i.e. the largest chain_pos; the
+         master when there is no such node. If that witness still reports
+         master_alive the evidence is UNRIPE (the break is above it and the
+         nodes up there have not finished falling OFFLINE), so no cable is
+         named at all.
+     U = the most DOWNSTREAM OFFLINE node that has been heard at least once
+         (smallest chain_pos); the master when there is none.
    because a cut on the leg into node N starves N and everything downstream of
    master frames (they stay ONLINE -- their heartbeats keep reaching the
    master's RX) and takes everything upstream of the cut OFFLINE (heartbeats
@@ -134,12 +142,23 @@ static void test_empty_table_stays_idle_no_events(void) {
 #define HB_DEGR    13000u   /*  7 s old -> DEGRADED */
 #define HB_DEAD     5000u   /* 15 s old -> OFFLINE  */
 
-static hg_node_t row(uint8_t id, uint8_t hops, uint8_t hops_valid, uint32_t hb, uint8_t link) {
+#define NO_FAULT   "no node reports a fault"
+
+static hg_node_t row(uint8_t id, uint8_t hops, uint32_t hb, uint8_t link) {
     hg_node_t n = {0};
-    n.used = 1; n.id = id; n.hops = hops; n.hops_valid = hops_valid;
+    n.used = 1; n.id = id; n.hops = hops; n.hops_valid = 1;
     n.last_hb_ms = hb; n.link_flags = link;
+    n.hb.uptime_s = 600;             /* a long-running zone: a trustworthy witness */
     uint32_t age = NOW - hb;
     n.health = age >= 10000 ? NODE_H_OFFLINE : age >= 5000 ? NODE_H_DEGRADED : NODE_H_ONLINE;
+    return n;
+}
+
+/* An enrolled NVS row the master has never heard from: no hops measurement, no
+   heartbeat ever, so it reads OFFLINE the moment the ladder runs. */
+static hg_node_t phantom(uint8_t id) {
+    hg_node_t n = {0};
+    n.used = 1; n.id = id; n.health = NODE_H_OFFLINE;
     return n;
 }
 
@@ -148,8 +167,8 @@ static hg_node_t row(uint8_t id, uint8_t hops, uint8_t hops_valid, uint32_t hb, 
 
 static void test_blame_bench_cut_master_to_first_hop(void) {
     hg_node_t tab[2];
-    tab[0] = row(1, 0, 1, HB_FRESH, LINK_SILENT);    /* both still deliver heartbeats... */
-    tab[1] = row(2, 1, 1, HB_FRESH, LINK_SILENT);    /* ...and both lost the master */
+    tab[0] = row(1, 0, HB_FRESH, LINK_SILENT);   /* still fed by Z2's own frames */
+    tab[1] = row(2, 1, HB_FRESH, LINK_DARK);     /* nothing reaches Z2 any more  */
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
@@ -166,8 +185,8 @@ static void test_blame_bench_cut_master_to_first_hop(void) {
    offers both readings. This is the bench's hold-COM24-in-reset case. */
 static void test_blame_bench_first_hop_offline_downstream_silent(void) {
     hg_node_t tab[2];
-    tab[0] = row(1, 0, 1, HB_FRESH, LINK_SILENT);    /* alive, starved of master frames */
-    tab[1] = row(2, 1, 1, HB_DEAD,  LINK_OK);        /* offline; last flags still saw the master */
+    tab[0] = row(1, 0, HB_FRESH, LINK_DARK);     /* alive, but nothing arrives */
+    tab[1] = row(2, 1, HB_DEAD,  LINK_OK);       /* offline; last flags still saw the master */
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
@@ -177,12 +196,12 @@ static void test_blame_bench_first_hop_offline_downstream_silent(void) {
     TEST_ASSERT_EQUAL_HEX16(0x0002, st.online_mask);
 }
 
-/* The Z1->M cut and a dead Z1 also coincide: everything offline, nobody
-   master-silent. This is the bench's hold-COM25-in-reset case. */
+/* The Z1->M cut and a dead Z1 also coincide: everything offline, nobody left
+   to witness anything. This is the bench's hold-COM25-in-reset case. */
 static void test_blame_bench_last_hop_offline_nobody_silent(void) {
     hg_node_t tab[2];
-    tab[0] = row(1, 0, 1, HB_DEAD, LINK_OK);
-    tab[1] = row(2, 1, 1, HB_DEAD, LINK_OK);
+    tab[0] = row(1, 0, HB_DEAD, LINK_OK);
+    tab[1] = row(2, 1, HB_DEAD, LINK_OK);
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
@@ -196,8 +215,8 @@ static void test_blame_bench_last_hop_offline_nobody_silent(void) {
 
 static void test_blame_inorder_cut_master_to_first_hop(void) {
     hg_node_t tab[2];
-    tab[0] = row(1, 1, 1, HB_FRESH, LINK_SILENT);
-    tab[1] = row(2, 0, 1, HB_FRESH, LINK_SILENT);
+    tab[0] = row(1, 1, HB_FRESH, LINK_DARK);
+    tab[1] = row(2, 0, HB_FRESH, LINK_SILENT);
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
@@ -207,8 +226,8 @@ static void test_blame_inorder_cut_master_to_first_hop(void) {
 
 static void test_blame_inorder_first_hop_offline_downstream_silent(void) {
     hg_node_t tab[2];
-    tab[0] = row(1, 1, 1, HB_DEAD,  LINK_OK);
-    tab[1] = row(2, 0, 1, HB_FRESH, LINK_SILENT);
+    tab[0] = row(1, 1, HB_DEAD,  LINK_OK);
+    tab[1] = row(2, 0, HB_FRESH, LINK_DARK);
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
@@ -218,8 +237,8 @@ static void test_blame_inorder_first_hop_offline_downstream_silent(void) {
 
 static void test_blame_inorder_last_hop_offline_nobody_silent(void) {
     hg_node_t tab[2];
-    tab[0] = row(1, 1, 1, HB_DEAD, LINK_OK);
-    tab[1] = row(2, 0, 1, HB_DEAD, LINK_OK);
+    tab[0] = row(1, 1, HB_DEAD, LINK_OK);
+    tab[1] = row(2, 0, HB_DEAD, LINK_OK);
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
@@ -234,9 +253,9 @@ static void test_blame_inorder_last_hop_offline_nobody_silent(void) {
 
 static void test_blame_dead_middle_node_names_itself(void) {
     hg_node_t tab[3];
-    tab[0] = row(1, 2, 1, HB_DEAD,  LINK_OK);        /* upstream of the dead node: offline */
-    tab[1] = row(2, 1, 1, HB_DEAD,  LINK_OK);        /* the dead node */
-    tab[2] = row(3, 0, 1, HB_FRESH, LINK_SILENT);    /* downstream: alive, master-silent */
+    tab[0] = row(1, 2, HB_DEAD,  LINK_OK);       /* upstream of the dead node: offline */
+    tab[1] = row(2, 1, HB_DEAD,  LINK_OK);       /* the dead node */
+    tab[2] = row(3, 0, HB_FRESH, LINK_DARK);     /* downstream: alive, hears nothing */
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 3, NOW, 0, &st, cap_cb, &cap);
@@ -246,9 +265,9 @@ static void test_blame_dead_middle_node_names_itself(void) {
 
 static void test_blame_cut_above_the_middle_node(void) {
     hg_node_t tab[3];
-    tab[0] = row(1, 2, 1, HB_DEAD,  LINK_OK);        /* only the top hop is offline */
-    tab[1] = row(2, 1, 1, HB_FRESH, LINK_SILENT);    /* alive but starved: the cut is above it */
-    tab[2] = row(3, 0, 1, HB_FRESH, LINK_SILENT);
+    tab[0] = row(1, 2, HB_DEAD,  LINK_OK);       /* only the top hop is offline */
+    tab[1] = row(2, 1, HB_FRESH, LINK_DARK);     /* alive but starved: the cut is above it */
+    tab[2] = row(3, 0, HB_FRESH, LINK_SILENT);   /* still fed by Z2's frames */
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 3, NOW, 0, &st, cap_cb, &cap);
@@ -260,10 +279,10 @@ static void test_blame_cut_above_the_middle_node(void) {
 
 static void test_blame_four_node_middle_cut(void) {
     hg_node_t tab[4];
-    tab[0] = row(1, 3, 1, HB_DEAD,  LINK_OK);        /* M -> Z1 -> Z2 -| Z3 -> Z4 -> M */
-    tab[1] = row(2, 2, 1, HB_DEAD,  LINK_OK);
-    tab[2] = row(3, 1, 1, HB_FRESH, LINK_SILENT);
-    tab[3] = row(4, 0, 1, HB_FRESH, LINK_SILENT);
+    tab[0] = row(1, 3, HB_DEAD,  LINK_OK);       /* M -> Z1 -> Z2 -| Z3 -> Z4 -> M */
+    tab[1] = row(2, 2, HB_DEAD,  LINK_OK);
+    tab[2] = row(3, 1, HB_FRESH, LINK_DARK);
+    tab[3] = row(4, 0, HB_FRESH, LINK_SILENT);
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 4, NOW, 0, &st, cap_cb, &cap);
@@ -276,10 +295,10 @@ static void test_blame_four_node_middle_cut(void) {
    Only the measured hops can name this segment; id order would print nonsense. */
 static void test_blame_four_node_middle_cut_scrambled_ids(void) {
     hg_node_t tab[4];
-    tab[0] = row(4, 3, 1, HB_DEAD,  LINK_OK);
-    tab[1] = row(1, 2, 1, HB_DEAD,  LINK_OK);
-    tab[2] = row(3, 1, 1, HB_FRESH, LINK_SILENT);
-    tab[3] = row(2, 0, 1, HB_FRESH, LINK_SILENT);
+    tab[0] = row(4, 3, HB_DEAD,  LINK_OK);
+    tab[1] = row(1, 2, HB_DEAD,  LINK_OK);
+    tab[2] = row(3, 1, HB_FRESH, LINK_DARK);
+    tab[3] = row(2, 0, HB_FRESH, LINK_SILENT);
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 4, NOW, 0, &st, cap_cb, &cap);
@@ -287,13 +306,30 @@ static void test_blame_four_node_middle_cut_scrambled_ids(void) {
     TEST_ASSERT_EQUAL_STRING("Z1 dead or wire Z1->Z3", st.blame);
 }
 
+/* Two breaks at once: the one nearest the master's RX is named. Fix it and the
+   next one surfaces. M -> Z1 -| Z2 -> Z3 -| Z4 -> M, so Z1 (blocked by the
+   upper cut), Z2 and Z3 (blocked by the lower one) are all offline and only Z4
+   still delivers heartbeats. Pinned as documentation of the ordering. */
+static void test_blame_two_cuts_names_the_downstream_break(void) {
+    hg_node_t tab[4];
+    tab[0] = row(1, 3, HB_DEAD,  LINK_OK);       /* still hears the master, cannot be heard */
+    tab[1] = row(2, 2, HB_DEAD,  LINK_DARK);
+    tab[2] = row(3, 1, HB_DEAD,  LINK_SILENT);
+    tab[3] = row(4, 0, HB_FRESH, LINK_DARK);     /* the only witness */
+    ring_status_t st = { .state = RING_ST_OK };
+
+    ring_health_eval(tab, 4, NOW, 0, &st, cap_cb, &cap);
+
+    TEST_ASSERT_EQUAL_STRING("Z3 dead or wire Z3->Z4", st.blame);
+}
+
 /* ---- An OFFLINE node's link_flags are whatever it last managed to send, i.e.
-        pre-cut, so they never make it D ---- */
+        pre-break, so it is never a witness ---- */
 
 static void test_blame_offline_nodes_stale_flags_are_not_trusted(void) {
     hg_node_t tab[2];
-    tab[0] = row(1, 0, 1, HB_DEAD, LINK_SILENT);     /* stale "master silent" from before it went quiet */
-    tab[1] = row(2, 1, 1, HB_DEAD, LINK_OK);
+    tab[0] = row(1, 0, HB_DEAD, LINK_SILENT);    /* stale "master silent" from before it went quiet */
+    tab[1] = row(2, 1, HB_DEAD, LINK_OK);
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
@@ -305,8 +341,8 @@ static void test_blame_offline_nodes_stale_flags_are_not_trusted(void) {
 
 static void test_blame_degraded_node_can_be_the_silent_end(void) {
     hg_node_t tab[2];
-    tab[0] = row(1, 0, 1, HB_DEGR, LINK_SILENT);
-    tab[1] = row(2, 1, 1, HB_DEAD, LINK_OK);
+    tab[0] = row(1, 0, HB_DEGR, LINK_DARK);
+    tab[1] = row(2, 1, HB_DEAD, LINK_OK);
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
@@ -315,69 +351,179 @@ static void test_blame_degraded_node_can_be_the_silent_end(void) {
     TEST_ASSERT_EQUAL_STRING("Z2 dead or wire Z2->Z1", st.blame);
 }
 
-/* ---- UPDATING zones are ignored at both ends (fleet OTA breaks the ring on purpose) ---- */
+/* ---- UPDATING zones witness nothing (fleet OTA breaks the ring on purpose) ---- */
 
 static void test_blame_updating_zone_is_ignored(void) {
     hg_node_t tab[2];
-    tab[0] = row(1, 0, 1, HB_FRESH, LINK_OK);
-    tab[1] = row(2, 1, 1, HB_DEAD,  LINK_SILENT);    /* would be U (offline) and D (silent)... */
-    tab[1].updating_until_ms = NOW + 10000;          /* ...but it is mid-OTA */
+    tab[0] = row(1, 0, HB_FRESH, LINK_OK);
+    tab[1] = row(2, 1, HB_DEAD,  LINK_DARK);     /* would be U (offline) and the top witness... */
+    tab[1].updating_until_ms = NOW + 10000;      /* ...but it is mid-OTA */
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
 
     TEST_ASSERT_EQUAL_INT(NODE_H_UPDATING, tab[1].health);
-    TEST_ASSERT_EQUAL_STRING("ring open (no node reports a fault)", st.blame);
+    TEST_ASSERT_EQUAL_STRING(NO_FAULT, st.blame);                /* Z1, the only witness, hears the master */
 }
 
-/* ---- Ring open with every node happy: the master's own RX leg, or a zone
-        that forwards without saying so. Name no cable rather than a wrong one. ---- */
+static void test_blame_no_witness_at_all_names_nothing(void) {
+    hg_node_t tab[2];
+    tab[0] = row(1, 0, HB_FRESH, LINK_DARK);
+    tab[1] = row(2, 1, HB_FRESH, LINK_DARK);
+    tab[0].updating_until_ms = NOW + 10000;      /* both mid-OTA: nobody alive to ask, */
+    tab[1].updating_until_ms = NOW + 10000;      /* and nobody offline to blame        */
+    ring_status_t st = { .state = RING_ST_OK };
+
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+
+    TEST_ASSERT_EQUAL_STRING(NO_FAULT, st.blame);
+}
+
+/* ---- Ring open with every node hearing the master: the master's own RX leg,
+        or a zone that forwards without saying so. Name no cable. ---- */
 
 static void test_blame_no_node_reports_a_fault(void) {
     hg_node_t tab[2];
-    tab[0] = row(1, 0, 1, HB_FRESH, LINK_OK);
-    tab[1] = row(2, 1, 1, HB_FRESH, LINK_OK);
+    tab[0] = row(1, 0, HB_FRESH, LINK_OK);
+    tab[1] = row(2, 1, HB_FRESH, LINK_OK);
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);         /* TIME_SYNC not returning */
 
     TEST_ASSERT_EQUAL_INT(RING_ST_OPEN, st.state);
-    TEST_ASSERT_EQUAL_STRING("ring open (no node reports a fault)", st.blame);
+    TEST_ASSERT_EQUAL_STRING(NO_FAULT, st.blame);
     TEST_ASSERT_EQUAL_INT(1, cap.count);
-    TEST_ASSERT_EQUAL_STRING("RING OPEN ring open (no node reports a fault)", cap.lines[0]);
+    TEST_ASSERT_EQUAL_STRING("RING OPEN " NO_FAULT, cap.lines[0]);
 }
 
-/* ---- hops never measured (NVS row, never heard): fall back to id order,
-        where the lowest used id is the first hop after the master's TX ---- */
+/* ---- Ripeness: while the most-upstream witness still hears the master, the
+        break is above it and the nodes up there have not finished falling
+        OFFLINE. Naming a cable then would name one that is not in the path. ---- */
 
-static void test_blame_unknown_hops_falls_back_to_id_order(void) {
+static void test_blame_unripe_until_the_top_hop_falls_offline(void) {
+    hg_node_t tab[4];                            /* M -> Z1 -> Z2 -| Z3 -> Z4 -> M */
+    tab[0] = row(1, 3, HB_DEAD,  LINK_OK);       /* first to cross OFFLINE */
+    tab[1] = row(2, 2, HB_DEGR,  LINK_OK);       /* still only late, still hears the master */
+    tab[2] = row(3, 1, HB_FRESH, LINK_DARK);
+    tab[3] = row(4, 0, HB_FRESH, LINK_SILENT);
+    ring_status_t st = { .state = RING_ST_OK };
+
+    ring_health_eval(tab, 4, NOW, 0, &st, cap_cb, &cap);         /* OPEN edge: publishes at once */
+    TEST_ASSERT_EQUAL_INT(RING_ST_OPEN, st.state);
+    TEST_ASSERT_EQUAL_STRING(NO_FAULT, st.blame);                /* not "wire M->Z3" */
+    TEST_ASSERT_EQUAL_INT(1, cap.count);
+
+    tab[1].last_hb_ms = HB_DEAD;                                 /* Z2 crosses OFFLINE */
+
+    ring_health_eval(tab, 4, NOW, 0, &st, cap_cb, &cap);         /* tick 1 of the new verdict */
+    TEST_ASSERT_EQUAL_STRING(NO_FAULT, st.blame);
+    TEST_ASSERT_EQUAL_INT(2, cap.count);                         /* the NODE 2 OFFLINE line */
+    TEST_ASSERT_EQUAL_STRING("NODE 2 OFFLINE", cap.lines[1]);
+
+    ring_health_eval(tab, 4, NOW, 0, &st, cap_cb, &cap);         /* tick 2: still not adopted */
+    TEST_ASSERT_EQUAL_STRING(NO_FAULT, st.blame);
+    TEST_ASSERT_EQUAL_INT(2, cap.count);
+
+    ring_health_eval(tab, 4, NOW, 0, &st, cap_cb, &cap);         /* tick 3: dwell satisfied */
+    TEST_ASSERT_EQUAL_STRING("Z2 dead or wire Z2->Z3", st.blame);
+    TEST_ASSERT_EQUAL_INT(3, cap.count);
+    TEST_ASSERT_EQUAL_STRING("RING OPEN Z2 dead or wire Z2->Z3", cap.lines[2]);
+}
+
+/* ---- Dwell: a verdict that flickers for a tick or two and reverts is never
+        adopted; three consecutive ticks of the same new verdict are. ---- */
+
+static void test_blame_dwell_ignores_a_short_flicker(void) {
     hg_node_t tab[2];
-    tab[0] = row(1, 0, 0, HB_DEAD,  LINK_OK);        /* hops_valid 0 on both rows */
-    tab[1] = row(2, 0, 0, HB_FRESH, LINK_SILENT);
+    tab[0] = row(1, 0, HB_FRESH, LINK_DARK);
+    tab[1] = row(2, 1, HB_DEAD,  LINK_OK);
+    ring_status_t st = { .state = RING_ST_OK };
+
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+    TEST_ASSERT_EQUAL_STRING("Z2 dead or wire Z2->Z1", st.blame);
+    TEST_ASSERT_EQUAL_INT(1, cap.count);
+
+    /* Z1's heartbeat momentarily carries master_alive again (a frame slipped
+       through, or the flag was sampled early): the verdict would go unripe. */
+    tab[0].link_flags = LINK_OK;
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+    TEST_ASSERT_EQUAL_STRING("Z2 dead or wire Z2->Z1", st.blame);
+    TEST_ASSERT_EQUAL_INT(1, cap.count);
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);         /* two ticks is still not enough */
+    TEST_ASSERT_EQUAL_STRING("Z2 dead or wire Z2->Z1", st.blame);
+    TEST_ASSERT_EQUAL_INT(1, cap.count);
+
+    tab[0].link_flags = LINK_DARK;                               /* reverted: pending dropped */
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+    TEST_ASSERT_EQUAL_STRING("Z2 dead or wire Z2->Z1", st.blame);
+    TEST_ASSERT_EQUAL_INT(1, cap.count);
+
+    tab[0].link_flags = LINK_OK;                                 /* now it sticks: 3 ticks */
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+    TEST_ASSERT_EQUAL_INT(1, cap.count);
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+    TEST_ASSERT_EQUAL_STRING(NO_FAULT, st.blame);
+    TEST_ASSERT_EQUAL_INT(2, cap.count);
+    TEST_ASSERT_EQUAL_STRING("RING OPEN " NO_FAULT, cap.lines[1]);
+}
+
+/* ---- Boot grace: a zone that has been up for less than 10 s has not had time
+        for its own 6 s link timers to mean anything, so it witnesses nothing.
+        This is the bench transient seen when a held board is released: it comes
+        back reporting "no master yet" and briefly accused its own feed. ---- */
+
+static void test_blame_boot_grace_zone_is_not_a_witness(void) {
+    hg_node_t tab[2];
+    tab[0] = row(1, 0, HB_FRESH, LINK_OK);       /* the settled zone hears the master */
+    tab[1] = row(2, 1, HB_FRESH, LINK_DARK);     /* just rebooted: nothing heard yet */
+    tab[1].hb.uptime_s = 3;
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
 
-    TEST_ASSERT_EQUAL_STRING("Z1 dead or wire Z1->Z2", st.blame);
+    TEST_ASSERT_EQUAL_STRING(NO_FAULT, st.blame);                /* not "wire M->Z2" */
+
+    tab[1].hb.uptime_s = 30;                                     /* past the grace window */
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+    TEST_ASSERT_EQUAL_STRING("wire M->Z2", st.blame);            /* now it is evidence */
 }
 
-static void test_blame_unknown_hops_master_leg_when_nothing_is_offline(void) {
+/* ---- A row the master has never heard from is not a suspect: it has no hops
+        measurement and no heartbeat, so it cannot be placed on the chain ---- */
+
+static void test_blame_never_heard_row_is_not_u(void) {
     hg_node_t tab[2];
-    tab[0] = row(1, 0, 0, HB_FRESH, LINK_SILENT);
-    tab[1] = row(2, 0, 0, HB_FRESH, LINK_SILENT);
+    tab[0] = row(1, 0, HB_FRESH, LINK_SILENT);   /* the one real zone, feeding the master's RX */
+    tab[1] = phantom(2);                         /* enrolled from NVS, never seen */
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
 
-    TEST_ASSERT_EQUAL_STRING("wire M->Z1", st.blame);            /* lowest id = first hop */
+    TEST_ASSERT_EQUAL_STRING("wire M->Z1", st.blame);            /* never "Z2 dead or ..." */
+    TEST_ASSERT_EQUAL_HEX16(0x0002, st.online_mask);
+}
+
+static void test_blame_all_rows_never_heard_names_nothing(void) {
+    hg_node_t tab[2];
+    tab[0] = phantom(1);
+    tab[1] = phantom(2);
+    ring_status_t st = { .state = RING_ST_OK };
+
+    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
+
+    TEST_ASSERT_EQUAL_INT(RING_ST_OPEN, st.state);
+    TEST_ASSERT_EQUAL_STRING(NO_FAULT, st.blame);
 }
 
 /* ========== Blame fires once on OK->OPEN; ring stays OPEN until the probe returns (RING CLOSED) ========== */
 
 static void test_ring_stays_open_until_probe_returns_then_closes(void) {
     hg_node_t tab[2];
-    tab[0] = row(1, 0, 1, HB_FRESH, LINK_SILENT);
-    tab[1] = row(2, 1, 1, HB_DEAD,  LINK_OK);
+    tab[0] = row(1, 0, HB_FRESH, LINK_DARK);
+    tab[1] = row(2, 1, HB_DEAD,  LINK_OK);
     ring_status_t st = { .state = RING_ST_OK };
 
     ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);         /* OK -> OPEN: one blame event */
@@ -393,52 +539,6 @@ static void test_ring_stays_open_until_probe_returns_then_closes(void) {
     TEST_ASSERT_EQUAL_INT(2, cap.count);
     TEST_ASSERT_EQUAL_STRING("RING CLOSED", cap.lines[1]);
     TEST_ASSERT_EQUAL_STRING("", st.blame);
-}
-
-/* ========== ...but the verdict itself is re-derived every tick, because at the
-   5 s mark the evidence does not exist yet: nothing is OFFLINE (10 s) and no
-   starved zone has had its 6 s of master silence plus a heartbeat to report
-   the loss. This is the bench's "hold a board in reset" timeline. ========== */
-
-static void test_blame_is_refined_while_the_ring_stays_open(void) {
-    /* The whole timeline of holding Z2 (the first hop) in reset, as the master
-       sees it. Z1 keeps delivering heartbeats throughout -- its leg to the
-       master's RX is intact -- so only Z2's heartbeats stop. */
-    hg_node_t tab[2];
-
-    /* t ~ 5 s: the ring probe has not returned, but Z2 is merely late (DEGRADED)
-       and Z1 has not yet had 6 s of master silence to report anything. */
-    tab[0] = row(1, 0, 1, HB_FRESH, LINK_OK);
-    tab[1] = row(2, 1, 1, HB_DEGR,  LINK_OK);
-    ring_status_t st = { .state = RING_ST_OK };
-
-    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
-    TEST_ASSERT_EQUAL_INT(RING_ST_OPEN, st.state);
-    TEST_ASSERT_EQUAL_STRING("ring open (no node reports a fault)", st.blame);
-    TEST_ASSERT_EQUAL_INT(1, cap.count);
-    TEST_ASSERT_EQUAL_STRING("RING OPEN ring open (no node reports a fault)", cap.lines[0]);
-
-    /* t ~ 7 s: Z1 now reports master-silent. U/D taken literally would answer
-       "wire M->Z1" -- a cable that is not even in the path -- because nothing
-       has reached OFFLINE yet. Z2's missing heartbeats say that reading is not
-       ripe, so the verdict is withheld and nothing is re-notified. */
-    tab[0].link_flags = LINK_SILENT;
-
-    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
-    TEST_ASSERT_EQUAL_STRING("ring open (no node reports a fault)", st.blame);
-    TEST_ASSERT_EQUAL_INT(1, cap.count);
-
-    /* t ~ 10 s: Z2 crosses the OFFLINE line and the segment is now provable. */
-    tab[1].last_hb_ms = HB_DEAD;
-
-    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);
-    TEST_ASSERT_EQUAL_STRING("Z2 dead or wire Z2->Z1", st.blame);
-    TEST_ASSERT_EQUAL_INT(3, cap.count);
-    TEST_ASSERT_EQUAL_STRING("NODE 2 OFFLINE", cap.lines[1]);
-    TEST_ASSERT_EQUAL_STRING("RING OPEN Z2 dead or wire Z2->Z1", cap.lines[2]);
-
-    ring_health_eval(tab, 2, NOW, 0, &st, cap_cb, &cap);   /* verdict unchanged: silent */
-    TEST_ASSERT_EQUAL_INT(3, cap.count);
 }
 
 /* ========== ring_online_mask bit math ========== */
@@ -469,14 +569,18 @@ int main(void) {
     RUN_TEST(test_blame_cut_above_the_middle_node);
     RUN_TEST(test_blame_four_node_middle_cut);
     RUN_TEST(test_blame_four_node_middle_cut_scrambled_ids);
+    RUN_TEST(test_blame_two_cuts_names_the_downstream_break);
     RUN_TEST(test_blame_offline_nodes_stale_flags_are_not_trusted);
     RUN_TEST(test_blame_degraded_node_can_be_the_silent_end);
     RUN_TEST(test_blame_updating_zone_is_ignored);
+    RUN_TEST(test_blame_no_witness_at_all_names_nothing);
     RUN_TEST(test_blame_no_node_reports_a_fault);
-    RUN_TEST(test_blame_unknown_hops_falls_back_to_id_order);
-    RUN_TEST(test_blame_unknown_hops_master_leg_when_nothing_is_offline);
+    RUN_TEST(test_blame_unripe_until_the_top_hop_falls_offline);
+    RUN_TEST(test_blame_dwell_ignores_a_short_flicker);
+    RUN_TEST(test_blame_boot_grace_zone_is_not_a_witness);
+    RUN_TEST(test_blame_never_heard_row_is_not_u);
+    RUN_TEST(test_blame_all_rows_never_heard_names_nothing);
     RUN_TEST(test_ring_stays_open_until_probe_returns_then_closes);
-    RUN_TEST(test_blame_is_refined_while_the_ring_stays_open);
     RUN_TEST(test_online_mask_bit_math);
     return UNITY_END();
 }

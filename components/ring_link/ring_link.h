@@ -39,5 +39,13 @@ void ring_link_counters(ring_counters_t *out);
  * §2.5/§2.7); 0 if it has never returned. */
 uint32_t ring_link_ts_returned_ms(void);
 
+/* ms timestamp of the last VALIDATED frame arrival on this board's receiver,
+   whatever the routing decision was (consumed, forwarded, dropped as our own,
+   dropped on ttl); 0 if nothing has ever arrived. The zone's heartbeat
+   upstream_alive flag (link_flags b0) is derived from this, so it reports
+   "the cable into me is carrying traffic" independently of whether any of
+   that traffic was addressed to, or sourced by, the master (b1). */
+uint32_t ring_link_last_rx_ms(void);
+
 /* SET RING TRACE: when on, ESP_LOGI's the header (hex) of every decoded frame. */
 void ring_link_trace(int on);

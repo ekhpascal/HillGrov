@@ -236,6 +236,16 @@ void nmgr_health_cb(void *ctx, const char *line) {
         const char *sp = strchr(p, ' ');
         notify_emit_as((uint8_t)id, NTF_NODE, (uint8_t)id, "%s", sp ? sp + 1 : p);
     } else if (strncmp(line, "RING ", 5) == 0) {
+        /* Every RING line from ring_health_eval is a STATE EDGE (OPEN with a
+         * fresh verdict, or CLOSED) and none of them is repeated while nothing
+         * changes -- so none may be dropped. Without this reset the 2 s
+         * (NTF_RING, 0) rate limit ate exactly the lines that matter most: a
+         * corrected verdict adopted a second after the OPEN alarm, and worse,
+         * the CLOSED that says the ring is whole again, leaving the operator
+         * looking at a stale break. Same technique as the relayed BOOT reset
+         * in node_mgr.c; the zones' own relayed W_LINK_LOST lines use their
+         * zone idx and are untouched. */
+        notify_reset(NTF_RING, 0);
         notify_emit(NTF_RING, 0, "%s", line + 5);
     }
 }

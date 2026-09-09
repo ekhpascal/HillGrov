@@ -18,8 +18,9 @@ static const char *TAG = "zsync";
 
 static cmd_core_t *s_core;
 
-static uint32_t s_last_rx_ms;                  /* any frame: proves the upstream leg is alive */
-static uint32_t s_last_master_ms;               /* master-sourced frame only */
+static uint32_t s_last_master_ms;               /* master-sourced frame only; b0 (upstream_alive)
+                                                   comes from ring_link_last_rx_ms() instead --
+                                                   see zsync_link_flags */
 static uint8_t  s_link_lost;                    /* W_LINK_LOST edge latch, re-armed on recovery */
 
 static uint8_t  s_ring_size;                    /* last TIME_SYNC ring_size (stored; not yet reported anywhere) */
@@ -34,7 +35,6 @@ static uint32_t now_ms(void) { return s_core->now_ms(); }
 
 void zone_ring_sync_init(cmd_core_t *core) { s_core = core; }
 
-void zsync_note_rx(uint32_t now)     { s_last_rx_ms = now; }
 void zsync_note_master(uint32_t now) { s_last_master_ms = now; }
 
 void zsync_time_sync(const ring_frame_t *f, uint32_t now) {
@@ -118,9 +118,17 @@ uint8_t zsync_time_quality(void) {
 /* see zone_ring.h */
 uint32_t zone_ring_time_synced_at(void) { return s_time_synced_at; }
 
+/* b0 upstream_alive is taken from the LINK layer's last validated arrival
+ * (ring_link_last_rx_ms), not from this task's consume queue. A zone consumes
+ * only what is addressed to it -- on a healthy ring, essentially the master's
+ * frames -- so stamping b0 here made it a second copy of b1 and blind to the
+ * one thing it is for: a neighbour that is still FORWARDING traffic past us
+ * versus a cable that has gone quiet. Both bits use the same 6000 ms window
+ * (spec 2.7) and the same clock base (esp_timer, see app_main's now_ms). */
 uint8_t zsync_link_flags(uint32_t now, uint8_t zid) {
     uint8_t link = 0;
-    if (s_last_rx_ms     != 0 && (now - s_last_rx_ms)     < ZRING_LINK_MS) link |= 0x01;  /* upstream_alive */
+    uint32_t last_rx = ring_link_last_rx_ms();
+    if (last_rx          != 0 && (now - last_rx)          < ZRING_LINK_MS) link |= 0x01;  /* upstream_alive */
     if (s_last_master_ms != 0 && (now - s_last_master_ms) < ZRING_LINK_MS) link |= 0x02;  /* master_alive */
     if (zid >= 1 && zid <= HG_MAX_ZONES && (s_online_mask & (1u << zid))) link |= 0x04;   /* heard_by_master */
     return link;

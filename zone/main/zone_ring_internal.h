@@ -36,7 +36,6 @@ void zone_ring_cfg_get(const ring_frame_t *f, uint32_t now);
 /* zone_ring_sync.c: TIME_SYNC/ASSIGN_ID, zone link-state (W_LINK_LOST), and
  * the two values zone_ring.c's build_hb() needs derived from them. */
 void    zone_ring_sync_init(cmd_core_t *core);
-void    zsync_note_rx(uint32_t now);              /* any received frame: upstream leg alive */
 void    zsync_note_master(uint32_t now);           /* master-sourced frame received */
 void    zsync_time_sync(const ring_frame_t *f, uint32_t now);
 void    zsync_assign_id(const ring_frame_t *f);

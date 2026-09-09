@@ -4,16 +4,34 @@
 
 /* hg_hb_t.link_flags b1, copied into hg_node_t.link_flags: a MASTER-SOURCED
  * frame arrived within 6000 ms. Its loss is exactly what makes the zone shout
- * W_LINK_LOST "master silent", and it is the only link bit blame trusts.
+ * W_LINK_LOST "master silent", and it is the only link bit blame reads.
  *
- * b0 (upstream_alive, "any frame from the upstream leg") looks like the
- * natural break detector and was what the first implementation used, but in
- * all three 2026-09-09 wire pulls it stayed SET on the node whose upstream leg
- * had just been cut (why is not established -- the zone sets it from any frame
- * its receiver hands up), so the rule built on it never fired at all and blame
- * fell through to weaker branches that named the wrong cable. b1 is the flag
- * that demonstrably goes dark when master frames stop arriving. */
+ * Why the 2026-09-09 wire pulls named the wrong cable: not b0 (b0 was never
+ * consulted -- see below), but (1) blame was computed once, at the OK->OPEN
+ * edge, which lands one second BEFORE the zones' 6000 ms link timers can
+ * report master-silent, so the master-silent branch was always empty and the
+ * verdict fell through to weaker ones; and (2) those weaker branches picked
+ * the smallest-hops silent node and named its UPSTREAM leg -- the wrong
+ * direction, since a cut starves the nodes DOWNSTREAM of it.
+ *
+ * b0 (upstream_alive) is now stamped by ring_link for every validated arrival,
+ * forwards included (ring_link_last_rx_ms), so it finally means "this zone's
+ * receiver is getting traffic" rather than repeating b1's stimulus from the
+ * consume queue. Blame does not use it yet: once trusted on the bench it could
+ * shorten detection of "which node's own upstream leg is cut" -- a node whose
+ * b0 goes dark while its neighbours' stay lit is the node just below the
+ * break, evidence that arrives 6 s before the 10 s OFFLINE ladder does. */
 #define LINK_MASTER_ALIVE 0x02
+
+/* A zone needs to have been up this long before its link flags mean anything:
+ * its own 6000 ms master-alive timer has to have had a chance to arm, and a
+ * freshly booted zone legitimately reports "no master seen yet". A row the
+ * master has never heard from also reads 0 here, so this covers both. */
+#define WITNESS_MIN_UPTIME_S 10u
+
+/* Consecutive 1 s health ticks a CHANGED verdict must survive before it is
+ * adopted and announced. The OK->OPEN edge is never delayed by it. */
+#define BLAME_DWELL_TICKS 3
 
 static const char *health_name(node_health_t h) {
     switch (h) {
@@ -40,7 +58,11 @@ static const char *health_name(node_health_t h) {
  * = first hop after the master's TX. That is the same fallback the leg naming
  * used before hops were measured, and it is only a fallback: enrolment order
  * is not physical order (boards enrolling together get arbitrary ids), which
- * is why measured hops win whenever they exist. */
+ * is why measured hops win whenever they exist. In practice that fallback is
+ * now unreachable from blame -- node_mgr stamps hops_valid with every
+ * heartbeat, so an unmeasured row is one that has never been heard, and such a
+ * row is neither a U candidate (phantom) nor a witness (boot grace) -- but it
+ * keeps the ordering total for any caller that reaches it. */
 static uint8_t chain_pos(const hg_node_t *tab, int n_slots, const hg_node_t *k) {
     if (k->hops_valid) return k->hops;
     uint8_t used = 0, lower = 0;
@@ -52,13 +74,20 @@ static uint8_t chain_pos(const hg_node_t *tab, int n_slots, const hg_node_t *k) 
     return used ? (uint8_t)(used - 1 - lower) : 0;
 }
 
-/* U: the most DOWNSTREAM offline node (smallest chain_pos), NULL = none. */
+/* U: the most DOWNSTREAM offline node (smallest chain_pos), NULL = none.
+ *
+ * A row the master has NEVER heard from (no hops measurement and no heartbeat
+ * ever: an id enrolled from NVS whose board is not on the ring) reads OFFLINE
+ * the moment the ladder runs, but it has no place on the chain and no cable of
+ * its own to accuse -- it is a phantom, not a suspect, and blaming it would
+ * point at a segment that does not exist. */
 static const hg_node_t *most_downstream_offline(const hg_node_t *tab, int n_slots) {
     const hg_node_t *best = NULL;
     uint8_t best_pos = 0;
     for (int i = 0; i < n_slots; i++) {
         const hg_node_t *nd = &tab[i];
         if (!nd->used || nd->health != NODE_H_OFFLINE) continue;   /* UPDATING is not a fault */
+        if (!nd->hops_valid && nd->last_hb_ms == 0) continue;      /* phantom: never heard */
         uint8_t pos = chain_pos(tab, n_slots, nd);
         /* equal positions cannot happen physically; order by id to stay deterministic */
         if (!best || pos < best_pos || (pos == best_pos && nd->id < best->id)) { best = nd; best_pos = pos; }
@@ -66,35 +95,31 @@ static const hg_node_t *most_downstream_offline(const hg_node_t *tab, int n_slot
     return best;
 }
 
-/* D: the most UPSTREAM node that is alive yet reports master-silent (largest
- * chain_pos), NULL = none. Only ONLINE/DEGRADED nodes qualify: an OFFLINE
- * node's link_flags are whatever it last managed to send, i.e. from before
- * the break, and an UPDATING node is expected to be dark. */
-static const hg_node_t *most_upstream_master_silent(const hg_node_t *tab, int n_slots) {
+/* Is this node's report of the link worth anything? It must be alive (an
+ * OFFLINE node's link_flags are whatever it last managed to send, i.e. from
+ * before the break), not mid-OTA (an UPDATING zone is dark on purpose), and
+ * past its boot grace. */
+static int is_witness(const hg_node_t *nd) {
+    if (!nd->used) return 0;
+    if (nd->health != NODE_H_ONLINE && nd->health != NODE_H_DEGRADED) return 0;
+    if (nd->hb.uptime_s < WITNESS_MIN_UPTIME_S) return 0;
+    return 1;
+}
+
+/* D: the most UPSTREAM witness (largest chain_pos), NULL when the ring holds
+ * no witness at all -- in which case the downstream end of the break is the
+ * master's own RX leg. Whether this witness hears the master is what decides
+ * ripeness, not membership: see ring_blame. */
+static const hg_node_t *most_upstream_witness(const hg_node_t *tab, int n_slots) {
     const hg_node_t *best = NULL;
     uint8_t best_pos = 0;
     for (int i = 0; i < n_slots; i++) {
         const hg_node_t *nd = &tab[i];
-        if (!nd->used) continue;
-        if (nd->health != NODE_H_ONLINE && nd->health != NODE_H_DEGRADED) continue;
-        if (nd->link_flags & LINK_MASTER_ALIVE) continue;
+        if (!is_witness(nd)) continue;
         uint8_t pos = chain_pos(tab, n_slots, nd);
         if (!best || pos > best_pos || (pos == best_pos && nd->id < best->id)) { best = nd; best_pos = pos; }
     }
     return best;
-}
-
-/* A zone whose heartbeats have STOPPED arriving but which has not yet crossed
- * the 10000 ms OFFLINE line -- i.e. DEGRADED by heartbeat age, not by command
- * timeouts. It is a U in the making: 5 s from now it will be offline. */
-static int hb_missing_unsettled(const hg_node_t *tab, int n_slots, uint32_t now_ms) {
-    for (int i = 0; i < n_slots; i++) {
-        const hg_node_t *nd = &tab[i];
-        if (!nd->used) continue;
-        if (nd->health == NODE_H_OFFLINE || nd->health == NODE_H_UPDATING) continue;
-        if ((uint32_t)(now_ms - nd->last_hb_ms) >= 5000) return 1;
-    }
-    return 0;
 }
 
 /* Blame the segment between U and D (spec §2.7, bench ruling 2026-09-09).
@@ -113,23 +138,25 @@ static int hb_missing_unsettled(const hg_node_t *tab, int n_slots, uint32_t now_
  * "U dead or wire U->D" whenever U is a node. When U is the master no node is
  * offline, so nothing can be dead and the text names the cable alone.
  *
- * Naming a leg from hop counts and upstream_alive bits (the pre-fix rule) put
- * the operator on the wrong cable in all three of the 2026-09-09 wire pulls;
- * see docs/what_we_learned.md. */
-static void ring_blame(const hg_node_t *tab, int n_slots, uint32_t now_ms, char *out, size_t outsz) {
+ * The pre-fix rule named a leg from hop counts alone, latched at the OK->OPEN
+ * edge before any zone could report master-silent, and pointed upstream of the
+ * silent node instead of downstream; it was wrong on all three legs of the
+ * 2026-09-09 wire pulls. See docs/what_we_learned.md. */
+static void ring_blame(const hg_node_t *tab, int n_slots, char *out, size_t outsz) {
     const hg_node_t *u = most_downstream_offline(tab, n_slots);
-    const hg_node_t *d = most_upstream_master_silent(tab, n_slots);
+    const hg_node_t *d = most_upstream_witness(tab, n_slots);
 
-    /* No U means the master's own TX leg is the upstream end of the break --
-     * which asserts that every zone above D is still delivering heartbeats. A
-     * zone whose heartbeats have just stopped falsifies that assertion and is
-     * about to become U itself, so the cable question stays unanswered for the
-     * few seconds the ladder needs. Nothing to report at all lands here too:
-     * every zone alive and hearing the master, i.e. the master's own RX leg or
-     * a zone that forwards without saying so. Either way, name no cable rather
-     * than the wrong one -- naming the wrong one is the bug being fixed. */
-    if (!u && (!d || hb_missing_unsettled(tab, n_slots, now_ms))) {
-        snprintf(out, outsz, "ring open (no node reports a fault)");
+    /* RIPENESS. If the most-upstream witness still hears the master, the break
+     * lies ABOVE it, among nodes whose heartbeats have stopped but which have
+     * not finished falling OFFLINE (10 s) -- so U is not known yet and naming
+     * the segment down to this witness would accuse a cable that is not even
+     * in the path. Wait for the ladder instead.
+     * The same answer covers "nothing to point at": no offline node and no
+     * witness at all (every zone mid-OTA, or every row a phantom). Name no
+     * cable rather than the wrong one -- naming the wrong one is the bug being
+     * fixed here. */
+    if ((d && (d->link_flags & LINK_MASTER_ALIVE)) || (!u && !d)) {
+        snprintf(out, outsz, "no node reports a fault");
         return;
     }
 
@@ -199,17 +226,40 @@ void ring_health_eval(hg_node_t *tab, int n_slots, uint32_t now_ms,
          * the edge. At the 5000 ms mark the evidence does not exist yet: the
          * ladder has only just reached DEGRADED, and a starved zone needs
          * 6000 ms of master silence plus one heartbeat to report the loss --
-         * so the first verdict is usually "no node reports a fault", and the
-         * segment appears a few seconds later when the nodes above the cut go
-         * OFFLINE (10 s) and the ones below it say they cannot hear the
-         * master. A CHANGED verdict is worth a new line; an unchanged one is
-         * not, so a stable break still notifies exactly once.
+         * so the first verdict is usually "no node reports a fault" and the
+         * segment appears a few seconds later, once the nodes above the cut
+         * have gone OFFLINE and the ones below it have said they cannot hear
+         * the master.
+         *
+         * A CHANGE therefore has to hold still before it is believed: the same
+         * new verdict on BLAME_DWELL_TICKS consecutive ticks, or it is dropped.
+         * That filters the flicker of a recovering ring (a rebooted zone comes
+         * back reporting no master, an ex-offline node's first heartbeat lands
+         * a tick before its neighbour's) without delaying anything real, since
+         * the evidence it waits on is itself seconds old. The OK->OPEN EDGE is
+         * never delayed -- the alarm goes out on the tick it is detected, only
+         * later corrections dwell.
          * The health ladder above has just run, so ring_blame reads each
          * node's CURRENT health -- no second staleness rule. */
-        char blame[sizeof st->blame];
-        ring_blame(tab, n_slots, now_ms, blame, sizeof blame);
-        if (st->state != RING_ST_OPEN || strcmp(blame, st->blame) != 0) {
-            memcpy(st->blame, blame, sizeof blame);
+        char cand[sizeof st->blame];
+        ring_blame(tab, n_slots, cand, sizeof cand);
+
+        int adopt = 0;
+        if (st->state != RING_ST_OPEN) {
+            adopt = 1;                                            /* the alarm itself: publish now */
+        } else if (strcmp(cand, st->blame) == 0) {
+            st->pending_ticks = 0;                                /* re-confirmed: drop any pending change */
+        } else if (strcmp(cand, st->pending_blame) == 0) {
+            if (++st->pending_ticks >= BLAME_DWELL_TICKS) adopt = 1;
+        } else {
+            snprintf(st->pending_blame, sizeof st->pending_blame, "%s", cand);
+            st->pending_ticks = 1;
+        }
+
+        if (adopt) {
+            snprintf(st->blame, sizeof st->blame, "%s", cand);
+            st->pending_blame[0] = '\0';
+            st->pending_ticks = 0;
             if (cb) {
                 char line[10 + sizeof st->blame];
                 snprintf(line, sizeof line, "RING OPEN %s", st->blame);
@@ -222,6 +272,8 @@ void ring_health_eval(hg_node_t *tab, int n_slots, uint32_t now_ms,
             if (cb) cb(ctx, "RING CLOSED");
             st->blame[0] = '\0';
         }
+        st->pending_blame[0] = '\0';
+        st->pending_ticks = 0;
         st->state = RING_ST_OK;
     }
 }
