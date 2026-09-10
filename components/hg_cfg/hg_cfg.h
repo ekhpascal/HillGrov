@@ -27,6 +27,13 @@ int  hg_field_get_text(const hg_zone_hw_t *hw, const hg_zone_cfg_t *cfg, uint8_t
  * hg_group_find()+base-resolution wrappers around these. */
 int  hg_field_write(const hg_field_t *f, void *base, const char *text);
 int  hg_field_read(const hg_field_t *f, const void *base, char *out, size_t cap);
+/* Same group -> base resolution hg_field_set_text/get_text use internally, exposed for
+ * callers (hg_json) that walk HG_FIELDS directly instead of going through the text-based
+ * key wrappers. idx is ignored for zone-scoped groups (scope 0). NULL for an out-of-range
+ * shelf/aux idx. The returned pointer is never actually const even though hw/cfg are taken
+ * as const here (mirrors hg_field_read's const base) -- callers writing through it (merge,
+ * via hg_field_write) pass their own non-const cfg/scratch object. */
+void *hg_field_base(uint8_t group, int idx, const hg_zone_hw_t *hw, const hg_zone_cfg_t *cfg);
 int  hg_hhmm_parse(const char *s);                     /* "HH:MM" or integer minutes; 0..1439, -1 bad */
 void hg_hhmm_format(int minutes, char out[6]);
 int  hg_hw_validate(const hg_zone_hw_t *hw, char *err, size_t errlen);                       /* 0 ok / -1, err = field path */

@@ -113,6 +113,10 @@ static void *group_base(uint8_t group, int idx, const hg_zone_hw_t *hw, const hg
     }
 }
 
+void *hg_field_base(uint8_t group, int idx, const hg_zone_hw_t *hw, const hg_zone_cfg_t *cfg) {
+    return group_base(group, idx, hw, cfg);
+}
+
 static const hg_field_t *find_row(uint8_t group, const char *key) {
     for (int i = 0; i < HG_FIELD_COUNT; i++)
         if (HG_FIELDS[i].group == group && ci_eq(HG_FIELDS[i].key, key)) return &HG_FIELDS[i];

@@ -6,6 +6,14 @@ include(FetchContent)
 FetchContent_Declare(unity
   URL https://github.com/ThrowTheSwitch/Unity/archive/refs/tags/v2.6.0.tar.gz)
 FetchContent_MakeAvailable(unity)
+FetchContent_Declare(cjson
+  URL https://github.com/DaveGamble/cJSON/archive/refs/tags/v1.7.18.tar.gz
+  SOURCE_SUBDIR does-not-exist)   # cJSON ships its own (very old) CMakeLists.txt; we only
+                                  # want the source tree, built ourselves below, so this
+                                  # keeps FetchContent from add_subdirectory()-ing it.
+FetchContent_MakeAvailable(cjson)
+add_library(cjson_host STATIC ${cjson_SOURCE_DIR}/cJSON.c)
+target_include_directories(cjson_host PUBLIC ${cjson_SOURCE_DIR})
 if(MSVC)
   add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
@@ -14,7 +22,8 @@ include_directories(
   ${COMP}/app_version ${COMP}/hg_blob ${COMP}/hg_cfg ${COMP}/hg_model ${COMP}/hg_mcfg
   ${COMP}/cli_line ${COMP}/notify ${COMP}/cmd_core ${COMP}/cmd_common
   ${COMP}/zone_cmds ${COMP}/rescue_handover ${COMP}/ring_proto ${COMP}/node_store ${COMP}/ota_trial
-  ${COMP}/master_cmds ${COMP}/node_mgr ${COMP}/ring_link ${COMP}/web_auth ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
+  ${COMP}/master_cmds ${COMP}/node_mgr ${COMP}/ring_link ${COMP}/web_auth ${COMP}/hg_json
+  ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
 enable_testing()
 function(hg_test NAME)
   add_executable(${NAME} ${NAME}.c fakes/fake_clock.c ${ARGN})
@@ -52,3 +61,6 @@ hg_test(test_master_cmds ${COMP}/master_cmds/master_cmds.c ${CMD_CORE_SRC} ${COM
 hg_test(test_fleet_seq ${COMP}/node_mgr/fleet_seq.c)
 hg_test(test_hg_mcfg ${COMP}/hg_mcfg/hg_mcfg.c ${HG_CFG_SRC} ${COMP}/hg_blob/hg_blob.c)
 hg_test(test_web_auth ${COMP}/web_auth/web_auth.c ${COMP}/hg_mcfg/hg_mcfg.c ${HG_CFG_SRC} ${COMP}/hg_blob/hg_blob.c fakes/fake_sha256.c)
+hg_test(test_hg_json ${COMP}/hg_json/hg_json_schema.c ${COMP}/hg_json/hg_json_cfg.c ${COMP}/hg_json/hg_json_mcfg.c
+        ${COMP}/hg_mcfg/hg_mcfg.c ${HG_CFG_SRC} ${COMP}/hg_blob/hg_blob.c)
+target_link_libraries(test_hg_json cjson_host)
