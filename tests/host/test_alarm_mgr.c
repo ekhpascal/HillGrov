@@ -178,6 +178,28 @@ static void test_fw_zone_prefixed_lines_key_by_zone(void) {
     TEST_ASSERT_EQUAL_INT(1, alarm_mgr_active_count());
 }
 
+/* The "ZONE <n> <state>" peel is gated on type == NTF_FW: a RING (or any
+ * non-FW) line that merely happens to start with "ZONE 2 ..." must NOT be
+ * re-keyed by the embedded zone number -- its state word stays "ZONE",
+ * which matches neither ACT_WORDS nor CLR_WORDS, so "OPEN" is never
+ * consulted and nothing activates under "RING 0" or "RING 2". An FW line
+ * with the identical "ZONE <n> <state>" shape still peels and keys "FW 2". */
+static void test_zone_peel_gated_to_fw_only(void) {
+    alarm_mgr_sink(NULL, "NOTIFY RING 0 ZONE 2 OPEN\n");
+    TEST_ASSERT_EQUAL_INT(0, alarm_mgr_active_count());
+
+    alarm_mgr_sink(NULL, "NOTIFY FW 0 ZONE 2 UPDATING\n");
+    TEST_ASSERT_EQUAL_INT(1, alarm_mgr_active_count());
+
+    char buf[2048];
+    TEST_ASSERT_GREATER_THAN_INT(0, alarm_mgr_json(buf, sizeof buf));
+    cJSON *root = cJSON_Parse(buf);
+    TEST_ASSERT_NOT_NULL(root);
+    cJSON *a0 = cJSON_GetArrayItem(cJSON_GetObjectItem(root, "active"), 0);
+    TEST_ASSERT_EQUAL_STRING("FW 2", cJSON_GetObjectItem(a0, "key")->valuestring);
+    cJSON_Delete(root);
+}
+
 /* A non-numeric token after "ZONE" falls back to the plain rule: "ZONE"
  * itself becomes the state word, which matches neither ACT_WORDS nor
  * CLR_WORDS, so the line is still recorded as an event but never touches
@@ -229,6 +251,7 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_fault_prefix_activates_and_ok_clears);
     RUN_TEST(test_active_set_caps_at_16_keys);
     RUN_TEST(test_fw_zone_prefixed_lines_key_by_zone);
+    RUN_TEST(test_zone_peel_gated_to_fw_only);
     RUN_TEST(test_fw_zone_nonnumeric_falls_back_to_plain_rule);
     RUN_TEST(test_node_over_255_ignored);
     RUN_TEST(test_long_line_truncated_safely);

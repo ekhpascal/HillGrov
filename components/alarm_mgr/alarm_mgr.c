@@ -160,13 +160,16 @@ void alarm_mgr_sink(void *ctx, const char *line) {
     am_total++;
 
     if (type != NTF_BOOT && type != NTF_CMD && type != NTF_WIFI) {
-        /* Fleet FW lines nest a per-zone status after "ZONE <n>" (e.g.
-         * "ZONE 2 UPDATING" -- see node_mgr_fleet.c): peel that off so the
-         * active-set key is "<TYPE> <n>" (the affected zone) and the state
-         * word checked against ACT_WORDS/CLR_WORDS is the one AFTER "ZONE
-         * <n>", not "ZONE" itself. A non-numeric token after "ZONE" (or no
-         * token at all) falls back to the plain rule: "ZONE" is the state
-         * word, which matches neither list, so no active-set effect. */
+        /* Fleet FW lines (and only FW -- see node_mgr_fleet.c) nest a
+         * per-zone status after "ZONE <n>" (e.g. "ZONE 2 UPDATING"): peel
+         * that off so the active-set key is "FW <n>" (the affected zone)
+         * and the state word checked against ACT_WORDS/CLR_WORDS is the one
+         * AFTER "ZONE <n>", not "ZONE" itself. Gated on type == NTF_FW so a
+         * RING/NODE/SAFE/etc payload that merely happens to start with
+         * "ZONE 2 ..." is never re-keyed this way. A non-numeric token after
+         * "ZONE" (or no token at all) falls back to the plain rule: "ZONE"
+         * is the state word, which matches neither list, so no active-set
+         * effect. */
         size_t w1len, w2len;
         const char *w1after, *w2after;
         const char *w1 = next_word(rest, &w1len, &w1after);
@@ -174,7 +177,7 @@ void alarm_mgr_sink(void *ctx, const char *line) {
         size_t state_len = w1len;
         uint32_t key_node = node;
 
-        if (w1len == 4 && memcmp(w1, "ZONE", 4) == 0 && *w1after == ' ') {
+        if (type == NTF_FW && w1len == 4 && memcmp(w1, "ZONE", 4) == 0 && *w1after == ' ') {
             const char *w2 = next_word(w1after + 1, &w2len, &w2after);
             unsigned zone_val;
             if (parse_u8_word(w2, w2len, &zone_val) == 0 && *w2after == ' ') {
