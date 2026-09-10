@@ -105,6 +105,21 @@ int hg_app_time_get(char *buf, size_t n) {
     return hg_app_time_get_ext(buf, n, NULL, 0);
 }
 
+/* ---- noted external time source (push model) ---- */
+
+static char     s_note_src[8];    /* "" = none noted; holds a short token like "NTP" */
+static uint32_t s_note_at;
+
+void hg_app_time_note_source(const char *src, uint32_t at_uptime_s) {
+    if (src) snprintf(s_note_src, sizeof s_note_src, "%s", src);
+    else     s_note_src[0] = '\0';
+    s_note_at = at_uptime_s;
+}
+
+int hg_app_time_get_noted(char *buf, size_t n) {
+    return hg_app_time_get_ext(buf, n, s_note_src[0] ? s_note_src : NULL, s_note_at);
+}
+
 int hg_app_time_set(int y, int mo, int d, int h, int mi, int s) {
     /* days-in-month, index 0 = January; Feb bumped to 29 below on a leap year */
     static const uint8_t days_in_month[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };

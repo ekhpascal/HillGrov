@@ -16,6 +16,7 @@
 #include "wifi_ap.h"
 #include "fw_srv.h"
 #include "mcfg_store.h"
+#include "time_svc.h"
 
 static const char *TAG = "hg_main";
 extern const app_if_t APP_IF_MASTER;
@@ -68,6 +69,15 @@ void app_main(void) {
     if (!ap_ok) ESP_LOGE(TAG, "wifi_ap_start failed -- AP/fleet-OTA unavailable this boot");
     int fw_ok = ap_ok && fw_srv_start() == 0;
     if (ap_ok && !fw_ok) ESP_LOGE(TAG, "fw_srv_start failed -- fleet OTA unavailable this boot");
+
+    /* time_svc_start()'s esp_sntp_* setup calls are lwIP APIs that assert
+     * ("Invalid mbox") if called before lwIP's tcpip task exists -- that
+     * task is created by esp_netif_init(), the first thing wifi_ap_start()
+     * does above, so this must run after it (found on the bench: an
+     * earlier placement right after mcfg_store_init() crash-looped the
+     * master on every boot, never reaching the CLI prompt). SNTP itself
+     * still waits for time_svc_sta_changed(1) -- Task 8's STA manager. */
+    time_svc_start();
 
     uint8_t mac[6];
     hg_app_get_mac(mac);

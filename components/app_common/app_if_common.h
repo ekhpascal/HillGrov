@@ -29,6 +29,15 @@ int      hg_app_time_get(char *buf, size_t n);
  * when neither has run. Kept here rather than in the caller so one function
  * owns the "YYYY-MM-DD HH:MM:SS <SRC> <age_s>" format. */
 int      hg_app_time_get_ext(char *buf, size_t n, const char *src, uint32_t src_at);
+/* Push-model counterpart to the src/src_at args above: for a source that
+ * arrives as an occasional callback rather than something pollable per call
+ * (the zone's RING is polled -- see app_if_zone.c; master's SNTP sync is a
+ * callback -- see time_svc.c), records the token once and hg_app_time_get_noted
+ * plays it back on every GET TIME using the same "more recent of SET vs this
+ * source" rule hg_app_time_get_ext already implements. src == NULL clears it
+ * back to NONE. */
+void     hg_app_time_note_source(const char *src, uint32_t at_uptime_s);
+int      hg_app_time_get_noted(char *buf, size_t n);
 int      hg_app_time_set(int y, int mo, int d, int h, int mi, int s);
 int      hg_app_fw_info(char *buf, size_t n);
 int      hg_app_fw_rollback(void);

@@ -36,6 +36,14 @@ const hg_mcfg_t *mcfg_get(void);                    /* pointer into the active R
 int              mcfg_commit(const hg_mcfg_t *m);   /* serialized: validate -> nvs_set_blob("mcfg") + commit -> RAM (double-buffer flip), gen+1; 0 ok / -1 invalid / -2 nvs or mutex unavailable; ~50 ms, call rarely (credentials/password/tz) */
 uint32_t         mcfg_gen(void);                    /* envelope generation: 0 on defaults, +1 per successful commit */
 
+/* Wires the real TZ validator into mcfg_commit()'s hg_mcfg_validate() call
+ * (time_svc_start(), Task 7 -- time_core's tz_parse can't be linked from here
+ * without pulling time_core into every mcfg_store caller, including the host
+ * tests, so the pointer is injected instead). Before this is called,
+ * mcfg_commit() validates TZ with tzck == NULL, i.e. accepts any string. Not
+ * cleared by mcfg_store_init() -- callable any time before or after it. */
+void             mcfg_store_set_tz_check(hg_tz_check_fn fn);
+
 #ifdef __cplusplus
 }
 #endif

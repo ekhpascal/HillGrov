@@ -15,6 +15,11 @@ static hg_mcfg_t         s_buf[2];   /* double buffer; s_active picks the readab
 static volatile int      s_active;
 static volatile uint32_t s_gen;
 static SemaphoreHandle_t s_mux;
+static hg_tz_check_fn    s_tzck;     /* NULL until time_svc_start() wires it in (Task 7) */
+
+void mcfg_store_set_tz_check(hg_tz_check_fn fn) {
+    s_tzck = fn;
+}
 
 static int mcfg_load(void) {
     nvs_handle_t handle;
@@ -92,7 +97,7 @@ int mcfg_commit(const hg_mcfg_t *m) {
     }
 
     char err[48];
-    if (hg_mcfg_validate(m, NULL, err, sizeof err) != 0) {   /* NULL tzck: real check lands in Task 7 */
+    if (hg_mcfg_validate(m, s_tzck, err, sizeof err) != 0) {   /* s_tzck is NULL (accept any TZ) until time_svc_start() wires tz_check in */
         ESP_LOGW(TAG, "validate failed: %s", err);
         xSemaphoreGive(s_mux);
         return -1;

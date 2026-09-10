@@ -23,6 +23,7 @@ include_directories(
   ${COMP}/cli_line ${COMP}/notify ${COMP}/cmd_core ${COMP}/cmd_common
   ${COMP}/zone_cmds ${COMP}/rescue_handover ${COMP}/ring_proto ${COMP}/node_store ${COMP}/ota_trial
   ${COMP}/master_cmds ${COMP}/node_mgr ${COMP}/ring_link ${COMP}/web_auth ${COMP}/hg_json ${COMP}/alarm_mgr
+  ${COMP}/time_core
   ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
 enable_testing()
 function(hg_test NAME)
@@ -66,3 +67,4 @@ hg_test(test_hg_json ${COMP}/hg_json/hg_json_schema.c ${COMP}/hg_json/hg_json_cf
 target_link_libraries(test_hg_json cjson_host)
 hg_test(test_alarm_mgr ${COMP}/alarm_mgr/alarm_mgr.c ${COMP}/alarm_mgr/alarm_mgr_json.c ${COMP}/notify/notify.c)
 target_link_libraries(test_alarm_mgr cjson_host)
+hg_test(test_time_core ${COMP}/time_core/time_core.c)

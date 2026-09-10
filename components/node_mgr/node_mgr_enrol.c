@@ -6,6 +6,7 @@
 #include "notify.h"
 #include "node_mgr.h"
 #include "node_mgr_internal.h"
+#include "time_svc.h"
 
 /* ztab ownership, HB-driven enrolment (spec §2.8), TIME_SYNC broadcast and
  * ring_health_eval's line formatting -- split out of node_mgr.c purely to
@@ -207,7 +208,7 @@ void nmgr_enrol_handle_hb(const ring_frame_t *f) {
 void nmgr_broadcast_time_sync(uint32_t now) {
     hg_ts_t t = { 0 };
     t.utc          = (uint32_t)time(NULL);
-    t.utc_offset_s = 0;
+    t.utc_offset_s = time_svc_utc_offset();
     t.flags        = node_mgr_time_valid() ? 0x01 : 0x00;
     t.ring_size    = nmgr_ring_size();
     nmgr_lock();

@@ -36,6 +36,14 @@ static int master_time_set(int y, int mo, int d, int h, int mi, int s) {
     return rc;
 }
 
+/* Master has a second clock source the shared body knows nothing about:
+ * time_svc's SNTP sync, noted via hg_app_time_note_source("NTP", ...) from
+ * its callback (Task 7). Report it whenever it's newer than a local SET TIME
+ * -- same "more recent wins" rule the zone's RING source uses. */
+static int master_time_get(char *buf, size_t n) {
+    return hg_app_time_get_noted(buf, n);
+}
+
 /* SP1: master-initiated OTA (fetch + rescue handover) arrives in SP3/SP4.
  * The CMDF_ZONE gate on the FW UPDATE row answers ERR ZONE_ONLY before this
  * handler is ever reached on master, so this is a pure stub -- no handover
@@ -79,7 +87,7 @@ const app_if_t APP_IF_MASTER = {
     .uptime_s      = hg_app_uptime_s,
     .status_lines  = master_status_lines,
     .log_set       = hg_app_log_set,
-    .time_get      = hg_app_time_get,
+    .time_get      = master_time_get,
     .time_set      = master_time_set,
     .save_flush    = master_save_flush,
     .fw_info       = hg_app_fw_info,
