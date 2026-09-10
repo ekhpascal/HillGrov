@@ -189,50 +189,56 @@ static int str_ok(const char *s) {
     return 1;
 }
 
-int hg_field_set_text(hg_zone_hw_t *hw, hg_zone_cfg_t *cfg, uint8_t group, int idx,
-                      const char *key, const char *val) {
-    const hg_field_t *f = find_row(group, key);
-    if (!f) return -3;
-    uint8_t *base = (uint8_t *)group_base(group, idx, hw, cfg);
-    if (!base) return -4;
-    uint8_t *dst = base + f->offset;
+/* Generic pair: base already points at the struct f->offset is relative to
+ * (a zone-hw/zone-cfg group substruct, an hg_mcfg_t, or anything else laid
+ * out with an hg_field_t table). hg_field_set_text/get_text below resolve
+ * group -> base via group_base() and just call through. */
+int hg_field_write(const hg_field_t *f, void *base, const char *text) {
+    uint8_t *dst = (uint8_t *)base + f->offset;
     long v;
     switch (f->type) {
     case HG_T_STR16:
-        if (!str_ok(val)) return -1;
+        if (!str_ok(text)) return -1;
         memset(dst, 0, 16);
-        strcpy((char *)dst, val);
+        strcpy((char *)dst, text);
         return 0;
+    case HG_T_STR: {
+        size_t len = strlen(text);
+        if (len > (size_t)f->max) return -2;
+        memset(dst, 0, (size_t)f->max + 1);
+        memcpy(dst, text, len);
+        return 0;
+    }
     case HG_T_BOOL:
-        if (ci_eq(val, "ON") || ci_eq(val, "ENABLE") || ci_eq(val, "1")) v = 1;
-        else if (ci_eq(val, "OFF") || ci_eq(val, "DISABLE") || ci_eq(val, "0")) v = 0;
+        if (ci_eq(text, "ON") || ci_eq(text, "ENABLE") || ci_eq(text, "1")) v = 1;
+        else if (ci_eq(text, "OFF") || ci_eq(text, "DISABLE") || ci_eq(text, "0")) v = 0;
         else return -1;
         *dst = (uint8_t)v;
         return 0;
     case HG_T_ENUM:
-        if (enum_parse(f->enums, val, &v) != 0) return -1;
+        if (enum_parse(f->enums, text, &v) != 0) return -1;
         *dst = (uint8_t)v;
         return 0;
     case HG_T_HHMM: {
-        int m = hg_hhmm_parse(val);
+        int m = hg_hhmm_parse(text);
         if (m < 0) return -1;
         uint16_t u = (uint16_t)m;
         memcpy(dst, &u, 2);
         return 0;
     }
     case HG_T_PIN:
-        if (ci_eq(val, "NONE")) { *dst = HG_NONE; return 0; }
-        if (parse_int(val, &v) != 0) return -1;
+        if (ci_eq(text, "NONE")) { *dst = HG_NONE; return 0; }
+        if (parse_int(text, &v) != 0) return -1;
         if (v < f->min || v > f->max) return -2;
         *dst = (uint8_t)v;
         return 0;
     case HG_T_U8:
-        if (parse_int(val, &v) != 0) return -1;
+        if (parse_int(text, &v) != 0) return -1;
         if (v < f->min || v > f->max) return -2;
         *dst = (uint8_t)v;
         return 0;
     case HG_T_U16: {
-        if (parse_int(val, &v) != 0) return -1;
+        if (parse_int(text, &v) != 0) return -1;
         if (v < f->min || v > f->max) return -2;
         uint16_t u = (uint16_t)v;
         memcpy(dst, &u, 2);
@@ -243,16 +249,12 @@ int hg_field_set_text(hg_zone_hw_t *hw, hg_zone_cfg_t *cfg, uint8_t group, int i
     }
 }
 
-int hg_field_get_text(const hg_zone_hw_t *hw, const hg_zone_cfg_t *cfg, uint8_t group, int idx,
-                      const char *key, char *out, size_t cap) {
-    const hg_field_t *f = find_row(group, key);
-    if (!f) return -3;
-    const uint8_t *base = (const uint8_t *)group_base(group, idx, hw, cfg);
-    if (!base) return -4;
-    const uint8_t *src = base + f->offset;
+int hg_field_read(const hg_field_t *f, const void *base, char *out, size_t cap) {
+    const uint8_t *src = (const uint8_t *)base + f->offset;
     uint16_t u16;
     switch (f->type) {
     case HG_T_STR16: snprintf(out, cap, "%s", (const char *)src); return 0;
+    case HG_T_STR:   snprintf(out, cap, "%s", (const char *)src); return 0;
     case HG_T_BOOL:  snprintf(out, cap, "%u", *src); return 0;
     case HG_T_ENUM: { char b[16]; snprintf(out, cap, "%s", enum_name(f->enums, *src, b, sizeof b)); return 0; }
     case HG_T_HHMM: { char tmp[6]; memcpy(&u16, src, 2); hg_hhmm_format(u16, tmp); snprintf(out, cap, "%s", tmp); return 0; }
@@ -264,4 +266,22 @@ int hg_field_get_text(const hg_zone_hw_t *hw, const hg_zone_cfg_t *cfg, uint8_t 
     case HG_T_U16:   memcpy(&u16, src, 2); snprintf(out, cap, "%u", u16); return 0;
     default:         return -3;
     }
+}
+
+int hg_field_set_text(hg_zone_hw_t *hw, hg_zone_cfg_t *cfg, uint8_t group, int idx,
+                      const char *key, const char *val) {
+    const hg_field_t *f = find_row(group, key);
+    if (!f) return -3;
+    void *base = group_base(group, idx, hw, cfg);
+    if (!base) return -4;
+    return hg_field_write(f, base, val);
+}
+
+int hg_field_get_text(const hg_zone_hw_t *hw, const hg_zone_cfg_t *cfg, uint8_t group, int idx,
+                      const char *key, char *out, size_t cap) {
+    const hg_field_t *f = find_row(group, key);
+    if (!f) return -3;
+    const void *base = group_base(group, idx, hw, cfg);
+    if (!base) return -4;
+    return hg_field_read(f, base, out, cap);
 }

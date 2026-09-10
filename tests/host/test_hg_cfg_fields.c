@@ -81,6 +81,32 @@ static void test_errors(void) {
     TEST_ASSERT_EQUAL_INT(HG_G_WATER, hg_group_find("water"));
 }
 
+/* hg_field_write/read must round-trip a HG_T_U16 row and an HG_T_HHMM row
+ * exactly as hg_field_set_text/get_text do -- same base pointers, same bytes. */
+static void test_generic_write_read_matches_set_text(void) {
+    char via_settext[24], via_generic[24];
+    const hg_field_t *fu16 = NULL, *fhhmm = NULL;
+    for (int i = 0; i < HG_FIELD_COUNT; i++) {
+        if (!fu16  && HG_FIELDS[i].group == HG_G_ZONECFG && HG_FIELDS[i].type == HG_T_U16) fu16 = &HG_FIELDS[i];
+        if (!fhhmm && HG_FIELDS[i].type == HG_T_HHMM) fhhmm = &HG_FIELDS[i];
+    }
+    TEST_ASSERT_NOT_NULL(fu16);    /* ZONECFG.LINKLOSS_S: base is &cfg itself */
+    TEST_ASSERT_NOT_NULL(fhhmm);   /* LIGHT.ON: base is &cfg.shelf[0].light */
+
+    TEST_ASSERT_EQUAL_INT(0, hg_field_write(fu16, &cfg, "123"));
+    TEST_ASSERT_EQUAL_INT(0, hg_field_get_text(&hw, &cfg, fu16->group, 0, fu16->key, via_settext, sizeof via_settext));
+    TEST_ASSERT_EQUAL_STRING("123", via_settext);
+    TEST_ASSERT_EQUAL_INT(0, hg_field_read(fu16, &cfg, via_generic, sizeof via_generic));
+    TEST_ASSERT_EQUAL_STRING(via_settext, via_generic);
+
+    void *lbase = &cfg.shelf[0].light;
+    TEST_ASSERT_EQUAL_INT(0, hg_field_write(fhhmm, lbase, "06:30"));
+    TEST_ASSERT_EQUAL_INT(0, hg_field_get_text(&hw, &cfg, fhhmm->group, 0, fhhmm->key, via_settext, sizeof via_settext));
+    TEST_ASSERT_EQUAL_STRING("06:30", via_settext);
+    TEST_ASSERT_EQUAL_INT(0, hg_field_read(fhhmm, lbase, via_generic, sizeof via_generic));
+    TEST_ASSERT_EQUAL_STRING(via_settext, via_generic);
+}
+
 static void test_hhmm_truncation(void) {
     char buf[4];
     TEST_ASSERT_EQUAL_INT(0, hg_field_get_text(&hw, &cfg, HG_G_LIGHT, 0, "ON", buf, sizeof buf));
@@ -94,6 +120,7 @@ int main(void) {
     RUN_TEST(test_set_get_roundtrip_all_rows);
     RUN_TEST(test_specific_forms);
     RUN_TEST(test_errors);
+    RUN_TEST(test_generic_write_read_matches_set_text);
     RUN_TEST(test_hhmm_truncation);
     return UNITY_END();
 }
