@@ -14,7 +14,7 @@ include_directories(
   ${COMP}/app_version ${COMP}/hg_blob ${COMP}/hg_cfg ${COMP}/hg_model ${COMP}/hg_mcfg
   ${COMP}/cli_line ${COMP}/notify ${COMP}/cmd_core ${COMP}/cmd_common
   ${COMP}/zone_cmds ${COMP}/rescue_handover ${COMP}/ring_proto ${COMP}/node_store ${COMP}/ota_trial
-  ${COMP}/master_cmds ${COMP}/node_mgr ${COMP}/ring_link ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
+  ${COMP}/master_cmds ${COMP}/node_mgr ${COMP}/ring_link ${COMP}/web_auth ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
 enable_testing()
 function(hg_test NAME)
   add_executable(${NAME} ${NAME}.c fakes/fake_clock.c ${ARGN})
@@ -51,3 +51,4 @@ hg_test(test_master_cmds ${COMP}/master_cmds/master_cmds.c ${CMD_CORE_SRC} ${COM
         ${COMP}/cmd_common/cmd_common.c ${COMP}/ota_trial/trial_cmds.c fakes/fake_node_ops.c)
 hg_test(test_fleet_seq ${COMP}/node_mgr/fleet_seq.c)
 hg_test(test_hg_mcfg ${COMP}/hg_mcfg/hg_mcfg.c ${HG_CFG_SRC} ${COMP}/hg_blob/hg_blob.c)
+hg_test(test_web_auth ${COMP}/web_auth/web_auth.c ${COMP}/hg_mcfg/hg_mcfg.c ${HG_CFG_SRC} ${COMP}/hg_blob/hg_blob.c fakes/fake_sha256.c)
