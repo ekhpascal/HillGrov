@@ -154,6 +154,70 @@ static void test_active_set_caps_at_16_keys(void) {
     TEST_ASSERT_EQUAL_INT(20, alarm_mgr_total());
 }
 
+/* Fleet FW lines nest a per-zone status after "ZONE <n>" (node_mgr_fleet.c:
+ * "NOTIFY FW 0 ZONE 2 UPDATING" / "... DONE 0.1.0" / "... UPDATE_FAILED
+ * <reason>"). The active-set key for these is "FW <n>" (the affected zone),
+ * not "FW <node>" (the broadcasting node, here 0), and the word checked
+ * against ACT_WORDS/CLR_WORDS is the one after "ZONE <n>". */
+static void test_fw_zone_prefixed_lines_key_by_zone(void) {
+    alarm_mgr_sink(NULL, "NOTIFY FW 0 ZONE 2 UPDATING\n");
+    TEST_ASSERT_EQUAL_INT(1, alarm_mgr_active_count());
+
+    char buf[2048];
+    TEST_ASSERT_GREATER_THAN_INT(0, alarm_mgr_json(buf, sizeof buf));
+    cJSON *root = cJSON_Parse(buf);
+    TEST_ASSERT_NOT_NULL(root);
+    cJSON *a0 = cJSON_GetArrayItem(cJSON_GetObjectItem(root, "active"), 0);
+    TEST_ASSERT_EQUAL_STRING("FW 2", cJSON_GetObjectItem(a0, "key")->valuestring);
+    cJSON_Delete(root);
+
+    alarm_mgr_sink(NULL, "NOTIFY FW 0 ZONE 2 DONE 0.1.0\n");
+    TEST_ASSERT_EQUAL_INT(0, alarm_mgr_active_count());
+
+    alarm_mgr_sink(NULL, "NOTIFY FW 0 ZONE 2 UPDATE_FAILED PULL\n");
+    TEST_ASSERT_EQUAL_INT(1, alarm_mgr_active_count());
+}
+
+/* A non-numeric token after "ZONE" falls back to the plain rule: "ZONE"
+ * itself becomes the state word, which matches neither ACT_WORDS nor
+ * CLR_WORDS, so the line is still recorded as an event but never touches
+ * the active set. */
+static void test_fw_zone_nonnumeric_falls_back_to_plain_rule(void) {
+    alarm_mgr_sink(NULL, "NOTIFY FW 0 ZONE X UPDATING\n");
+    TEST_ASSERT_EQUAL_INT(0, alarm_mgr_active_count());
+    TEST_ASSERT_EQUAL_INT(1, alarm_mgr_total());
+}
+
+static void test_node_over_255_ignored(void) {
+    alarm_mgr_sink(NULL, "NOTIFY NODE 256 DEGRADED\n");
+    TEST_ASSERT_EQUAL_INT(0, alarm_mgr_total());
+    TEST_ASSERT_EQUAL_INT(0, alarm_mgr_active_count());
+}
+
+/* A line well over NTF_LINE_MAX (128) is still handled safely: the sink's
+ * bounded work buffer truncates it before parsing, the event is still
+ * recorded, and its text is capped at 71 chars (am_event_t.text[72]). */
+static void test_long_line_truncated_safely(void) {
+    char line[400];
+    int pfx = snprintf(line, sizeof line, "NOTIFY CMD 0 ");
+    memset(line + pfx, 'x', sizeof(line) - (size_t)pfx - 2);
+    line[sizeof(line) - 2] = '\n';
+    line[sizeof(line) - 1] = '\0';
+
+    alarm_mgr_sink(NULL, line);
+    TEST_ASSERT_EQUAL_INT(1, alarm_mgr_total());
+
+    char buf[4096];
+    TEST_ASSERT_GREATER_THAN_INT(0, alarm_mgr_json(buf, sizeof buf));
+    cJSON *root = cJSON_Parse(buf);
+    TEST_ASSERT_NOT_NULL(root);
+    cJSON *e0 = cJSON_GetArrayItem(cJSON_GetObjectItem(root, "events"), 0);
+    const char *text = cJSON_GetObjectItem(e0, "text")->valuestring;
+    TEST_ASSERT_EQUAL_size_t(71, strlen(text));
+    TEST_ASSERT_EQUAL_INT(0, strncmp(text, "CMD 0 ", 6));
+    cJSON_Delete(root);
+}
+
 int main(void) { UNITY_BEGIN();
     RUN_TEST(test_bench_sequence_active_set_and_events);
     RUN_TEST(test_active_json_shape_and_since_s);
@@ -164,4 +228,8 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_malformed_unknown_type_ignored);
     RUN_TEST(test_fault_prefix_activates_and_ok_clears);
     RUN_TEST(test_active_set_caps_at_16_keys);
+    RUN_TEST(test_fw_zone_prefixed_lines_key_by_zone);
+    RUN_TEST(test_fw_zone_nonnumeric_falls_back_to_plain_rule);
+    RUN_TEST(test_node_over_255_ignored);
+    RUN_TEST(test_long_line_truncated_safely);
     return UNITY_END(); }

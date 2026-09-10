@@ -15,7 +15,7 @@ static uint32_t (*s_now_s)(void);
  * fault-token prefix; it clears on one of CLR_WORDS. The two sets are
  * disjoint, so evaluation order doesn't matter. */
 static const char *const ACT_WORDS[] = {
-    "DEGRADED", "OFFLINE", "OPEN", "UPDATING", "FAILED",
+    "DEGRADED", "OFFLINE", "OPEN", "UPDATING", "FAILED", "UPDATE_FAILED",
     "CFG_SYNC_FAILED", "CFG_FORK", "ID_CONFLICT", "SAFE"
 };
 static const char *const CLR_WORDS[] = {
@@ -50,6 +50,34 @@ static int is_activate_word(const char *w, size_t wlen) {
 static int is_clear_word(const char *w, size_t wlen) {
     for (size_t i = 0; i < sizeof(CLR_WORDS) / sizeof(CLR_WORDS[0]); i++)
         if (word_eq(w, wlen, CLR_WORDS[i])) return 1;
+    return 0;
+}
+
+/* Next space-delimited word starting at `p` (`p` itself must not be a space --
+ * callers only ever pass either the start of `rest` or another word's `after`,
+ * both of which land on a word or '\0'). *len is 0 and the return equals
+ * `after` when `p` is already at '\0'. `*after` is left just past the word,
+ * i.e. at the following space or '\0' -- one past that (skipping the space)
+ * is the next word's start, still bounded by the same NUL-terminated work
+ * buffer alarm_mgr_sink() already copied the line into. */
+static const char *next_word(const char *p, size_t *len, const char **after) {
+    const char *start = p;
+    while (*p && *p != ' ') p++;
+    *len = (size_t)(p - start);
+    *after = p;
+    return start;
+}
+
+static int parse_u8_word(const char *w, size_t wlen, unsigned *out) {
+    if (wlen == 0 || wlen > 3) return -1;
+    unsigned v = 0;
+    for (size_t i = 0; i < wlen; i++) {
+        char c = w[i];
+        if (c < '0' || c > '9') return -1;
+        v = v * 10 + (unsigned)(c - '0');
+    }
+    if (v > 255) return -1;
+    *out = v;
     return 0;
 }
 
@@ -122,9 +150,6 @@ void alarm_mgr_sink(void *ctx, const char *line) {
     uint8_t node = (uint8_t)node_val;
 
     const char *rest = (*p == ' ') ? p + 1 : p;
-    const char *w1 = rest, *w1e = w1;
-    while (*w1e && *w1e != ' ') w1e++;
-    size_t w1len = (size_t)(w1e - w1);
 
     uint32_t now = s_now_s ? s_now_s() : 0;
     am_event_t *ev = &am_ring[am_total % AM_EVENTS];
@@ -135,11 +160,40 @@ void alarm_mgr_sink(void *ctx, const char *line) {
     am_total++;
 
     if (type != NTF_BOOT && type != NTF_CMD && type != NTF_WIFI) {
+        /* Fleet FW lines nest a per-zone status after "ZONE <n>" (e.g.
+         * "ZONE 2 UPDATING" -- see node_mgr_fleet.c): peel that off so the
+         * active-set key is "<TYPE> <n>" (the affected zone) and the state
+         * word checked against ACT_WORDS/CLR_WORDS is the one AFTER "ZONE
+         * <n>", not "ZONE" itself. A non-numeric token after "ZONE" (or no
+         * token at all) falls back to the plain rule: "ZONE" is the state
+         * word, which matches neither list, so no active-set effect. */
+        size_t w1len, w2len;
+        const char *w1after, *w2after;
+        const char *w1 = next_word(rest, &w1len, &w1after);
+        const char *state_word = w1;
+        size_t state_len = w1len;
+        uint32_t key_node = node;
+
+        if (w1len == 4 && memcmp(w1, "ZONE", 4) == 0 && *w1after == ' ') {
+            const char *w2 = next_word(w1after + 1, &w2len, &w2after);
+            unsigned zone_val;
+            if (parse_u8_word(w2, w2len, &zone_val) == 0 && *w2after == ' ') {
+                size_t w3len;
+                const char *w3after;
+                const char *w3 = next_word(w2after + 1, &w3len, &w3after);
+                if (w3len > 0) {
+                    key_node = zone_val;
+                    state_word = w3;
+                    state_len = w3len;
+                }
+            }
+        }
+
         char key[AM_KEY_MAX];
-        snprintf(key, sizeof key, "%s %u", notify_type_name(type), (unsigned)node);
-        if (is_activate_word(w1, w1len))
+        snprintf(key, sizeof key, "%s %u", notify_type_name(type), (unsigned)key_node);
+        if (is_activate_word(state_word, state_len))
             active_upsert(key, ev->text, now);
-        else if (is_clear_word(w1, w1len))
+        else if (is_clear_word(state_word, state_len))
             active_clear(key);
     }
 }
