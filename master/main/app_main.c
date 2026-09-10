@@ -15,6 +15,7 @@
 #include "node_mgr.h"
 #include "wifi_ap.h"
 #include "fw_srv.h"
+#include "mcfg_store.h"
 
 static const char *TAG = "hg_main";
 extern const app_if_t APP_IF_MASTER;
@@ -52,6 +53,8 @@ void app_main(void) {
         if (err == ESP_OK) err = nvs_flash_init();
     }
     if (err != ESP_OK) ESP_LOGE(TAG, "nvs_flash_init failed: %s", esp_err_to_name(err));
+
+    if (mcfg_store_init() != 0) ESP_LOGW(TAG, "mcfg defaults in use");
 
     ota_trial_start(1);
 
