@@ -7,7 +7,7 @@ extern "C" {
 #endif
 
 typedef enum { NTF_BOOT, NTF_ALARM, NTF_SAFE, NTF_NODE, NTF_RING,
-               NTF_WATER, NTF_LIGHT, NTF_SOIL, NTF_FW, NTF_CMD, NTF_COUNT } ntf_type_t;
+               NTF_WATER, NTF_LIGHT, NTF_SOIL, NTF_FW, NTF_CMD, NTF_WIFI, NTF_COUNT } ntf_type_t;
 #define NTF_LINE_MAX  128
 #define NTF_MAX_SINKS 3
 #define NTF_MASK(t)   (uint16_t)(1u << (t))

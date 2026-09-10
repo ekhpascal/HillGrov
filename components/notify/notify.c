@@ -19,11 +19,11 @@ static uint32_t   s_last_ms[NTF_COUNT][NTF_IDX_N];
    reach it again within a single boot. SAFE/NODE/WATER/FW are edge-triggered
    (0 = never rate-limited). */
 static const uint32_t s_interval_ms[NTF_COUNT] = {
-    NTF_NEVER, 1000, 0, 0, 2000, 0, 1000, 60000, 0, 200
+    NTF_NEVER, 1000, 0, 0, 2000, 0, 1000, 60000, 0, 200, 2000
 };
 
 static const char *const s_type_name[NTF_COUNT] = {
-    "BOOT", "ALARM", "SAFE", "NODE", "RING", "WATER", "LIGHT", "SOIL", "FW", "CMD"
+    "BOOT", "ALARM", "SAFE", "NODE", "RING", "WATER", "LIGHT", "SOIL", "FW", "CMD", "WIFI"
 };
 
 static int ci_eq(const char *a, const char *b) {

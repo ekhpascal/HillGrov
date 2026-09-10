@@ -63,7 +63,20 @@ static void test_sink_mask_filters(void) {
 static void test_parse(void) {
     TEST_ASSERT_EQUAL_INT(NTF_COUNT, notify_parse("all"));
     TEST_ASSERT_EQUAL_INT(NTF_SOIL, notify_parse("soil"));
+    TEST_ASSERT_EQUAL_INT(NTF_WIFI, notify_parse("wifi"));
     TEST_ASSERT_EQUAL_INT(-1, notify_parse("nope"));
+}
+
+static void test_wifi_name_and_rate_limit(void) {
+    TEST_ASSERT_EQUAL_STRING("WIFI", notify_type_name(NTF_WIFI));
+    notify_add_sink(cap_sink, &capA, NTF_MASK_ALL);
+    notify_emit(NTF_WIFI, 0, "STA UP 192.168.1.42");
+    notify_emit(NTF_WIFI, 0, "STA DOWN");           /* suppressed: <2000ms since last */
+    TEST_ASSERT_EQUAL_INT(1, capA.count);
+    TEST_ASSERT_EQUAL_STRING("NOTIFY WIFI 2 STA UP 192.168.1.42\n", capA.lines[0]);
+    fake_clock_add(2000);
+    notify_emit(NTF_WIFI, 0, "STA DOWN");           /* passes: interval elapsed */
+    TEST_ASSERT_EQUAL_INT(2, capA.count);
 }
 
 static void test_truncation(void) {
