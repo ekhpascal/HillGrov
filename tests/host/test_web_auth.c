@@ -66,6 +66,28 @@ static void test_wrong_password_counts_and_locks(void) {
     TEST_ASSERT_EQUAL_UINT8(0, st.fails);
 }
 
+/* Review fix round 1, item 2: st->fails is a uint8_t; without a ceiling it
+ * wraps at 256 and briefly drops back below WA_LOCK_FAILS, handing out free
+ * guesses before lockout re-arms. Drive 300 wrong attempts (advancing the
+ * fake clock past every lockout window along the way) and confirm fails
+ * saturates at 255 instead of wrapping to 300 mod 256 = 44. */
+static void test_fails_saturates_after_many_wrong_attempts(void) {
+    wa_state_t st; web_auth_init(&st, fake_sha256, fake_rand);
+    hg_mcfg_t m; hg_mcfg_defaults(&m);
+    char cookie[2 * WA_TOKEN_LEN + 1];
+    uint32_t now = 1000;
+    int wrong_count = 0;
+
+    while (wrong_count < 300) {
+        int rc = web_auth_login(&st, &m, "wrong", now, cookie);
+        if (rc == -2) { now += WA_LOCK_S + 1; continue; }   /* locked: wait it out, don't count it */
+        TEST_ASSERT_EQUAL_INT(-1, rc);
+        wrong_count++;
+        now += 1;
+    }
+    TEST_ASSERT_EQUAL_UINT8(255, st.fails);
+}
+
 static void test_set_password_replaces_default(void) {
     wa_state_t st; web_auth_init(&st, fake_sha256, fake_rand);
     hg_mcfg_t m; hg_mcfg_defaults(&m);
@@ -126,6 +148,40 @@ static void test_cookie_parse(void) {
     TEST_ASSERT_EQUAL_INT(-1, web_auth_check(&st, "hg_sess=", 1));   /* truncated */
 }
 
+/* Review fix round 1, item 1: a well-formed cookie that differs from the live
+ * token by only its last hex digit must still be rejected -- behavioural
+ * coverage for the switch from memcmp() to ct_eq() on the token compare
+ * (this doesn't prove timing-safety, just that the compare is still correct). */
+static void test_cookie_last_hex_digit_mismatch_rejected(void) {
+    wa_state_t st; web_auth_init(&st, fake_sha256, fake_rand);
+    hg_mcfg_t m; hg_mcfg_defaults(&m);
+    char cookie[2 * WA_TOKEN_LEN + 1];
+    TEST_ASSERT_EQUAL_INT(0, web_auth_login(&st, &m, "hillgrow1", 1, cookie));
+
+    char tampered[2 * WA_TOKEN_LEN + 1];
+    strcpy(tampered, cookie);
+    size_t last = strlen(tampered) - 1;
+    tampered[last] = (tampered[last] == '0') ? '1' : '0';   /* still valid lowercase hex */
+
+    char hdr[64]; hexcookie(hdr, sizeof hdr, tampered);
+    TEST_ASSERT_EQUAL_INT(-1, web_auth_check(&st, hdr, 1));
+    hexcookie(hdr, sizeof hdr, cookie);
+    TEST_ASSERT_EQUAL_INT(0, web_auth_check(&st, hdr, 1));   /* the real cookie still works */
+}
+
+/* Review fix round 1, item 4: a decoy cookie name that merely starts with
+ * "hg_sess" must not be treated as a match. */
+static void test_cookie_prefix_collision_rejected(void) {
+    wa_state_t st; web_auth_init(&st, fake_sha256, fake_rand);
+    hg_mcfg_t m; hg_mcfg_defaults(&m);
+    char cookie[2 * WA_TOKEN_LEN + 1];
+    TEST_ASSERT_EQUAL_INT(0, web_auth_login(&st, &m, "hillgrow1", 1, cookie));
+
+    char hdr[64];
+    snprintf(hdr, sizeof hdr, "hg_sessX=%s", cookie);
+    TEST_ASSERT_EQUAL_INT(-1, web_auth_check(&st, hdr, 1));
+}
+
 static void test_pack_unpack(void) {
     wa_state_t st; web_auth_init(&st, fake_sha256, fake_rand);
     hg_mcfg_t m; hg_mcfg_defaults(&m);
@@ -184,9 +240,12 @@ int main(void) {
     RUN_TEST(test_sha256_matches_standard_vectors);
     RUN_TEST(test_default_password_logs_in_and_sets_cookie);
     RUN_TEST(test_wrong_password_counts_and_locks);
+    RUN_TEST(test_fails_saturates_after_many_wrong_attempts);
     RUN_TEST(test_set_password_replaces_default);
     RUN_TEST(test_expiry_and_eviction);
     RUN_TEST(test_cookie_parse);
+    RUN_TEST(test_cookie_last_hex_digit_mismatch_rejected);
+    RUN_TEST(test_cookie_prefix_collision_rejected);
     RUN_TEST(test_pack_unpack);
     RUN_TEST(test_logout_invalidates);
     RUN_TEST(test_verify_checks_password_without_side_effects);

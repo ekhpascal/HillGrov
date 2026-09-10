@@ -16,15 +16,32 @@ static int ct_eq(const uint8_t *a, const uint8_t *b, size_t n) {
     return d == 0;
 }
 
-/* Constant-access-pattern compare of two NUL-terminated strings, clamped to
- * WA_PWBUF so the loop always walks the same number of bytes regardless of
- * where (or whether) the strings differ. */
+/* Copies a NUL-terminated string into a fixed WA_PWBUF-byte, zero-padded
+ * buffer without calling strlen(): the source is walked for exactly WA_PWBUF
+ * iterations, and once the terminator has been seen ("done"), the ternary's
+ * untaken branch means s[i] is never dereferenced again (so this stays safe
+ * for strings shorter than WA_PWBUF) while the loop trip count itself stays
+ * fixed -- unlike strlen(), whose running time is proportional to the
+ * string's own length. */
+static size_t pad_str_ct(const char *s, uint8_t out[WA_PWBUF]) {
+    int done = 0;
+    size_t len = WA_PWBUF;
+    for (size_t i = 0; i < WA_PWBUF; i++) {
+        uint8_t c = done ? 0 : (uint8_t)s[i];
+        if (!done && c == 0) { done = 1; len = i; }
+        out[i] = done ? 0 : c;
+    }
+    return len;
+}
+
+/* Fixed-width compare of two NUL-terminated strings, clamped to WA_PWBUF so
+ * the loop always walks the same number of bytes regardless of where (or
+ * whether) the strings differ; the length comparison is folded into the same
+ * accumulator rather than short-circuited. */
 static int ct_eq_str(const char *a, const char *b) {
-    uint8_t ba[WA_PWBUF] = {0}, bb[WA_PWBUF] = {0};
-    size_t la = strlen(a); if (la > WA_PWBUF) la = WA_PWBUF;
-    size_t lb = strlen(b); if (lb > WA_PWBUF) lb = WA_PWBUF;
-    memcpy(ba, a, la);
-    memcpy(bb, b, lb);
+    uint8_t ba[WA_PWBUF], bb[WA_PWBUF];
+    size_t la = pad_str_ct(a, ba);
+    size_t lb = pad_str_ct(b, bb);
     uint8_t d = (uint8_t)(la ^ lb);
     for (size_t i = 0; i < WA_PWBUF; i++) d |= (uint8_t)(ba[i] ^ bb[i]);
     return d == 0;
@@ -113,7 +130,9 @@ int web_auth_login(wa_state_t *st, const hg_mcfg_t *m, const char *pw, uint32_t 
     if (now_s < st->lock_until_s) return -2;
 
     if (!pw_matches(st, m, pw)) {
-        st->fails++;
+        if (st->fails < 0xFF) st->fails++;   /* saturate: a uint8_t wraparound at 256 would
+                                               * briefly relax fails < WA_LOCK_FAILS and hand
+                                               * out a few free guesses before re-locking */
         if (st->fails >= WA_LOCK_FAILS) st->lock_until_s = now_s + WA_LOCK_S;
         return -1;
     }
@@ -143,7 +162,7 @@ int web_auth_check(wa_state_t *st, const char *cookie_header, uint32_t now_s) {
     if (extract_cookie_token(cookie_header, token) != 0) return -1;
     for (int i = 0; i < WA_SESSIONS; i++) {
         if (!st->s[i].used) continue;
-        if (memcmp(st->s[i].token, token, WA_TOKEN_LEN) == 0)
+        if (ct_eq(st->s[i].token, token, WA_TOKEN_LEN))
             return (now_s < st->s[i].expires_s) ? 0 : -1;
     }
     return -1;
@@ -153,7 +172,7 @@ void web_auth_logout(wa_state_t *st, const char *cookie_header) {
     uint8_t token[WA_TOKEN_LEN];
     if (extract_cookie_token(cookie_header, token) != 0) return;
     for (int i = 0; i < WA_SESSIONS; i++) {
-        if (st->s[i].used && memcmp(st->s[i].token, token, WA_TOKEN_LEN) == 0) {
+        if (st->s[i].used && ct_eq(st->s[i].token, token, WA_TOKEN_LEN)) {
             memset(&st->s[i], 0, sizeof st->s[i]);   /* used=0, expires_s=0: keeps the free-slot invariant */
             return;
         }
