@@ -23,7 +23,7 @@ include_directories(
   ${COMP}/cli_line ${COMP}/notify ${COMP}/cmd_core ${COMP}/cmd_common
   ${COMP}/zone_cmds ${COMP}/rescue_handover ${COMP}/ring_proto ${COMP}/node_store ${COMP}/ota_trial
   ${COMP}/master_cmds ${COMP}/node_mgr ${COMP}/ring_link ${COMP}/web_auth ${COMP}/hg_json ${COMP}/alarm_mgr
-  ${COMP}/time_core ${COMP}/wifi_mgr
+  ${COMP}/time_core ${COMP}/wifi_mgr ${COMP}/state_snap
   ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
 enable_testing()
 function(hg_test NAME)
@@ -71,3 +71,5 @@ hg_test(test_time_core ${COMP}/time_core/time_core.c)
 hg_test(test_node_mgr_cfg ${COMP}/node_mgr/node_mgr_cfg.c ${COMP}/node_mgr/node_mgr_cfgx.c
         ${COMP}/node_mgr/node_mgr_cfg_api.c ${COMP}/node_mgr/node_mgr_cfg_latch.c ${COMP}/ring_proto/ring_cfgx.c ${COMP}/hg_blob/hg_blob.c
         ${HG_CFG_SRC} ${COMP}/notify/notify.c fakes/fake_nmgr.c)
+hg_test(test_state_snap ${COMP}/state_snap/state_snap.c)
+target_link_libraries(test_state_snap cjson_host)
