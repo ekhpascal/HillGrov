@@ -14,14 +14,20 @@ static const char *TAG = "wifi_mgr_sta";
 static const uint32_t BACKOFF_S[] = { 5, 10, 20, 40, 60 };
 #define BACKOFF_N ((int)(sizeof BACKOFF_S / sizeof BACKOFF_S[0]))
 
-/* How long a self-inflicted-disconnect marker stays valid. A locally issued
- * esp_wifi_disconnect() posts its WIFI_EVENT_STA_DISCONNECTED within
- * microseconds, so 1.5 s is enormously generous -- the point of the deadline
- * is that a marker set when there was nothing to disconnect (the driver posts
- * no event if the STA was already idle) EXPIRES instead of lying in wait and
- * swallowing the next genuine disconnect, which would leave the ladder unarmed
- * and the master silently stuck until a reboot. */
-#define SELF_DISC_VALID_US 1500000ull
+/* How long a self-inflicted-disconnect marker stays valid. It needs a deadline
+ * at all because the driver posts NO event when esp_wifi_disconnect() hits an
+ * already-idle STA, so the marker must expire rather than lie in wait.
+ *
+ * Erring short is the safe direction, and the sides are not symmetric:
+ *   too SHORT -> one spurious "STA DOWN" line and one extra rung. Cosmetic.
+ *   too LONG  -> a genuine fast failure is misread as ours, so no NOTIFY and
+ *                no retry armed: silently stuck until a reboot.
+ * Worst case for the long side is the first SET WIFI STA after boot (idle STA,
+ * no self-event, marker live across the fresh connect) where an AUTH_FAIL on a
+ * present AP can return in well under a second. Bench self-event latency is
+ * < 200 ms, so 300 ms keeps ample margin over the real mechanism while staying
+ * far below any plausible genuine association failure. */
+#define SELF_DISC_VALID_US 300000ull
 
 static esp_timer_handle_t s_retry;
 static int                s_step;          /* index into BACKOFF_S, clamped at BACKOFF_N-1 */
@@ -29,7 +35,7 @@ static uint8_t            s_configured;    /* mcfg has a non-empty sta_ssid */
 static uint8_t            s_want_down_ntf; /* report the next disconnect even though we were never up */
 static uint64_t           s_self_disc_us;  /* 0 = none pending; else esp_timer_get_time() at our disconnect */
 
-static void schedule_retry(void);
+static void schedule_retry_ex(int advance);
 
 /* Short, operator-readable disconnect reasons. The brief's four buckets are
  * the whole vocabulary; the raw numeric code goes to the log, which is where
@@ -89,8 +95,9 @@ static void sta_connect_now(void) {
     if (!s_configured) return;
     esp_err_t err = esp_wifi_connect();
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "esp_wifi_connect failed: %s -- arming retry", esp_err_to_name(err));
-        schedule_retry();
+        ESP_LOGW(TAG, "esp_wifi_connect failed: %s -- retrying at the same rung",
+                 esp_err_to_name(err));
+        schedule_retry_ex(0);
     }
 }
 
@@ -100,15 +107,22 @@ static void retry_cb(void *arg) {
     sta_connect_now();
 }
 
-static void schedule_retry(void) {
+/* advance = 1 for a genuine association failure: the ladder climbs, because
+ * the network really is not answering. advance = 0 when we could not even hand
+ * the connect to the driver (busy with a scan, or another apply) -- that is
+ * contention on our own side, says nothing about the AP, and must not stretch
+ * the interval towards 60 s. */
+static void schedule_retry_ex(int advance) {
     if (!s_configured || !s_retry) return;
     int i = s_step < BACKOFF_N ? s_step : BACKOFF_N - 1;
-    if (s_step < BACKOFF_N) s_step++;
+    if (advance && s_step < BACKOFF_N) s_step++;
     esp_timer_stop(s_retry);   /* ESP_ERR_INVALID_STATE when not armed: expected, ignored */
     esp_err_t err = esp_timer_start_once(s_retry, (uint64_t)BACKOFF_S[i] * 1000000ull);
     if (err != ESP_OK) ESP_LOGE(TAG, "esp_timer_start_once failed: %s", esp_err_to_name(err));
     else               ESP_LOGI(TAG, "retry in %us", (unsigned)BACKOFF_S[i]);
 }
+
+static void schedule_retry(void) { schedule_retry_ex(1); }
 
 static void sta_evt(void *arg, esp_event_base_t base, int32_t id, void *data) {
     (void)arg; (void)base;
@@ -285,9 +299,13 @@ int wifi_mgr_sta_apply(const hg_mcfg_t *m) {
     }
     s_configured = 1;
     s_want_down_ntf = 1;         /* the first failure after this request is worth a NOTIFY */
+    /* Formatted outside the lock, copied in with a fixed-size memcpy: the lock
+     * is a portMUX critical section and must hold nothing slower than that. */
+    char ssid[sizeof g_wm.sta_ssid];
+    snprintf(ssid, sizeof ssid, "%s", m->sta_ssid);
     wifi_mgr_lock();
+    memcpy(g_wm.sta_ssid, ssid, sizeof g_wm.sta_ssid);
     g_wm.sta_reason[0] = '\0';
-    snprintf(g_wm.sta_ssid, sizeof g_wm.sta_ssid, "%s", m->sta_ssid);
     wifi_mgr_unlock();
 
     /* Two callers, two paths. At boot (g_wm_started still 0) the driver is

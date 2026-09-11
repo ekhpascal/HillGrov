@@ -213,12 +213,15 @@ static const char *dash_is_empty(const char *s) {
  * the column layout never collapses. */
 static const char *or_dash(const char *s) { return s[0] ? s : "-"; }
 
-/* Shared rc mapping for the net ops that persist something: -2 is "the value
- * was fine, storing it failed" (NVS, a commit-mutex timeout, an unavailable
- * hash), which an operator must not answer by retyping the value -- hence its
- * own token rather than ERR INVALID. */
+/* Shared rc mapping for the net ops that persist something. The three
+ * failures are genuinely different instructions to whoever is reading:
+ *   -1 INVALID -- your value is wrong, retype it.
+ *   -2 STORAGE -- the value was fine, writing it failed (NVS, mutex timeout);
+ *                 retry, or go look at the flash.
+ *   -3 INTERNAL -- the board cannot do this at all (no SHA-256 provider);
+ *                 retrying changes nothing. */
 static int net_rc_err(char *r, int l, int rc) {
-    return cmd_err(r, l, rc == -2 ? "STORAGE" : "INVALID");
+    return cmd_err(r, l, rc == -2 ? "STORAGE" : rc == -3 ? "INTERNAL" : "INVALID");
 }
 
 /* ---- GET WIFI ---- */

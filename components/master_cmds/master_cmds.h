@@ -49,10 +49,15 @@ typedef struct {
  * seed_mac's, which is ERR ZONE_UNKNOWN.
  *
  * The four members that persist something may also return -2, "valid, but it
- * could not be stored" -- an NVS write failure, a commit-mutex timeout, or
- * (set_web_password) the hash function being unavailable. That is a different
- * thing to tell an operator than "your value is wrong", so the rows answer
- * ERR STORAGE for it: retry or check the flash, don't retype the value. */
+ * could not be stored" -- an NVS write failure or a commit/ops mutex timeout.
+ * That is a different thing to tell an operator than "your value is wrong", so
+ * the rows answer ERR STORAGE for it: retry or check the flash, don't retype
+ * the value.
+ *
+ * set_web_password may additionally return -3, "this board cannot hash a
+ * password at all" (no SHA-256 provider), which the rows report as the
+ * existing ERR INTERNAL -- neither the value nor the flash is at fault and no
+ * amount of retrying helps. Nothing is committed in that case. */
 typedef struct {
     void (*get_mcfg)(hg_mcfg_t *out);                      /* snapshot copy; never a live pointer */
     int  (*set_sta)(const char *ssid, const char *pass);   /* pass "" = open network */

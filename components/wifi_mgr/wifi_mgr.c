@@ -144,7 +144,11 @@ static int ap_static_ip(void) {
         ESP_LOGE(TAG, "esp_netif_dhcps_start failed: %s", esp_err_to_name(err));
         return -1;
     }
-    snprintf(g_wm.ap_ip, sizeof g_wm.ap_ip, "192.168.7.7");
+    /* The last g_wm write that was outside the lock. */
+    static const char ap_ip[] = "192.168.7.7";
+    wifi_mgr_lock();
+    memcpy(g_wm.ap_ip, ap_ip, sizeof ap_ip);
+    wifi_mgr_unlock();
     return 0;
 }
 

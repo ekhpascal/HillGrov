@@ -414,7 +414,7 @@ static void test_net_rows_storage_failure(void) {
     TEST_ASSERT_EQUAL_INT(-1, run("SET TZ EST5EDT,M3.2.0,M11.1.0"));
     TEST_ASSERT_EQUAL_STRING("ERR STORAGE\n", resp);
 
-    /* -1 must still be ERR INVALID on every one of them: the two rcs are not
+    /* -1 must still be ERR INVALID on every one of them: the rcs are not
      * interchangeable. */
     g_fake_net.set_sta_rc = -1;
     TEST_ASSERT_EQUAL_INT(-1, run("SET WIFI STA Home pass1234"));
@@ -422,6 +422,24 @@ static void test_net_rows_storage_failure(void) {
     g_fake_net.set_tz_rc = -1;
     TEST_ASSERT_EQUAL_INT(-1, run("SET TZ EST5EDT,M3.2.0,M11.1.0"));
     TEST_ASSERT_EQUAL_STRING("ERR INVALID\n", resp);
+}
+
+/* -3 is "this board cannot hash a password at all" -- no storage fault, no bad
+ * input, nothing to retry. Only set_web_password can produce it, but the
+ * mapping is shared, so the other rows are pinned too. */
+static void test_net_rows_internal_failure(void) {
+    g_fake_net.set_pw_rc = -3;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET WEB PASSWORD sekret12"));
+    TEST_ASSERT_EQUAL_STRING("ERR INTERNAL\n", resp);
+
+    g_fake_net.set_sta_rc = -3;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET WIFI STA Home pass1234"));
+    TEST_ASSERT_EQUAL_STRING("ERR INTERNAL\n", resp);
+
+    /* -2 must NOT be swept into INTERNAL: storage keeps its own token. */
+    g_fake_net.set_pw_rc = -2;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET WEB PASSWORD sekret12"));
+    TEST_ASSERT_EQUAL_STRING("ERR STORAGE\n", resp);
 }
 
 /* seed_mac has no persistence path of its own, so it keeps the node_ops
@@ -514,6 +532,7 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_set_node_mac_bad_mac);
     RUN_TEST(test_set_node_mac_unknown_zone);
     RUN_TEST(test_net_rows_storage_failure);
+    RUN_TEST(test_net_rows_internal_failure);
     RUN_TEST(test_set_node_mac_storage_rc_is_zone_unknown);
     RUN_TEST(test_net_rows_without_ops);
     RUN_TEST(test_help_lists_net_rows);

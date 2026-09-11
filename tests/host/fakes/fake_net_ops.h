@@ -19,7 +19,7 @@ typedef struct {
     int  set_tz_calls;   char set_tz_tz[64];
     int  seed_mac_calls; uint8_t seed_mac_zone; uint8_t seed_mac_mac[6];
 
-    /* canned return values: 0 ok, -1 invalid, -2 valid but not stored */
+    /* canned return values: 0 ok, -1 invalid, -2 valid but not stored, -3 internal fault */
     int set_sta_rc, set_ap_rc, set_pw_rc, set_tz_rc, seed_mac_rc;
 } fake_net_ops_state_t;
 

@@ -23,8 +23,12 @@ static const char *TAG = "net_ops";
  * pointer again after a commit, per mcfg_store.h's RAM contract.
  *
  * rc convention (master_cmds.h): 0 ok, -1 "the caller asked for something
- * invalid", -2 "valid, but it could not be stored" -> the rows answer
- * ERR INVALID and ERR STORAGE respectively. */
+ * invalid", -2 "valid, but it could not be stored" (NVS write failure or a
+ * commit/ops mutex timeout -- retry or check the flash), -3 "this board is
+ * broken" (the SHA-256 provider is unavailable, so no password can be hashed
+ * at all). The rows answer ERR INVALID / ERR STORAGE / ERR INTERNAL. -2 is
+ * deliberately reserved for storage: a missing hash function is not something
+ * retrying or reflashing NVS will fix. */
 
 /* mcfg_commit() serializes commits against each other, but NOT the
  * read-modify-write around them: two ops running concurrently (Task 12 drives
@@ -129,9 +133,11 @@ int master_web_set_password(const char *pw) {
     if (!s_wa_ready) {
         psa_status_t st = psa_crypto_init();
         if (st != PSA_SUCCESS) {
+            /* No crypto provider at all: an internal fault, not a storage
+             * problem -- nothing the operator can retry their way out of. */
             ESP_LOGE(TAG, "psa_crypto_init failed (%d)", (int)st);
             lock_give();
-            return -2;
+            return -3;
         }
         web_auth_init(&s_wa, sha256_fn, rand_fn);
         s_wa_ready = 1;
@@ -146,7 +152,7 @@ int master_web_set_password(const char *pw) {
         /* Committing now would store a hash nothing can ever match and lock
          * the web UI out permanently -- refuse and leave the old one intact. */
         ESP_LOGE(TAG, "SET WEB PASSWORD: SHA-256 unavailable, password NOT changed");
-        rc = -2;
+        rc = -3;
     } else {
         rc = commit_and_log(&m, "SET WEB PASSWORD");
     }
