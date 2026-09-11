@@ -30,6 +30,11 @@ static int saw(const char *needle) {
     for (int i = 0; i < s_nline; i++) if (strstr(s_line[i], needle)) return 1;
     return 0;
 }
+static int saw_n(const char *needle) {
+    int n = 0;
+    for (int i = 0; i < s_nline; i++) if (strstr(s_line[i], needle)) n++;
+    return n;
+}
 
 void setUp(void) {
     fake_clock_set(10000);
@@ -385,6 +390,43 @@ static void test_version_newer_pull_is_terminal(void) {
     TEST_ASSERT_EQUAL_UINT8(RING_T_CFG_GET, g_nmgr.sub[n].type);
 }
 
+/* A zone whose BOTH envelopes are newer than this master: each plane latches
+   on its own, and the zone then goes quiet. With one latch slot per zone the
+   two planes overwrote each other's latch and the reconciler flapped -- one
+   pull and one CFG_SYNC_FAILED per heartbeat, for ever, with cmd_timeouts
+   pinned at 3 (DEGRADED). */
+static void test_both_planes_terminal_latch_independently(void) {
+    hg_zone_cfg_t c; hg_defaults_cfg(&c); c.generation = 3;
+    hg_zone_hw_t h; hg_defaults_hw(&h);
+    fnm_node(2, 3, hg_crc32(0, &c, sizeof c), hg_crc32(0, &h, sizeof h));
+    uint8_t blob[CFG_BLOB_LEN];
+
+    hb(2); tick();                                  /* CFG pull -> version newer */
+    TEST_ASSERT_EQUAL_UINT8(1, g_nmgr.sub[0].payload[0]);
+    ack_ok(last_seq());
+    size_t bl = hg_blob_wrap(HG_MAGIC_CFG, HG_CFG_VER + 1, 3, &c, (uint16_t)sizeof c, blob, sizeof blob);
+    feed_chunks(2, 1, 3, blob, bl);
+
+    second(2);                                      /* HW pull -> version newer too */
+    TEST_ASSERT_EQUAL_INT(2, g_nmgr.n_sub);
+    TEST_ASSERT_EQUAL_UINT8(2, g_nmgr.sub[1].payload[0]);
+    ack_ok(last_seq());
+    bl = hg_blob_wrap(HG_MAGIC_HW, HG_HW_VER + 1, 0, &h, (uint16_t)sizeof h, blob, sizeof blob);
+    feed_chunks(2, 2, 0, blob, bl);
+
+    TEST_ASSERT_EQUAL_INT(1, node_mgr_cfg_sync_failed(2));
+    for (int i = 0; i < 5; i++) second(2);
+    TEST_ASSERT_EQUAL_INT(2, g_nmgr.n_sub);         /* both planes parked: no traffic at all */
+    TEST_ASSERT_EQUAL_INT(0, g_nmgr.n_raw);
+    TEST_ASSERT_EQUAL_INT(2, saw_n("CFG_SYNC_FAILED"));   /* one per plane, not one per tick */
+
+    /* and a heartbeat with a new CFG identity re-opens the CFG plane only */
+    g_nmgr.tab[1].hb.cfg_crc = 0x2222u;
+    second(2);
+    TEST_ASSERT_EQUAL_INT(3, g_nmgr.n_sub);
+    TEST_ASSERT_EQUAL_UINT8(1, g_nmgr.sub[2].payload[0]);
+}
+
 /* The push's terminal ACK tokens keep their SP3 behaviour. */
 static void test_push_cfg_version_ack_is_terminal(void) {
     hg_zone_cfg_t c; hg_defaults_cfg(&c); c.generation = 3;
@@ -492,6 +534,7 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_cfg_get_returns_unwrapped_copy);
     RUN_TEST(test_version_newer_pull_is_terminal);
     RUN_TEST(test_cfg_latch_does_not_block_the_hw_plane);
+    RUN_TEST(test_both_planes_terminal_latch_independently);
     RUN_TEST(test_push_cfg_version_ack_is_terminal);
     RUN_TEST(test_round_robin_alternates);
     RUN_TEST(test_cooldown_after_nonterminal_failure);

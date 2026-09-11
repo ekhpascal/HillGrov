@@ -25,6 +25,21 @@ typedef struct {
     uint8_t  valid;
 } nmgr_cache_t;
 
+/* ---- failure memory (node_mgr_cfg_latch.c) ----
+ * The terminal latch (per zone AND plane) and the non-terminal cooldown (per
+ * zone). The transfer half reports outcomes through note_synced/note_failed
+ * below; the decision half asks nmgr_cfg_latched / nmgr_cfg_cooling_down
+ * before starting anything. See that file's header for why the latch is
+ * per-plane. */
+void nmgr_cfg_latch_init(void);                                  /* boot: every plane + cooldown */
+void nmgr_cfg_latch_clear(uint8_t zone);                         /* both planes of one zone */
+void nmgr_cfg_cooldown_clear(uint8_t zone);
+int  nmgr_cfg_cooling_down(uint8_t zone, uint32_t now);          /* 1 = skip this zone's turn */
+/* 1 = this exact (heartbeat, cache) identity already failed terminally on this
+   plane, so retrying it would fail the same way. */
+int  nmgr_cfg_latched(uint8_t zone, uint8_t kind, uint32_t hb_gen, uint32_t hb_crc,
+                      uint32_t cache_gen, uint32_t cache_crc);
+
 /* ---- decision half, called by the transfer half ---- */
 
 /* kind 1 = CFG (pushed and pulled), kind 2 = HW (pulled only, spec §4.4).
