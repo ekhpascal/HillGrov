@@ -1,4 +1,3 @@
-#include <stdio.h>
 #include <string.h>
 #include <time.h>
 #include "freertos/FreeRTOS.h"
@@ -53,28 +52,45 @@ static SemaphoreHandle_t s_lock;
  * clock arrives, and the operator logs in again. Never the reverse. */
 #define AUTH_FROZEN  (0xFFFFFFFFu - WA_TTL_S)
 
-/* 1 once the wall clock has been set by SET TIME or NTP this boot. NTP is a
- * direct query; the SET path has no flag of its own, so it is read back out of
- * the GET TIME line app_if_common already formats ("<date> <time> <SRC>
- * <age>", SRC = NONE until either source has spoken). */
+/* 1 once the wall clock has been set this boot. Two cheap boolean reads, no
+ * string parsing: time_svc_is_ntp() is the direct signal for an SNTP sync (the
+ * source the ruling names), and hg_app_time_is_set() covers a console SET TIME
+ * and any noted external source. */
 static int wall_clock_ok(void) {
-    if (time_svc_is_ntp()) return 1;
-    char line[64], src[16] = "";
-    if (hg_app_time_get_noted(line, sizeof line) != 0) return 0;
-    if (sscanf(line, "%*s %*s %15s", src) != 1) return 0;
-    return strcmp(src, "NONE") != 0;
+    return time_svc_is_ntp() || hg_app_time_is_set();
 }
 
 static uint32_t auth_now(void) { return wall_clock_ok() ? (uint32_t)time(NULL) : AUTH_FROZEN; }
 
-/* On the frozen base web_auth's own lockout deadline (lock_until_s = now_s +
- * WA_LOCK_S) can never elapse, because now_s never advances -- five
- * fat-fingered logins would lock the web UI out until the next reboot. The
- * deadline is therefore aged out here against monotonic uptime whenever the
- * frozen base is in use. Called with s_lock held. */
+/* web_auth's lockout is a deadline on the same caller-supplied clock as
+ * session expiry, which this file switches between two bases -- so the
+ * deadline needs looking after on both of them. Called with s_lock held.
+ *
+ * (a) A deadline minted on the FROZEN base survives the switch to the wall
+ *     clock: AUTH_FROZEN + 60 is ~4.29e9, every wall-clock now_s is ~1.8e9,
+ *     so "now < lock_until" would stay true forever and EVERY login -- the
+ *     correct one included -- would answer 429 until the next reboot. That is
+ *     an unauthenticated denial of service reachable from the house LAN by
+ *     anyone willing to guess five times before the master gets its clock.
+ *     Fix: a legitimate deadline is never more than WA_LOCK_S ahead of now on
+ *     the base that produced it, so a deadline further out than that proves
+ *     the base changed underneath it, and it is dropped.
+ * (b) On the frozen base the deadline can never elapse on its own, because
+ *     now_s never advances -- five fat-fingered logins would lock the web UI
+ *     out until the next reboot. It is aged out against monotonic uptime
+ *     instead.
+ * Both bases are far from UINT32_MAX at the point of the (a) comparison
+ * (AUTH_FROZEN + WA_LOCK_S is still below it), so the addition cannot wrap. */
 static uint32_t s_lock_up;   /* uptime_s when the frozen lockout was first seen; 0 = none */
 
 static void frozen_lock_tick(uint32_t now) {
+    if (s_wa.lock_until_s > now + WA_LOCK_S) {   /* (a) the clock base changed under it */
+        ESP_LOGW(TAG, "dropping a lockout deadline minted on the other clock base");
+        s_wa.fails = 0;
+        s_wa.lock_until_s = 0;
+        s_lock_up = 0;
+        return;
+    }
     if (now != AUTH_FROZEN || s_wa.lock_until_s == 0) { s_lock_up = 0; return; }
     uint32_t up = hg_app_uptime_s();
     if (s_lock_up == 0) { s_lock_up = up ? up : 1; return; }
@@ -121,7 +137,16 @@ static void sessions_load(void) {
     for (int i = 0; i < WA_SESSIONS; i++) {
         /* An "until reboot" session must never come back from flash; the save
          * path drops them, this is the belt for an older/corrupt blob. */
-        if (s_wa.s[i].expires_s == 0xFFFFFFFFu) memset(&s_wa.s[i], 0, sizeof s_wa.s[i]);
+        int drop = (s_wa.s[i].expires_s == 0xFFFFFFFFu);
+        /* An all-zero token with a non-zero expiry is not a session anybody can
+         * hold -- web_auth_unpack marks a slot used purely on its expiry, so a
+         * blob from an erased/partially-written page could otherwise present a
+         * live slot whose token is 16 zero bytes, which is exactly the token a
+         * forged "hg_sess=000...0" cookie carries. */
+        uint8_t any = 0;
+        for (int b = 0; b < WA_TOKEN_LEN; b++) any |= s_wa.s[i].token[b];
+        if (!any) drop = 1;
+        if (drop) memset(&s_wa.s[i], 0, sizeof s_wa.s[i]);
         if (s_wa.s[i].used) live++;
     }
     ESP_LOGI(TAG, "%d stored session(s) restored", live);

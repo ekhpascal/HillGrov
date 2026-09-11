@@ -12,6 +12,13 @@
 
 const cmd_core_t *http_srv_core(void);   /* the core passed to http_srv_start() */
 
+/* How every handler must return (see the block comment in http_srv.c): ESP_OK
+ * lets httpd keep the connection AND purge any unread request body, which a
+ * trickling client with a huge Content-Length can stretch out indefinitely on
+ * the one httpd task. Pass drained = 1 only when the whole body was read;
+ * anything else closes the socket after the response is already sent. */
+esp_err_t http_srv_done(httpd_req_t *req, int drained);
+
 /* Reads the whole request body into buf and NUL-terminates it. Returns the
  * byte count (>= 0) or one of the negative codes below WITHOUT sending
  * anything -- the caller answers in its own content type, because /api/cmd

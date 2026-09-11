@@ -120,6 +120,15 @@ int hg_app_time_get_noted(char *buf, size_t n) {
     return hg_app_time_get_ext(buf, n, s_note_src[0] ? s_note_src : NULL, s_note_at);
 }
 
+/* The same two conditions hg_app_time_get_ext folds into its source token,
+ * without the formatting: a local SET TIME, or a noted external source that
+ * has actually spoken (src_at != 0 is what that function treats as "spoken").
+ * A polled source passed straight to hg_app_time_get_ext -- the zone's RING --
+ * is not visible here, which is why zone_ring notes it as well. */
+int hg_app_time_is_set(void) {
+    return s_time_is_set || (s_note_src[0] != '\0' && s_note_at != 0);
+}
+
 int hg_app_time_set(int y, int mo, int d, int h, int mi, int s) {
     /* days-in-month, index 0 = January; Feb bumped to 29 below on a leap year */
     static const uint8_t days_in_month[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };

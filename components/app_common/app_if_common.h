@@ -38,6 +38,13 @@ int      hg_app_time_get_ext(char *buf, size_t n, const char *src, uint32_t src_
  * back to NONE. */
 void     hg_app_time_note_source(const char *src, uint32_t at_uptime_s);
 int      hg_app_time_get_noted(char *buf, size_t n);
+/* 1 once anything has actually set this boot's wall clock -- a console SET
+ * TIME, or a noted external source (the master's NTP, a zone's RING) -- i.e.
+ * exactly when the GET TIME line would name a source other than NONE. 0 while
+ * time(NULL) is still counting up from the epoch. Exposed so a caller that
+ * needs the verdict rather than the display line (http_srv's session expiry
+ * refuses to trust an unset clock) does not have to parse that line back. */
+int      hg_app_time_is_set(void);
 int      hg_app_time_set(int y, int mo, int d, int h, int mi, int s);
 int      hg_app_fw_info(char *buf, size_t n);
 int      hg_app_fw_rollback(void);

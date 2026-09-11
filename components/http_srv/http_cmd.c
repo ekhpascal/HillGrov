@@ -1,5 +1,3 @@
-#include <stdio.h>
-#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
@@ -22,14 +20,24 @@ static const char *TAG = "http_cmd";
 
 #define HTTP_CMD_SESSIONS 2
 
+/* Deliberately LONGER than cmd_dispatch's own 3500 ms forward budget (SP3
+ * spec 5.3). With both at 3500 ms the commonest slow case -- a ZONE command
+ * forwarded to a zone that is offline, so the ring burns the full budget --
+ * races its own deadline, and losing that race orphans the worker and costs a
+ * session slot (see below). Half a second of headroom means the dispatcher
+ * always gets to answer first and the orphan path stays what it should be: a
+ * fault, not a routine outcome. */
+#define HTTP_CMD_TIMEOUT_MS 4000
+
 typedef struct {
     cmd_session_t ses;
     char          resp[CMD_RESP_MAX];
     uint8_t       busy;
 } cmd_slot_t;
 
-static cmd_slot_t       s_slot[HTTP_CMD_SESSIONS];
+static cmd_slot_t        s_slot[HTTP_CMD_SESSIONS];
 static SemaphoreHandle_t s_lock;
+static uint8_t           s_quarantined;   /* slots permanently withdrawn; only ever grows */
 
 int http_cmd_init(void) {
     for (int i = 0; i < HTTP_CMD_SESSIONS; i++) {
@@ -65,13 +73,28 @@ static void release(cmd_slot_t *s) {
     s->busy = 0;   /* a uint8_t store either way; losing the slot would be worse */
 }
 
+/* cmd_task_execute returned -2: it gave up waiting and ORPHANED the worker,
+ * which still holds this slot's resp buffer and will write the original
+ * command's reply into it at some unpredictable later point (cmd_task.h). The
+ * slot is therefore never released -- handing that buffer to the next request
+ * would mean sending one operator's reply to another, or racing a send against
+ * the worker's write. Withdrawing a slot costs half this endpoint's capacity;
+ * the other slot keeps serving, and the loss is visible in the log and, once
+ * every slot is gone, as a 503. */
+static void quarantine(cmd_slot_t *s, const char *line) {
+    (void)s;   /* left busy on purpose: never released, never reused */
+    s_quarantined++;
+    ESP_LOGE(TAG, "cmd dispatch did not return in %d ms for \"%s\" -- session slot %u/%d withdrawn",
+             HTTP_CMD_TIMEOUT_MS, line, (unsigned)s_quarantined, HTTP_CMD_SESSIONS);
+}
+
 esp_err_t h_cmd(httpd_req_t *req) {
     /* cap - 1 == CMD_LINE_MAX - 1, the dispatcher's own line limit */
     char line[CMD_LINE_MAX];
     int n = http_srv_body(req, line, sizeof line);
-    if (n == HTTP_BODY_TOO_LONG) { http_srv_text(req, 413, "ERR TOO_LONG\n");   return ESP_OK; }
-    if (n == HTTP_BODY_CHUNKED)  { http_srv_text(req, 400, "ERR CHUNKED\n");    return ESP_OK; }
-    if (n < 0)                   { http_srv_text(req, 400, "ERR BAD_REQUEST\n"); return ESP_OK; }
+    if (n == HTTP_BODY_TOO_LONG) { http_srv_text(req, 413, "ERR TOO_LONG\n");    return http_srv_done(req, 0); }
+    if (n == HTTP_BODY_CHUNKED)  { http_srv_text(req, 400, "ERR CHUNKED\n");     return http_srv_done(req, 0); }
+    if (n < 0)                   { http_srv_text(req, 400, "ERR BAD_REQUEST\n"); return http_srv_done(req, 0); }
 
     /* A form post or a text editor may add a trailing newline; the CLI takes
      * the line without one. */
@@ -80,24 +103,28 @@ esp_err_t h_cmd(httpd_req_t *req) {
     cmd_slot_t *slot = claim();
     if (!slot) {
         http_srv_text(req, 503, "ERR BUSY\n");
-        return ESP_OK;
+        return http_srv_done(req, 1);
     }
 
-    /* 3500 ms: a forwarded ZONE command needs up to three ring ACK attempts
-     * (SP3's forward budget), and cmd_dispatch is what enforces it -- this
-     * only has to not give up first. */
-    cmd_task_execute(&slot->ses, line, slot->resp, CMD_RESP_MAX, 3500);
-    int status = (strncmp(slot->resp, "OK", 2) == 0) ? 200 : 422;
-    http_srv_text(req, status, slot->resp);
+    int rc = cmd_task_execute(&slot->ses, line, slot->resp, CMD_RESP_MAX, HTTP_CMD_TIMEOUT_MS);
+    if (rc == -2) {
+        /* Do not read slot->resp at all here: the orphaned worker may be
+         * writing into it right now, so the reply is a fixed literal. */
+        quarantine(slot, line);
+        http_srv_text(req, 500, "ERR INTERNAL\n");
+        return http_srv_done(req, 1);
+    }
+
+    http_srv_text(req, http_reply_status(slot->resp), slot->resp);
     release(slot);
-    return ESP_OK;
+    return http_srv_done(req, 1);
 }
 
 esp_err_t h_help(httpd_req_t *req) {
     const cmd_core_t *core = http_srv_core();
     if (!core) {
         http_srv_text(req, 500, "ERR INTERNAL\n");
-        return ESP_OK;
+        return http_srv_done(req, 0);
     }
 
     /* cmd_help runs entirely on the table -- no dispatch, no forwarding -- so
@@ -108,10 +135,10 @@ esp_err_t h_help(httpd_req_t *req) {
     cmd_slot_t *slot = claim();
     if (!slot) {
         http_srv_text(req, 503, "ERR BUSY\n");
-        return ESP_OK;
+        return http_srv_done(req, 0);
     }
     cmd_help(core, &slot->ses, NULL, 0, slot->resp, CMD_RESP_MAX);
     http_srv_text(req, 200, slot->resp);
     release(slot);
-    return ESP_OK;
+    return http_srv_done(req, 0);
 }

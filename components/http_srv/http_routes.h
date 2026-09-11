@@ -28,6 +28,13 @@ extern const int          HTTP_ROUTES_N;
  * httpd worker. */
 int http_route_find(const char *method, const char *uri, int *auth_out);
 
+/* HTTP status for a CLI reply line, as answered by /api/cmd: 200 for "OK...",
+ * 503 for the dispatcher's own "ERR BUSY" (its slot pool is full -- a capacity
+ * answer, not a bad request), 500 for "ERR INTERNAL" (a dispatch that never
+ * completed), 422 for every other ERR, i.e. everything the operator asked for
+ * wrongly. Matches whole tokens, so "ERR BUSYNESS" is a 422. NULL -> 422. */
+int http_reply_status(const char *reply);
+
 #ifdef __cplusplus
 }
 #endif

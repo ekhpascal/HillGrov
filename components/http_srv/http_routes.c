@@ -1,11 +1,15 @@
 #include <string.h>
 #include "http_routes.h"
 
-/* One row per route_id_t, in id order (test_http_routes pins both). auth = 1
- * means route_entry() calls http_srv_auth_ok() -- i.e. a valid hg_sess cookie
- * -- before the handler runs.
+/* The pure half of http_srv: the route table with its auth bits, the matcher,
+ * and the CLI-reply -> HTTP-status mapping. No IDF headers, so all three are
+ * host-tested (tests/host/test_http_routes.c).
  *
- * The three auth = 0 rows are deliberate:
+ * One row per route_id_t, in id order (the tests pin both). auth = 1 means
+ * route_entry() calls http_srv_auth_ok() -- i.e. a valid hg_sess cookie --
+ * before the handler runs.
+ *
+ * The three auth = 0 groups are deliberate:
  *   POST /api/login   the gate itself
  *   GET / /app.js /app.css   the login page has to load before there is a
  *                            cookie; the assets carry no greenhouse data
@@ -40,12 +44,14 @@ const int HTTP_ROUTES_N = (int)(sizeof HTTP_ROUTES / sizeof HTTP_ROUTES[0]);
 int http_route_find(const char *method, const char *uri, int *auth_out) {
     if (!method || !uri) return -1;
 
-    /* Everything up to the first '?' is the path; the query string belongs to
-     * the handler, not the match (GET /api/config?zone=2 is the same route as
-     * GET /api/config). Length-compare rather than copy: the URI arrives in
-     * httpd's own buffer and nothing here needs a mutable copy. */
-    const char *q = strchr(uri, '?');
-    size_t plen = q ? (size_t)(q - uri) : strlen(uri);
+    /* Everything up to the first '?' or '#' is the path; the query string
+     * belongs to the handler, not to the match (GET /api/config?zone=2 is the
+     * same route as GET /api/config), and a fragment belongs to nobody -- a
+     * conforming client never puts one on the wire, so stripping it is
+     * defence in depth against a client that does. Length-compare rather than
+     * copy: the URI arrives in httpd's own buffer and nothing here needs a
+     * mutable copy. */
+    size_t plen = strcspn(uri, "?#");
 
     for (int i = 0; i < HTTP_ROUTES_N; i++) {
         const http_route_t *r = &HTTP_ROUTES[i];
@@ -55,4 +61,27 @@ int http_route_find(const char *method, const char *uri, int *auth_out) {
         return (int)r->id;
     }
     return -1;
+}
+
+/* 1 when reply opens with the whole token lit -- lit followed by the end of
+ * the line or a space, not by more token characters -- so that a future
+ * "ERR BUSYNESS" cannot be read as "ERR BUSY". */
+static int token_is(const char *reply, const char *lit) {
+    size_t n = strlen(lit);
+    if (strncmp(reply, lit, n) != 0) return 0;
+    char c = reply[n];
+    return c == '\0' || c == '\n' || c == '\r' || c == ' ';
+}
+
+int http_reply_status(const char *reply) {
+    if (!reply) return 422;
+    if (strncmp(reply, "OK", 2) == 0) return 200;
+    /* Two of the dispatcher's ERR tokens are about the server rather than the
+     * request, and a web UI has to be able to tell them apart: BUSY means
+     * cmd_task's slot pool was full (worth retrying), INTERNAL means the
+     * dispatch never came back. Everything else is something the operator
+     * asked for wrongly, which is what 422 says. */
+    if (token_is(reply, "ERR BUSY"))     return 503;
+    if (token_is(reply, "ERR INTERNAL")) return 500;
+    return 422;
 }

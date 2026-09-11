@@ -40,11 +40,44 @@ static const char *status_line(int status) {
 void http_srv_json(httpd_req_t *req, int status, const char *json) {
     httpd_resp_set_status(req, status_line(status));
     httpd_resp_set_type(req, "application/json");
-    if (status == 204 || !json || !*json) {
-        httpd_resp_send(req, NULL, 0);   /* no body: 204 must not carry one */
+    httpd_resp_send(req, json ? json : "", json ? HTTPD_RESP_USE_STRLEN : 0);
+}
+
+/* httpd_send() returns the count of ONE send() call, which can be short under
+ * the socket's 5 s SO_SNDTIMEO -- the same reason fw_srv.c loops. */
+static int send_all(httpd_req_t *req, const char *buf, size_t len) {
+    size_t sent = 0;
+    while (sent < len) {
+        int n = httpd_send(req, buf + sent, len - sent);
+        if (n <= 0) return -1;
+        sent += (size_t)n;
+    }
+    return 0;
+}
+
+/* A 204 must carry neither a body nor a Content-Length, and there is no
+ * representation for a Content-Type to describe -- but httpd_resp_send()
+ * always emits both (its own default type when the handler set none). The
+ * three lines are therefore composed by hand, the way fw_srv.c composes its
+ * identity-framed image response. Safe with keep-alive: IDF's httpd neither
+ * emits nor honours Connection headers, and a 204 is self-delimiting, so the
+ * client knows the response ended without needing a length.
+ *
+ * cookie is a Set-Cookie VALUE (or NULL for no cookie); it is copied here, so
+ * unlike httpd_resp_set_hdr the caller's buffer need not outlive the call. */
+void http_srv_no_content(httpd_req_t *req, const char *cookie) {
+    char head[192];
+    int n;
+    if (cookie && *cookie)
+        n = snprintf(head, sizeof head, "HTTP/1.1 204 No Content\r\nSet-Cookie: %s\r\n\r\n", cookie);
+    else
+        n = snprintf(head, sizeof head, "HTTP/1.1 204 No Content\r\n\r\n");
+    if (n < 0 || (size_t)n >= sizeof head) {
+        ESP_LOGE(TAG, "204 header overflow (%d B) -- answering 500", n);
+        http_srv_error(req, 500, "INTERNAL", NULL);
         return;
     }
-    httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+    if (send_all(req, head, (size_t)n) != 0) ESP_LOGW(TAG, "204 send failed");
 }
 
 void http_srv_text(httpd_req_t *req, int status, const char *text) {
@@ -84,7 +117,34 @@ esp_err_t h_not_impl(httpd_req_t *req) {
     /* Registered now so the route table and its auth bits are complete and
      * auditable from day one; Task 12/13 replace these entries. */
     http_srv_json(req, 501, "{\"error\":\"NOT_IMPLEMENTED\"}");
-    return ESP_OK;
+    return http_srv_done(req, 0);   /* body never read */
+}
+
+/* ---- how a handler ends ----
+ * ESP_OK tells httpd to keep the connection, and httpd_req_delete() then
+ * PURGES whatever is left of the request body before it will look at the next
+ * request (httpd_parse.c: a `while (ra->remaining_len)` recv loop). So a
+ * client that announces `Content-Length: 100000000` and then trickles one byte
+ * at a time pins the one httpd task for as long as it likes -- an
+ * unauthenticated denial of service against every route, including the ones
+ * that rejected the request precisely because the body was too long.
+ *
+ * Every path that answers WITHOUT having consumed the body therefore returns
+ * ESP_FAIL instead: httpd logs "uri handler execution failed", skips the purge
+ * entirely (httpd_sess_process returns before httpd_req_delete) and closes the
+ * socket. Our response bytes are already on the wire by then, so the client
+ * still sees its 413/401/404/501 -- it just does not get to keep the
+ * connection it was abusing.
+ *
+ * drained = 1 only when the whole body was read. A chunked request always
+ * counts as not drained: remaining_len is 0 for it, so httpd would purge
+ * nothing and then try to parse the chunk framing left in the socket as the
+ * next request. */
+esp_err_t http_srv_done(httpd_req_t *req, int drained) {
+    if (drained) return ESP_OK;
+    if (req->content_len == 0 && httpd_req_get_hdr_value_len(req, "Transfer-Encoding") == 0)
+        return ESP_OK;   /* there was no body to leave behind */
+    return ESP_FAIL;
 }
 
 /* ---- request body ---- */
@@ -180,10 +240,10 @@ static esp_err_t route_entry(httpd_req_t *req) {
         ESP_LOGW(TAG, "unroutable %s %s (row %d, id %d)", m ? m : "?", req->uri,
                  row ? (int)row->id : -1, id);
         http_srv_error(req, 404, "NOT_FOUND", req->uri);
-        return ESP_OK;
+        return http_srv_done(req, 0);
     }
 
-    if (auth && !http_srv_auth_ok(req)) return ESP_OK;   /* 401 already sent */
+    if (auth && !http_srv_auth_ok(req)) return http_srv_done(req, 0);   /* 401 already sent */
 
     return HANDLERS[id](req);
 }
@@ -194,7 +254,9 @@ static esp_err_t route_entry(httpd_req_t *req) {
 static esp_err_t err_json(httpd_req_t *req, httpd_err_code_t err) {
     int method_err = (err == HTTPD_405_METHOD_NOT_ALLOWED);
     http_srv_error(req, method_err ? 405 : 404, method_err ? "METHOD_NOT_ALLOWED" : "NOT_FOUND", req->uri);
-    return ESP_OK;   /* keep the connection: a wrong URL is not a protocol error */
+    /* A wrong URL is not a protocol error, so the connection is kept -- unless
+     * the request carried a body nobody read (see http_srv_done). */
+    return http_srv_done(req, 0);
 }
 
 static httpd_method_t method_id(const char *name) {

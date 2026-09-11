@@ -46,8 +46,14 @@ int  http_auth_init(void);
  * when it is reached some other way. */
 int  http_srv_auth_ok(httpd_req_t *req);
 
-/* application/json + status line + send. json may be NULL/"" for 204. */
+/* application/json + status line + send; json may be NULL for an empty body. */
 void http_srv_json(httpd_req_t *req, int status, const char *json);
+
+/* A bare 204: no body, and -- unlike anything httpd_resp_send can produce --
+ * no Content-Length and no Content-Type either, because a 204 has no
+ * representation to describe. cookie is an optional Set-Cookie value, copied
+ * into the response here. */
+void http_srv_no_content(httpd_req_t *req, const char *cookie);
 
 /* text/plain + status line + send, for the CLI-shaped endpoints whose body is
  * the command reply verbatim rather than JSON. */
@@ -65,9 +71,10 @@ void http_srv_error(httpd_req_t *req, int status, const char *code, const char *
 /* Puts a fresh salt + sha256(salt||pw) into *m and clears MCFG_F_WEB_DEFAULT,
  * without touching NVS -- the caller still owns the mcfg_commit(). Does NOT
  * drop sessions (see http_auth_sessions_drop, to be called only after the
- * commit succeeded). 0 ok, -1 pw outside 8..63, -3 SHA-256 unavailable (the
- * board's crypto is broken -- committing the all-zero digest would lock the
- * web UI out for good, so *m is left untouched). */
+ * commit succeeded). 0 ok, -1 pw outside 8..63 (*m untouched), -3 SHA-256
+ * unavailable -- the board's crypto is broken, and in that case *m HAS been
+ * modified and now holds a fresh salt with an all-zero digest that nothing
+ * could ever match, so the caller must discard its copy and commit nothing. */
 int  http_auth_hash_password(hg_mcfg_t *m, const char *pw);
 
 /* Invalidates every live web session and rewrites NVS. Call right after a

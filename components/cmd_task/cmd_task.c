@@ -75,7 +75,14 @@ int cmd_task_execute(cmd_session_t *ses, const char *line, char *resp, int resp_
         if (!s->done) {
             s->waiter = NULL;                /* orphan; cmd_task frees the slot on completion */
             taskEXIT_CRITICAL(&s_mux);
-            return cmd_err(resp, resp_len, "INTERNAL");
+            /* -2, not -1: the worker is still running and still holds `resp`,
+             * so it will overwrite this "ERR INTERNAL" with the real reply at
+             * some unpredictable later point. A caller that can afford to walk
+             * away (the CLI, the ring ACK) treats -2 exactly like -1; one that
+             * hands the same buffer out again (http_srv's session slots) has to
+             * know not to reuse it. See cmd_task.h. */
+            cmd_err(resp, resp_len, "INTERNAL");
+            return -2;
         }
         taskEXIT_CRITICAL(&s_mux);
         /* done was already set: the worker read a non-NULL waiter under the

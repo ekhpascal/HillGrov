@@ -37,7 +37,7 @@ static esp_err_t send_asset(httpd_req_t *req, int idx) {
          * is exactly the failure WHOLE_ARCHIVE exists to prevent. */
         ESP_LOGE(TAG, "%s missing from the image", s_cache[idx].name);
         http_srv_error(req, 500, "NO_ASSET", s_cache[idx].name);
-        return ESP_OK;
+        return http_srv_done(req, 0);
     }
 
     if (s_cache[idx].etag[0] == '\0')
@@ -53,7 +53,7 @@ static esp_err_t send_asset(httpd_req_t *req, int idx) {
         httpd_resp_set_hdr(req, "ETag", s_cache[idx].etag);
         httpd_resp_set_hdr(req, "Cache-Control", "max-age=86400");
         httpd_resp_send(req, NULL, 0);
-        return ESP_OK;
+        return http_srv_done(req, 0);
     }
 
     httpd_resp_set_type(req, ctype);
@@ -61,7 +61,10 @@ static esp_err_t send_asset(httpd_req_t *req, int idx) {
     httpd_resp_set_hdr(req, "Cache-Control", "max-age=86400");
     httpd_resp_set_hdr(req, "ETag", s_cache[idx].etag);
     httpd_resp_send(req, (const char *)blob, len);
-    return ESP_OK;
+    /* These are GETs, so there is normally no body at all and this keeps the
+     * connection; a GET that announces one gets the socket closed instead of
+     * letting httpd purge it on the single httpd task. */
+    return http_srv_done(req, 0);
 }
 
 esp_err_t h_index(httpd_req_t *req)   { return send_asset(req, 0); }
