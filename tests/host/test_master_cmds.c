@@ -384,6 +384,24 @@ static void test_set_node_mac_bad_mac(void) {
     TEST_ASSERT_EQUAL_INT(0, g_fake_net.seed_mac_calls);
 }
 
+/* ARG_MAC checks the FORMAT only, so a MAC no board can own -- all-zero, or a
+ * group address like ff:ff:ff:ff:ff:ff -- reaches the ops layer intact and has
+ * to be refused THERE (node_mgr_seed_mac rejects both with -1). This pins the
+ * division of labour: the row must forward it rather than filter it, and must
+ * report the ops rc as ERR ZONE_UNKNOWN. */
+static void test_set_node_mac_unusable_mac_reaches_ops(void) {
+    g_fake_net.seed_mac_rc = -1;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET NODE 3 MAC ff:ff:ff:ff:ff:ff"));
+    TEST_ASSERT_EQUAL_STRING("ERR ZONE_UNKNOWN\n", resp);
+    TEST_ASSERT_EQUAL_INT(1, g_fake_net.seed_mac_calls);
+    static const uint8_t bcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(bcast, g_fake_net.seed_mac_mac, 6);
+
+    TEST_ASSERT_EQUAL_INT(-1, run("SET NODE 3 MAC 00:00:00:00:00:00"));
+    TEST_ASSERT_EQUAL_STRING("ERR ZONE_UNKNOWN\n", resp);
+    TEST_ASSERT_EQUAL_INT(2, g_fake_net.seed_mac_calls);
+}
+
 /* seed_mac's -1 (node_mgr_seed_mac: a zone outside 1..8) must read as
  * ERR ZONE_UNKNOWN, not ERR INVALID -- it is the same failure
  * SET NODE <z> NAME already reports for an unknown zone. */
@@ -530,6 +548,7 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_set_node_mac);
     RUN_TEST(test_set_node_mac_out_of_range);
     RUN_TEST(test_set_node_mac_bad_mac);
+    RUN_TEST(test_set_node_mac_unusable_mac_reaches_ops);
     RUN_TEST(test_set_node_mac_unknown_zone);
     RUN_TEST(test_net_rows_storage_failure);
     RUN_TEST(test_net_rows_internal_failure);

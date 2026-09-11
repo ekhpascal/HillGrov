@@ -215,6 +215,16 @@ void nmgr_enrol_handle_hb(const ring_frame_t *f) {
  * non-recursive mutex. */
 int node_mgr_seed_mac(uint8_t zone, const uint8_t mac[6]) {
     if (zone < 1 || zone > HG_MAX_ZONES || !mac) return -1;
+    /* The CLI's ARG_MAC only checks the FORMAT, so 00:00:00:00:00:00 and
+     * ff:ff:ff:ff:ff:ff arrive here intact. Neither can ever be a board's
+     * station address, and both would be actively harmful: all-zero is what an
+     * empty ztab row holds (ztab_find_mac would then match free rows), and a
+     * group address (bit 0 of the first octet -- broadcast included) would
+     * reserve the id for a MAC no heartbeat can carry. */
+    if (mac[0] & 1) return -1;
+    int nonzero = 0;
+    for (int i = 0; i < 6; i++) nonzero |= mac[i];
+    if (!nonzero) return -1;
     nmgr_lock();
     int slot = ztab_find_mac(&s_ztab, mac);
     if (slot >= 0 && s_ztab.e[slot].id == zone) { nmgr_unlock(); return 0; }   /* already so */

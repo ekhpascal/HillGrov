@@ -31,9 +31,12 @@ typedef struct {
    NULL for a zone or kind out of range. */
 nmgr_cache_t *nmgr_cfg_cache(uint8_t zone, uint8_t kind);
 
-/* A transfer completed: the cached identity for this zone has just changed, so
-   any terminal-failure latch on it is stale. */
-void nmgr_cfg_note_synced(uint8_t zone);
+/* A transfer of this plane completed: its cached identity has just changed, so
+   a terminal-failure latch on THAT plane is stale (and GET NODE's CfgSync goes
+   back to OK). A latch on the other plane is left alone -- since the CFG latch
+   started gating pulls, an HW pull succeeding would otherwise keep clearing a
+   CFG failure the zone is still going to reject. */
+void nmgr_cfg_note_synced(uint8_t zone, uint8_t kind);
 
 /* A transfer gave up: emits CFG_SYNC_FAILED and degrades the node; terminal
    (an ACK token that is never retried -- CFG_VERSION / INVALID_FIELD) also

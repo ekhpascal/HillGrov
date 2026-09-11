@@ -67,8 +67,13 @@ int  node_mgr_push_cfg(uint8_t zone);
  *   keeps re-pushing until the zone matches; a zone that REFUSES the config
  *   (CFG_VERSION / INVALID_FIELD) is reported through
  *   NOTIFY NODE <z> CFG_SYNC_FAILED and node_mgr_cfg_sync_failed(), not
- *   through this return value. -1 = zone unknown or not ONLINE, -2 = a write
- *   or a transfer for this zone is already in flight (answer HTTP 409).
+ *   through this return value. The one case where a 0 does NOT lead to a push
+ *   is a CLEAR NODE or node_mgr_seed_mac for that id landing before the tick
+ *   consumes the request: retiring or re-homing an id drops any write queued
+ *   for it, because the board that answers next is a different one.
+ *   -1 = no such zone (out of range, or no row), -3 = the zone is known but
+ *   not ONLINE, -2 = a write or a transfer for this zone is already in flight.
+ *   Task 12 maps -1 to 404 and -2/-3 to 409.
  * busy: 1 while that is the case -- poll it to know when a save has landed. */
 int  node_mgr_cfg_get(uint8_t zone, hg_zone_cfg_t *cfg, hg_zone_hw_t *hw,
                       uint32_t *cfg_gen, uint32_t *hw_gen);
@@ -83,7 +88,8 @@ int  node_mgr_cfg_busy(uint8_t zone);
  * before is released. Persisted immediately; the RAM row is reset to
  * "assigned, never heard" and the id's cached config is dropped, since the
  * board answering on it is now a different one. 0 = stored (or already the
- * case), -1 = zone out of 1..8. */
+ * case), -1 = zone out of 1..8, or a MAC no board can ever heartbeat with
+ * (all-zero, or a group address -- broadcast and multicast, mac[0] bit 0). */
 int  node_mgr_seed_mac(uint8_t zone, const uint8_t mac[6]);
 
 int  node_mgr_time_valid(void);                                 /* for GET RING display */

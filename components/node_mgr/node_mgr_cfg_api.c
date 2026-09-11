@@ -12,18 +12,21 @@
  *
  *   - get COPIES under nmgr_lock() and unwraps afterwards, never handing out a
  *     pointer into the live cache;
- *   - set does not push. It parks the payload in the decision half's request
- *     slot (nmgr_cfg_set_req) for the 1 Hz tick to carry out, the same shape
+ *   - set does not push. It parks the payload in the inbox below for the 1 Hz
+ *     tick to carry out (nmgr_cfg_take_set_req), the same shape
  *     node_mgr_push_cfg and node_mgr_clear already use -- nothing outside the
  *     node_mgr task may touch the transfer slot, the caches or the ring
  *     (important #3).
  *
- * Read-side honesty: the caches and the transfer slot are node_mgr-task-owned
- * and their writer does not take nmgr_lock() either, so taking it here is a
- * rendezvous, not mutual exclusion -- the same tolerance node_mgr_get and
- * node_mgr_cfg_sync_failed document. What a caller can observe is a value one
- * tick stale, never a torn hg_zone_cfg_t, because the unwrap works on a copy
- * taken in one go. */
+ * Locking, precisely: nmgr_lock() here IS mutual exclusion against the four
+ * cache writers, which all take it for their blob/gen/crc/valid update
+ * (accept_pull, accept_push, start_set_req, nmgr_cfg_invalidate) -- so a copy
+ * taken here is always a whole, self-consistent envelope, at worst one tick
+ * stale. The envelope crc the unwrap checks is a second line of defence (a
+ * writer that forgets the lock, or memory corruption), not an unreachable
+ * branch. What the lock does NOT cover is the transfer slot read by
+ * nmgr_cx_busy, which stays node_mgr-task-owned and best-effort (see
+ * node_mgr_cfg_busy's own comment). */
 
 /* The write inbox: one slot PER ZONE, rather than the single
  * last-caller-wins slot node_mgr_push_cfg uses, because this request carries
@@ -83,7 +86,10 @@ int node_mgr_cfg_get(uint8_t zone, hg_zone_cfg_t *cfg, hg_zone_hw_t *hw,
     if (!valid) return -1;
     hg_blob_rc_t rc = hg_blob_unwrap(HG_MAGIC_CFG, HG_CFG_VER, HG_CFG_VER_MIN, blob, sizeof blob,
                                       cfg, (uint16_t)sizeof *cfg, &gen);
-    if (rc != HG_BLOB_OK && rc != HG_BLOB_MIGRATED) return -1;   /* defensive: we wrapped it ourselves */
+    /* Should not fire -- we wrapped these bytes ourselves and copied them under
+       the lock -- so a failure here means a writer skipped the lock or memory
+       was corrupted. Refuse rather than hand the caller a half-valid config. */
+    if (rc != HG_BLOB_OK && rc != HG_BLOB_MIGRATED) return -1;
     if (cfg_gen) *cfg_gen = gen;
 
     if (hw_gen) *hw_gen = 0;
@@ -115,17 +121,22 @@ int node_mgr_cfg_busy(uint8_t zone) {
     return (nmgr_cfg_req_pending(zone) || nmgr_cx_busy(zone)) ? 1 : 0;
 }
 
-/* 0 = queued for the tick, -1 = zone unknown or not ONLINE, -2 = a write or a
- * transfer for this zone is already in flight (HTTP 409). Asynchronous by
- * design: the caller is told "accepted", and NOTIFY NODE <z> CFG_SYNC_FAILED /
- * node_mgr_cfg_sync_failed report a zone that then refused it. */
+/* 0 = queued for the tick, -1 = no such zone (out of range, or no row), -3 =
+ * the zone is known but not ONLINE, -2 = a write or a transfer for this zone is
+ * already in flight. The -1/-3 split is for Task 12: 404 for a zone that does
+ * not exist, 409 for one that does but cannot be written right now.
+ * Asynchronous by design: the caller is told "accepted", and
+ * NOTIFY NODE <z> CFG_SYNC_FAILED / node_mgr_cfg_sync_failed report a zone
+ * that then refused it. */
 int node_mgr_cfg_set(uint8_t zone, const hg_zone_cfg_t *cfg) {
     if (zone < 1 || zone > HG_MAX_ZONES || !cfg) return -1;
     nmgr_lock();
     const hg_node_t *nd = nmgr_node_by_id(zone);
-    int ok = nd && nd->used && nd->health == NODE_H_ONLINE;
+    int used   = nd && nd->used;
+    int online = used && nd->health == NODE_H_ONLINE;
     nmgr_unlock();
-    if (!ok) return -1;
+    if (!used) return -1;
+    if (!online) return -3;
     if (nmgr_cx_busy(zone)) return -2;
     int rc = -2;
     nmgr_lock();

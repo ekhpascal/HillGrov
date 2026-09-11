@@ -103,17 +103,31 @@ static void accept_pull(void) {
      * CFG_VERSION token a zone answers a push with: it latches the (heartbeat,
      * cache) identity frozen at start_pull, so the reconciler stops re-pulling
      * that zone until its config or ours changes. The remaining unwrap errors
-     * (short/magic/length/crc, i.e. a mangled transfer) stay retryable. */
+     * (short/magic/length/crc, i.e. a mangled transfer) stay retryable.
+     *
+     * Read hg_blob_unwrap's order before trusting this to catch every newer
+     * zone: magic -> LENGTH -> crc -> version. So a newer layout that GREW the
+     * payload trips E_LENGTH first and is (wrongly, but harmlessly) retried
+     * four times before failing non-terminally with a 30 s cooldown; only a
+     * same-size-or-smaller payload at a higher version reaches E_VERSION_NEWER.
+     * That order is the right trade anyway -- the version field is not worth
+     * believing until the crc says the bytes are intact, so peeking at it
+     * ourselves on an unvalidated frame would turn a corrupted transfer into a
+     * permanent latch. */
     if (rc == HG_BLOB_E_VERSION_NEWER) { fail_or_retry(0, 1); return; }
     if (rc != HG_BLOB_OK && rc != HG_BLOB_MIGRATED) { fail_or_retry(0, 0); return; }
 
     /* Re-wrap canonically so the cache always matches cache_payload_len(kind)
-     * even when the zone's own wire envelope was an older MIGRATED layout. */
+     * even when the zone's own wire envelope was an older MIGRATED layout.
+     * Under nmgr_lock(): node_mgr_cfg_get copies this blob from a foreign task
+     * (httpd) and must not see it half-written. */
+    nmgr_lock();
     hg_blob_wrap(magic, ver, gen, tmp, (uint16_t)plen, c->blob, sizeof c->blob);
     c->gen   = (kind == 1) ? gen : 0;   /* ruling #7: HW carries no gen concept anywhere */
     c->crc   = hg_crc32(0, c->blob + HG_BLOB_HDR_LEN, plen);
     c->valid = 1;
-    nmgr_cfg_note_synced(zone);
+    nmgr_unlock();
+    nmgr_cfg_note_synced(zone, kind);   /* takes the lock itself -- not nested here */
     memset(&s_cx, 0, sizeof s_cx);
     ring_casm_init(&s_casm);
 }
@@ -123,11 +137,23 @@ static void start_push(uint8_t zone, uint32_t gen, uint8_t attempt,
     nmgr_cache_t *c = nmgr_cfg_cache(zone, 1);
     if (!c) return;                                    /* defensive: zone validated upstream */
     hg_zone_cfg_t work;
-    memcpy(&work, c->blob + HG_BLOB_HDR_LEN, sizeof work);
+    nmgr_lock();
+    memcpy(&work, c->blob + HG_BLOB_HDR_LEN, sizeof work);   /* a torn read here would push garbage */
+    nmgr_unlock();
     work.generation = gen;                  /* identity contract (ruling #4): embedded gen ... */
     work.source = HG_SRC_MASTER;            /* ... and source stamped before wrapping */
     hg_blob_wrap(HG_MAGIC_CFG, HG_CFG_VER, gen, &work, (uint16_t)sizeof work,
                   s_push_wire, sizeof s_push_wire);
+
+    /* Claim the slot BEFORE the burst goes out: the chunks are several
+     * synchronous sends, and node_mgr_cfg_busy (read from httpd) must not see
+     * this zone idle mid-burst and accept a second write for it. trk_seq is
+     * cleared with it so the on_ev seq check cannot match a stale one while
+     * the state says PUSH_COMMIT -- no event can be dispatched inside this
+     * function anyway (one task), but the invariant should hold on its own. */
+    s_cx.zone = zone; s_cx.kind = 1; s_cx.attempt = attempt; s_cx.push_gen = gen;
+    s_cx.hb_gen = hb_gen; s_cx.hb_crc = hb_crc; s_cx.cache_gen = cache_gen; s_cx.cache_crc = cache_crc;
+    s_cx.trk_seq = 0; s_cx.state = CX_PUSH_COMMIT;
 
     int count = ring_cfg_chunk_count(sizeof(hg_zone_cfg_t) + HG_BLOB_HDR_LEN);
     for (int i = 0; i < count; i++) {
@@ -137,9 +163,6 @@ static void start_push(uint8_t zone, uint32_t gen, uint8_t attempt,
         if (n < 0) break;
         nmgr_send_raw(zone, RING_T_CFG_CHUNK, payload, (uint8_t)n);   /* unACKed, back-to-back (spec §2.9) */
     }
-
-    s_cx.zone = zone; s_cx.kind = 1; s_cx.attempt = attempt; s_cx.push_gen = gen;
-    s_cx.hb_gen = hb_gen; s_cx.hb_crc = hb_crc; s_cx.cache_gen = cache_gen; s_cx.cache_crc = cache_crc;
 
     uint8_t commit[5] = { 1, (uint8_t)gen, (uint8_t)(gen >> 8), (uint8_t)(gen >> 16), (uint8_t)(gen >> 24) };
     uint16_t seq;
@@ -153,11 +176,13 @@ static void start_push(uint8_t zone, uint32_t gen, uint8_t attempt,
 static void accept_push(void) {
     nmgr_cache_t *c = nmgr_cfg_cache(s_cx.zone, 1);
     if (!c) { memset(&s_cx, 0, sizeof s_cx); return; }
+    nmgr_lock();                                    /* as in accept_pull: cfg_get copies this */
     memcpy(c->blob, s_push_wire, sizeof c->blob);   /* adopt exactly the bytes the zone ACKed */
     c->gen   = s_cx.push_gen;
     c->crc   = hg_crc32(0, c->blob + HG_BLOB_HDR_LEN, sizeof(hg_zone_cfg_t));   /* ruling #4: recompute post-ACK */
     c->valid = 1;
-    nmgr_cfg_note_synced(s_cx.zone);
+    nmgr_unlock();
+    nmgr_cfg_note_synced(s_cx.zone, 1);
     memset(&s_cx, 0, sizeof s_cx);
 }
 

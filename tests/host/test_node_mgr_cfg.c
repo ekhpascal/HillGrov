@@ -252,9 +252,80 @@ static void test_cfg_set_request_pushes_new_config(void) {
     TEST_ASSERT_EQUAL_UINT32(6, rbgen);
     TEST_ASSERT_EQUAL_MEMORY(&want, &rb, sizeof want);
 
-    TEST_ASSERT_EQUAL_INT(-1, node_mgr_cfg_set(5, &edited));    /* zone unknown */
+    TEST_ASSERT_EQUAL_INT(-1, node_mgr_cfg_set(5, &edited));    /* no such zone -> 404 */
+    TEST_ASSERT_EQUAL_INT(-1, node_mgr_cfg_set(9, &edited));
     g_nmgr.tab[1].health = NODE_H_OFFLINE;
-    TEST_ASSERT_EQUAL_INT(-1, node_mgr_cfg_set(2, &edited));    /* not ONLINE */
+    TEST_ASSERT_EQUAL_INT(-3, node_mgr_cfg_set(2, &edited));    /* known, not ONLINE -> 409 */
+}
+
+/* A write queued while ANOTHER zone's transfer holds the single slot waits in
+   its inbox instead of being dropped -- the difference between this and
+   node_mgr_push_cfg, whose request the tick discards in the same situation.
+   (A write for the zone that is mid-transfer is refused with -2 up front, so
+   the pending case can only arise across zones.) */
+static void test_set_request_survives_another_zones_transfer(void) {
+    hg_zone_cfg_t c; hg_defaults_cfg(&c); c.generation = 5;
+    hg_zone_hw_t h; hg_defaults_hw(&h);
+    uint32_t ccrc = seed_cfg(2, &c, 5);
+    uint32_t hcrc = seed_hw(2, &h);
+    fnm_node(2, 5, ccrc, hcrc);                  /* zone 2: in sync, writable */
+    fnm_node(3, 3, hg_crc32(0, &c, sizeof c), hcrc);   /* zone 3: needs an adopt */
+
+    hb(3); tick();                               /* zone 3's CFG_GET holds the slot */
+    TEST_ASSERT_EQUAL_INT(1, g_nmgr.n_sub);
+    TEST_ASSERT_EQUAL_UINT8(RING_T_CFG_GET, g_nmgr.sub[0].type);
+    TEST_ASSERT_EQUAL_UINT8(3, g_nmgr.sub[0].dst);
+
+    TEST_ASSERT_EQUAL_INT(0, node_mgr_cfg_set(2, &c));
+    fake_clock_add(1000); hb(2); tick();
+    TEST_ASSERT_EQUAL_INT(0, g_nmgr.n_raw);              /* nothing pushed ... */
+    TEST_ASSERT_EQUAL_INT(1, g_nmgr.n_sub);
+    TEST_ASSERT_EQUAL_INT(1, nmgr_cfg_req_pending(2));   /* ... and still queued */
+    TEST_ASSERT_EQUAL_INT(1, node_mgr_cfg_busy(2));
+
+    ack_ok(g_nmgr.sub[0].seq);                   /* let zone 3's pull finish */
+    uint8_t blob[CFG_BLOB_LEN];
+    size_t bl = hg_blob_wrap(HG_MAGIC_CFG, HG_CFG_VER, 3, &c, (uint16_t)sizeof c, blob, sizeof blob);
+    feed_chunks(3, 1, 3, blob, bl);
+
+    fake_clock_add(1000); tick();
+    TEST_ASSERT_EQUAL_INT(0, nmgr_cfg_req_pending(2));
+    TEST_ASSERT_EQUAL_INT(2, g_nmgr.n_sub);
+    TEST_ASSERT_EQUAL_UINT8(RING_T_CFG_COMMIT, g_nmgr.sub[1].type);
+    TEST_ASSERT_EQUAL_UINT8(2, g_nmgr.sub[1].dst);
+    TEST_ASSERT_EQUAL_UINT32(6, le32(g_nmgr.sub[1].payload + 1));
+}
+
+/* A terminal CFG latch parks the CFG plane only: the HW envelope is a separate
+   blob with its own version, so the zone's hardware page must still fill in. */
+static void test_cfg_latch_does_not_block_the_hw_plane(void) {
+    hg_zone_cfg_t c; hg_defaults_cfg(&c); c.generation = 3;
+    hg_zone_hw_t h; hg_defaults_hw(&h); h.shelf_count = 3;
+    uint32_t hcrc = hg_crc32(0, &h, sizeof h);
+    fnm_node(2, 3, hg_crc32(0, &c, sizeof c), hcrc);
+
+    hb(2); tick();                               /* CFG pull ... */
+    ack_ok(last_seq());
+    uint8_t blob[CFG_BLOB_LEN];
+    size_t bl = hg_blob_wrap(HG_MAGIC_CFG, HG_CFG_VER + 1, 3, &c, (uint16_t)sizeof c, blob, sizeof blob);
+    feed_chunks(2, 1, 3, blob, bl);              /* ... fails terminally */
+    TEST_ASSERT_EQUAL_INT(1, node_mgr_cfg_sync_failed(2));
+
+    second(2);                                   /* next decision: the HW plane */
+    TEST_ASSERT_EQUAL_INT(2, g_nmgr.n_sub);
+    TEST_ASSERT_EQUAL_UINT8(RING_T_CFG_GET, g_nmgr.sub[1].type);
+    TEST_ASSERT_EQUAL_UINT8(2, g_nmgr.sub[1].payload[0]);   /* kind 2 = HW */
+    ack_ok(g_nmgr.sub[1].seq);
+    bl = hg_blob_wrap(HG_MAGIC_HW, HG_HW_VER, 0, &h, (uint16_t)sizeof h, blob, sizeof blob);
+    feed_chunks(2, 2, 0, blob, bl);
+    TEST_ASSERT_EQUAL_UINT32(hcrc, nmgr_cfg_cache(2, 2)->crc);
+
+    /* both planes settled as far as they can go: no cfg cache, so no push */
+    second(2);
+    second(2);
+    TEST_ASSERT_EQUAL_INT(2, g_nmgr.n_sub);
+    TEST_ASSERT_EQUAL_INT(0, g_nmgr.n_raw);
+    TEST_ASSERT_EQUAL_INT(-1, node_mgr_cfg_get(2, &c, &h, NULL, NULL));   /* cfg still unreadable */
 }
 
 static void test_cfg_get_returns_unwrapped_copy(void) {
@@ -290,7 +361,9 @@ static void test_cfg_get_returns_unwrapped_copy(void) {
 static void test_version_newer_pull_is_terminal(void) {
     hg_zone_cfg_t c; hg_defaults_cfg(&c); c.generation = 3;
     hg_zone_hw_t h; hg_defaults_hw(&h);
-    fnm_node(2, 3, hg_crc32(0, &c, sizeof c), hg_crc32(0, &h, sizeof h));
+    /* HW already adopted, so the CFG latch is the only thing under test here
+       (test_cfg_latch_does_not_block_the_hw_plane covers the other plane). */
+    fnm_node(2, 3, hg_crc32(0, &c, sizeof c), seed_hw(2, &h));
 
     hb(2); tick();
     ack_ok(last_seq());
@@ -415,8 +488,10 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_adopt_pulls_when_no_cache);
     RUN_TEST(test_zone_console_edit_is_reverted);
     RUN_TEST(test_cfg_set_request_pushes_new_config);
+    RUN_TEST(test_set_request_survives_another_zones_transfer);
     RUN_TEST(test_cfg_get_returns_unwrapped_copy);
     RUN_TEST(test_version_newer_pull_is_terminal);
+    RUN_TEST(test_cfg_latch_does_not_block_the_hw_plane);
     RUN_TEST(test_push_cfg_version_ack_is_terminal);
     RUN_TEST(test_round_robin_alternates);
     RUN_TEST(test_cooldown_after_nonterminal_failure);

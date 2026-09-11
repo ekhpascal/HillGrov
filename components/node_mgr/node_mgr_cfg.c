@@ -62,9 +62,16 @@ nmgr_cache_t *nmgr_cfg_cache(uint8_t zone, uint8_t kind) {
     return NULL;
 }
 
-void nmgr_cfg_note_synced(uint8_t zone) {
+void nmgr_cfg_note_synced(uint8_t zone, uint8_t kind) {
     if (zone < 1 || zone > HG_MAX_ZONES) return;
-    memset(&s_latch[zone - 1], 0, sizeof s_latch[0]);   /* cache identity changed: any old latch is stale */
+    /* This plane's cache identity just changed, so a latch on it can no longer
+     * match anyway -- clearing it is what puts GET NODE's CfgSync back to OK.
+     * The other plane's latch stands (see the seam header). */
+    if (s_latch[zone - 1].kind == kind) {
+        nmgr_lock();
+        memset(&s_latch[zone - 1], 0, sizeof s_latch[0]);
+        nmgr_unlock();
+    }
     /* A completed transfer is a successful master->zone exchange, so the
      * consecutive-failure count starts over -- including the 3 this file's own
      * note_failed sets to force DEGRADED. Heartbeats no longer clear it (see
@@ -108,27 +115,44 @@ static int latched_on(uint8_t zone, uint8_t kind, uint32_t hb_gen, uint32_t hb_c
            L->cache_gen == cache_gen && L->cache_crc == cache_crc;
 }
 
-/* one reconciliation decision per fresh-HB'd, reachable zone -- spec §4.4 */
+/* The generation a push carries: one past whichever side is ahead, so the
+ * zone's own gen guard always accepts it (§4.4). *hb_gen / *hb_crc come back
+ * with it because every push also has to freeze that heartbeat identity for
+ * the latch; a row that is gone or never heard from counts as gen 0. */
+static uint32_t push_gen_for(uint8_t zone, const nmgr_cache_t *c,
+                              uint32_t *hb_gen, uint32_t *hb_crc) {
+    const hg_node_t *nd = nmgr_node_by_id(zone);
+    uint32_t hg = (nd && nd->used) ? nd->hb.cfg_gen : 0;
+    uint32_t hc = (nd && nd->used) ? nd->hb.cfg_crc : 0;
+    if (hb_gen) *hb_gen = hg;
+    if (hb_crc) *hb_crc = hc;
+    return (hg > c->gen ? hg : c->gen) + 1;
+}
+
+/* one reconciliation decision per fresh-HB'd, reachable zone -- spec §4.4.
+ * Each plane's latch parks only THAT plane: a CFG envelope this master cannot
+ * parse says nothing about the zone's HW envelope (a separate blob, its own
+ * version), so a terminal CFG failure falls through to the HW branch rather
+ * than writing the whole zone off. */
 static int try_start(uint8_t zone, const hg_node_t *nd) {
     nmgr_cache_t *cfg = &s_cfg[zone - 1];
     nmgr_cache_t *hw  = &s_hw[zone - 1];
-    if (!cfg->valid) {
-        if (latched_on(zone, 1, nd->hb.cfg_gen, nd->hb.cfg_crc, cfg->gen, cfg->crc)) return 0;
+    if (!cfg->valid && !latched_on(zone, 1, nd->hb.cfg_gen, nd->hb.cfg_crc, cfg->gen, cfg->crc)) {
         nmgr_cx_pull(zone, 1, nd->hb.cfg_gen, nd->hb.cfg_crc, cfg->gen, cfg->crc);
         return 1;
     }
-    if (!hw->valid || nd->hb.hw_crc != hw->crc) {
-        if (latched_on(zone, 2, 0, nd->hb.hw_crc, 0, hw->crc)) return 0;
+    if ((!hw->valid || nd->hb.hw_crc != hw->crc) && !latched_on(zone, 2, 0, nd->hb.hw_crc, 0, hw->crc)) {
         nmgr_cx_pull(zone, 2, 0, nd->hb.hw_crc, 0, hw->crc);
         return 1;
     }
+    if (!cfg->valid) return 0;   /* CFG latched: there is nothing to push FROM */
 
     if (nd->hb.cfg_gen == cfg->gen && nd->hb.cfg_crc == cfg->crc) return 0;   /* in sync */
 
     if (latched_on(zone, 1, nd->hb.cfg_gen, nd->hb.cfg_crc, cfg->gen, cfg->crc))
         return 0;   /* this exact identity already failed terminally -- wait for a change */
 
-    uint32_t new_gen = (nd->hb.cfg_gen > cfg->gen ? nd->hb.cfg_gen : cfg->gen) + 1;
+    uint32_t new_gen = push_gen_for(zone, cfg, NULL, NULL);
     if (nd->hb.cfg_gen == cfg->gen)
         notify_emit_as(zone, NTF_NODE, zone, "CFG_FORK");
     else if (nd->hb.cfg_gen > cfg->gen)
@@ -154,11 +178,13 @@ void nmgr_cfg_init(void) {
  * the zone, whose frozen identity is now stale. node_mgr task only. */
 void nmgr_cfg_invalidate(uint8_t zone) {
     if (zone < 1 || zone > HG_MAX_ZONES) return;
+    nmgr_lock();                      /* exclusion against node_mgr_cfg_get / _sync_failed */
     memset(&s_cfg[zone - 1], 0, sizeof s_cfg[0]);
     memset(&s_hw[zone - 1], 0, sizeof s_hw[0]);
     memset(&s_latch[zone - 1], 0, sizeof s_latch[0]);
+    nmgr_unlock();
     s_cooldown_until[zone - 1] = 0;   /* adopt on the NEXT heartbeat, not after the cooldown */
-    nmgr_cx_abort(zone);
+    nmgr_cx_abort(zone);              /* may nmgr_cancel() -> the tracker's own mutex, so not under ours */
 }
 
 /* node_mgr task only -- see node_mgr_internal.h. Retiring an id additionally
@@ -194,21 +220,21 @@ void nmgr_cfg_note_fresh_hb(uint8_t zone) {
  * identity, so a config the zone refuses is attempted once, not forever. */
 static void start_set_req(uint8_t zone, const hg_zone_cfg_t *want) {
     nmgr_cache_t *c = &s_cfg[zone - 1];
-    const hg_node_t *nd = nmgr_node_by_id(zone);
-    uint32_t hb_gen = (nd && nd->used) ? nd->hb.cfg_gen : 0;
-    uint32_t hb_crc = (nd && nd->used) ? nd->hb.cfg_crc : 0;
-    uint32_t new_gen = (hb_gen > c->gen ? hb_gen : c->gen) + 1;
+    uint32_t hb_gen, hb_crc;
+    uint32_t new_gen = push_gen_for(zone, c, &hb_gen, &hb_crc);
 
     hg_zone_cfg_t work = *want;
     work.generation = new_gen;
     work.source     = HG_SRC_MASTER;
+    nmgr_lock();                      /* exclusion against node_mgr_cfg_get's copy */
     hg_blob_wrap(HG_MAGIC_CFG, HG_CFG_VER, new_gen, &work, (uint16_t)sizeof work,
                   c->blob, sizeof c->blob);
     c->gen   = new_gen;
     c->crc   = hg_crc32(0, c->blob + HG_BLOB_HDR_LEN, sizeof work);
     c->valid = 1;
+    nmgr_unlock();
     s_cooldown_until[zone - 1] = 0;   /* an operator write waits for no cooldown */
-    nmgr_cx_push(zone, new_gen, hb_gen, hb_crc, c->gen, c->crc);
+    nmgr_cx_push(zone, new_gen, hb_gen, hb_crc, c->gen, c->crc);   /* sends: never under the lock */
 }
 
 void nmgr_cfg_tick_1s(uint32_t now) {
@@ -238,11 +264,9 @@ void nmgr_cfg_tick_1s(uint32_t now) {
      * *automatic* reconciler); re-checks cache validity from this task,
      * since the public API's own check was an unlocked, best-effort read. */
     if (push_zone && s_cfg[push_zone - 1].valid) {
-        hg_node_t *nd = nmgr_node_by_id(push_zone);
         nmgr_cache_t *cfg = &s_cfg[push_zone - 1];
-        uint32_t hb_gen = (nd && nd->used) ? nd->hb.cfg_gen : 0;
-        uint32_t hb_crc = (nd && nd->used) ? nd->hb.cfg_crc : 0;
-        uint32_t new_gen = (hb_gen > cfg->gen ? hb_gen : cfg->gen) + 1;
+        uint32_t hb_gen, hb_crc;
+        uint32_t new_gen = push_gen_for(push_zone, cfg, &hb_gen, &hb_crc);
         nmgr_cx_push(push_zone, new_gen, hb_gen, hb_crc, cfg->gen, cfg->crc);
         return;
     }
