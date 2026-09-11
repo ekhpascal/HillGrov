@@ -11,8 +11,14 @@
  * the real fleet sequencer -- these rows don't change. */
 
 static const node_ops_t *s_ops;
+static const net_ops_t  *s_net;
 
-void master_cmds_init(const node_ops_t *ops) { s_ops = ops; }
+void master_cmds_init(const node_ops_t *ops) { master_cmds_init2(ops, NULL); }
+
+void master_cmds_init2(const node_ops_t *ops, const net_ops_t *net) {
+    s_ops = ops;
+    s_net = net;
+}
 
 /* ---- shared formatting ---- */
 
@@ -180,6 +186,109 @@ static int h_set_fw_abort(cmd_req_t *q, char *r, int l) {
     return cmd_okf(r, l, "FW ABORT");
 }
 
+/* ---- NET/TIME rows (Task 8) over net_ops_t ----
+ *
+ * Every handler here starts with the same NULL guard: master_cmds_init()
+ * (the SP3 entry point) installs no net ops, and a board that took that
+ * path must answer ERR INTERNAL rather than fault in a CLI task. */
+#define NEED_NET() do { if (!s_net) return cmd_err(r, l, "INTERNAL"); } while (0)
+
+/* The CLI tokenizer splits on whitespace and has no way to spell an empty
+ * token, so "-" is the documented stand-in for "nothing here" in both
+ * credential slots. It matters on both: "SET WIFI STA <ssid> -" is an open
+ * network, and "SET WIFI STA - -" is the only way to UNconfigure the STA
+ * again and stop the master reaching for a house Wi-Fi that has gone away.
+ * On the AP row the same "-" is accepted syntactically and then fails
+ * hg_mcfg_validate (ap_ssid 1..32, ap_pass 8..63) as ERR INVALID -- the
+ * right answer: WPA2 has no passwordless mode and the AP is never optional.
+ *
+ * Disclosed consequence rather than a worked-around one: an SSID or password
+ * that is literally "-" cannot be set from the CLI. The web UI (Task 12)
+ * can, since it passes JSON strings through untouched. */
+static const char *dash_is_empty(const char *s) {
+    return (s[0] == '-' && s[1] == '\0') ? "" : s;
+}
+
+/* A field that is empty prints as "-" so every GET WIFI line has a value and
+ * the column layout never collapses. */
+static const char *or_dash(const char *s) { return s[0] ? s : "-"; }
+
+/* ---- GET WIFI ---- */
+
+static int h_get_wifi(cmd_req_t *q, char *r, int l) {
+    (void)q;
+    NEED_NET();
+    wifi_status_t w;
+    memset(&w, 0, sizeof w);
+    s_net->wifi_status(&w);
+    cmd_okf(r, l, "WIFI STA %s %s AP %s %u",
+            w.sta_up ? "UP" : "DOWN", or_dash(w.sta_ip),
+            or_dash(w.ap_ssid), (unsigned)w.ap_clients);
+    cmd_linef(r, l, "  StaSsid : %s", or_dash(w.sta_ssid));
+    cmd_linef(r, l, "  StaReason : %s", or_dash(w.sta_reason));
+    /* RSSI only means something while associated; a bare "0" while down
+     * reads like a perfect signal, so it prints as "-" instead. */
+    if (w.sta_up) cmd_linef(r, l, "  Rssi : %d", (int)w.rssi);
+    else          cmd_linef(r, l, "  Rssi : -");
+    return 0;
+}
+
+/* ---- SET WIFI STA <ssid> <pass> / SET WIFI AP <ssid> <pass> ---- */
+
+static int h_set_wifi_sta(cmd_req_t *q, char *r, int l) {
+    NEED_NET();
+    if (s_net->set_sta(dash_is_empty(q->tok[0]), dash_is_empty(q->tok[1])) != 0)
+        return cmd_err(r, l, "INVALID");
+    /* Echoes the token as typed, so clearing the STA reads back as
+     * "OK WIFI STA -". */
+    return cmd_okf(r, l, "WIFI STA %s", q->tok[0]);
+}
+
+static int h_set_wifi_ap(cmd_req_t *q, char *r, int l) {
+    NEED_NET();
+    if (s_net->set_ap(dash_is_empty(q->tok[0]), dash_is_empty(q->tok[1])) != 0)
+        return cmd_err(r, l, "INVALID");
+    return cmd_okf(r, l, "WIFI AP %s", q->tok[0]);
+}
+
+/* ---- SET WEB PASSWORD <pw> ----
+ * The new password is deliberately NOT echoed back. */
+
+static int h_set_web_password(cmd_req_t *q, char *r, int l) {
+    NEED_NET();
+    if (s_net->set_web_password(q->tok[0]) != 0) return cmd_err(r, l, "INVALID");
+    return cmd_okf(r, l, "WEB PASSWORD");
+}
+
+/* ---- GET TZ / SET TZ <posix> ----
+ * SET validates through mcfg_commit's installed tz_check (time_core's
+ * tz_parse), so an unparseable POSIX string comes back as -1 -> ERR INVALID. */
+
+static int h_tz(cmd_req_t *q, char *r, int l) {
+    NEED_NET();
+    if (q->verb == CMDV_GET) {
+        hg_mcfg_t m;
+        s_net->get_mcfg(&m);
+        return cmd_okf(r, l, "TZ %s", m.tz);
+    }
+    if (s_net->set_tz(q->tok[0]) != 0) return cmd_err(r, l, "INVALID");
+    return cmd_okf(r, l, "TZ %s", q->tok[0]);
+}
+
+/* ---- SET NODE <z> MAC <mac> (split two-word noun, same shape as NAME) ----
+ * Pre-seeds a zone id -> MAC binding so a replacement board is adopted into
+ * the right zone the moment it enrols, instead of landing in GET UNASSIGNED.
+ * ops rc -1 is an unknown/unusable zone, reported exactly like SET NODE <z>
+ * NAME's own failure. */
+
+static int h_set_node_mac(cmd_req_t *q, char *r, int l) {
+    NEED_NET();
+    uint8_t zone = (uint8_t)q->val[0];
+    if (s_net->seed_mac(zone, q->mac) != 0) return cmd_err(r, l, "ZONE_UNKNOWN");
+    char mac[18]; mac_str(q->mac, mac);
+    return cmd_okf(r, l, "NODE %d MAC %s", (int)zone, mac);
+}
+
 /* ---- row table ---- */
 
 static const cmd_arg_t A_ZONE[]       = { { "zone", ARG_INT, 1, HG_MAX_ZONES, NULL } };
@@ -187,6 +296,13 @@ static const cmd_arg_t A_NODE_NAME[]  = { { "zone", ARG_INT, 1, HG_MAX_ZONES, NU
 static const cmd_arg_t A_CLEAR_NODE[] = { { "zone", ARG_INT, 1, HG_MAX_ZONES, NULL }, { "confirm", ARG_ENUM, 0, 0, "CONFIRM" } };
 static const cmd_arg_t A_TRACE[]      = { { "mode", ARG_ENUM, 0, 1, "OFF|ON" } };
 static const cmd_arg_t A_CONF[]       = { { "confirm", ARG_ENUM, 0, 0, "CONFIRM" } };
+/* Maxima mirror hg_mcfg_validate exactly (ssid 32, pass 63, tz 47, web
+ * password 63), so an over-long value is rejected as ERR BAD_ARGS by the
+ * table before any commit is attempted. */
+static const cmd_arg_t A_WIFI_CRED[] = { { "ssid", ARG_STR, 0, 32, NULL }, { "pass", ARG_STR, 0, 63, NULL } };
+static const cmd_arg_t A_WEB_PW[]    = { { "password", ARG_STR, 0, 63, NULL } };
+static const cmd_arg_t A_TZ[]        = { { "posix", ARG_STR, 0, 47, NULL } };
+static const cmd_arg_t A_NODE_MAC[]  = { { "zone", ARG_INT, 1, HG_MAX_ZONES, NULL }, { "mac", ARG_MAC, 0, 0, NULL } };
 
 const cmd_entry_t MASTER_CMD_ROWS[] = {
   { CMDV_GET,  CMD_AREA_RING, "RING",       NULL,   NULL,         0, 0, 0, CMDF_MASTER, h_get_ring,       NULL },
@@ -200,5 +316,16 @@ const cmd_entry_t MASTER_CMD_ROWS[] = {
   { CMDV_SET,  CMD_AREA_FW,   "FW",    "ZONE",      A_ZONE,       0, 1, 1, CMDF_MASTER, h_set_fw_zone,    NULL },
   { CMDV_SET,  CMD_AREA_FW,   "FW",    "ZONES",     A_CONF,       0, 1, 1, CMDF_MASTER, h_set_fw_zones,   "fleet update, all zones" },
   { CMDV_SET,  CMD_AREA_FW,   "FW",    "ABORT",     NULL,         0, 0, 0, CMDF_MASTER, h_set_fw_abort,   NULL },
+  /* GET WIFI is GET-only and SET WIFI STA/AP are SET-only on purpose:
+   * cmd_table_check rejects a one-word row that shares noun1 AND a verb bit
+   * with a two-word row once the one-word row can take 2 args, because the
+   * two-word noun would then be ambiguous with its first argument. Splitting
+   * the verbs keeps "GET WIFI" and "SET WIFI STA ..." unambiguous. */
+  { CMDV_GET,  CMD_AREA_NET,  "WIFI",  NULL,        NULL,         0, 0, 0, CMDF_MASTER, h_get_wifi,       NULL },
+  { CMDV_SET,  CMD_AREA_NET,  "WIFI",  "STA",       A_WIFI_CRED,  0, 2, 2, CMDF_MASTER, h_set_wifi_sta,   "join house wifi; pass - = open" },
+  { CMDV_SET,  CMD_AREA_NET,  "WIFI",  "AP",        A_WIFI_CRED,  0, 2, 2, CMDF_MASTER, h_set_wifi_ap,    NULL },
+  { CMDV_SET,  CMD_AREA_NET,  "WEB",   "PASSWORD",  A_WEB_PW,     0, 1, 1, CMDF_MASTER, h_set_web_password, "web UI login, 8..63 chars" },
+  { CMDV_SET|CMDV_GET, CMD_AREA_TIME, "TZ", NULL,   A_TZ,         0, 1, 1, CMDF_MASTER, h_tz,             NULL },
+  { CMDV_SET,  CMD_AREA_RING, "NODE",  "MAC",       A_NODE_MAC,   1, 2, 2, CMDF_MASTER, h_set_node_mac,   "pre-seed a zone id to a MAC" },
 };
 const int MASTER_CMD_ROWS_N = (int)(sizeof MASTER_CMD_ROWS / sizeof MASTER_CMD_ROWS[0]);
