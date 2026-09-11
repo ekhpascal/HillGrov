@@ -31,7 +31,21 @@ void time_svc_apply_mcfg(void) {
         s_rule_valid = 0;
         ESP_LOGW(TAG, "stored TZ '%s' does not parse -- utc_offset stays 0", m->tz);
     }
+    /* Copy into our own buffer BEFORE ever handing a pointer to esp_sntp --
+     * mcfg_get() points straight into mcfg_store's active double-buffer
+     * slot, which a later mcfg_commit() can flip out from under us at any
+     * time (see mcfg_store.h's RAM contract); esp_sntp keeps whatever
+     * pointer it's given rather than copying, so pointing it at m->ntp
+     * directly would leave it referencing stale/flipped RAM. */
     snprintf(s_ntp_host, sizeof s_ntp_host, "%s", m->ntp);
+
+    /* If SNTP is already running, push the new host live so a commit that
+     * changes TIME.NTP takes effect immediately -- otherwise the change
+     * would silently wait for the next STA down/up cycle (time_svc_sta_
+     * changed) to be picked up. */
+    if (esp_sntp_enabled()) {
+        esp_sntp_setservername(0, s_ntp_host);
+    }
 }
 
 /* Runs on the SNTP/lwIP task, not the caller's -- keep this to flag-setting

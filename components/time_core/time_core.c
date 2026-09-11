@@ -38,6 +38,17 @@ static int weekday_of_days(int64_t days) {   /* 0=Sunday..6=Saturday; epoch day 
     return (int)wd;
 }
 
+/* Floor division by 86400 (divisor always positive here): C's `/` truncates
+ * toward zero, which is wrong for a negative dividend (e.g. -1 / 86400 == 0
+ * in C, but the floor -- the correct "day containing that second" -- is
+ * -1). Needed because utc + std_off_s can go negative for a large negative
+ * offset near the 1970 epoch. */
+static int64_t floor_div86400(int64_t a) {
+    int64_t q = a / 86400;
+    if (a % 86400 != 0 && a < 0) q--;
+    return q;
+}
+
 static int is_leap(int y) { return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0; }
 
 static int days_in_month(int y, int m) {
@@ -75,11 +86,13 @@ static const char *skip_name(const char *p) {
 }
 
 /* Signed hh[:mm[:ss]] -> total seconds (the sign belongs to the whole value,
- * not just hh). A bare sign or no leading digit is a parse failure. Used for
- * both the STD/DST numeric offsets (POSIX sign: value SUBTRACTED from local
- * time to get UTC) and an M-rule's /time-of-day, which is a plain signed
- * offset from local midnight -- the caller decides which meaning applies. */
-static const char *parse_hms(const char *p, int32_t *out) {
+ * not just hh). A bare sign or no leading digit is a parse failure, and so
+ * is a magnitude outside +-max_h hours -- used for both the STD/DST numeric
+ * offsets (POSIX sign: value SUBTRACTED from local time to get UTC; POSIX
+ * bounds these to +-24h) and an M-rule's /time-of-day, a plain signed offset
+ * from local midnight (POSIX bounds this to +-167h) -- the caller decides
+ * which meaning, and which bound, applies. */
+static const char *parse_hms(const char *p, int32_t max_h, int32_t *out) {
     int sign = 1;
     if (*p == '+') p++;
     else if (*p == '-') { sign = -1; p++; }
@@ -98,7 +111,9 @@ static const char *parse_hms(const char *p, int32_t *out) {
             s = strtol(p, &end, 10); p = end;
         }
     }
-    *out = (int32_t)(sign * (h * 3600 + m * 60 + s));
+    int32_t total = (int32_t)(sign * (h * 3600 + m * 60 + s));
+    if (total > max_h * 3600 || total < -max_h * 3600) return NULL;
+    *out = total;
     return p;
 }
 
@@ -118,7 +133,7 @@ static const char *parse_mrule(const char *p, uint8_t *m, uint8_t *w, uint8_t *d
     p = end;
     *m = (uint8_t)mm; *w = (uint8_t)ww; *d = (uint8_t)dd;
     if (*p == '/') {
-        p = parse_hms(p + 1, t);
+        p = parse_hms(p + 1, 167, t);
         if (!p) return NULL;
     } else {
         *t = 2 * 3600;   /* POSIX default: 02:00:00 local (time in effect before the transition) */
@@ -134,7 +149,7 @@ int tz_parse(const char *posix, tz_rule_t *out) {
     p = skip_name(p);
     if (!p) return -1;
     int32_t std_num;
-    p = parse_hms(p, &std_num);
+    p = parse_hms(p, 24, &std_num);
     if (!p) return -1;
     r.std_off_s = -std_num;   /* POSIX sign: CET-1 -> std_num=-1 -> +3600 east of UTC */
 
@@ -149,7 +164,7 @@ int tz_parse(const char *posix, tz_rule_t *out) {
     r.has_dst = 1;
     if (*p == '+' || *p == '-' || isdigit((unsigned char)*p)) {
         int32_t dst_num;
-        p = parse_hms(p, &dst_num);
+        p = parse_hms(p, 24, &dst_num);
         if (!p) return -1;
         r.dst_off_s = -dst_num;
     } else {
@@ -171,7 +186,17 @@ int32_t tz_offset_at(const tz_rule_t *r, uint32_t utc) {
     if (!r->has_dst) return r->std_off_s;
 
     int y, mo, d;
-    civil_from_days((int64_t)(utc / 86400u), &y, &mo, &d);
+    /* The Mm.w.d rules must be evaluated against the LOCAL calendar year: a
+     * late-December UTC instant can already be Jan 1 local (positive
+     * offset), or an early-January UTC instant can still be Dec 31 local
+     * (negative offset) -- using the raw UTC day picks the wrong year's
+     * transition dates in exactly that window. Shifting by the STD offset
+     * (rather than computing which of STD/DST is in effect first, which is
+     * exactly the question this year selection exists to answer) is the
+     * standard technique and is sufficient: STD and DST differ by at most a
+     * couple of hours, nowhere near enough to cross a further day boundary
+     * once already shifted onto local time. */
+    civil_from_days(floor_div86400((int64_t)utc + r->std_off_s), &y, &mo, &d);
 
     int64_t start_days = days_from_civil(y, r->sm, nth_weekday_day(y, r->sm, r->sw, r->sd));
     int64_t end_days   = days_from_civil(y, r->em, nth_weekday_day(y, r->em, r->ew, r->ed));
