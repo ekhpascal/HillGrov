@@ -25,9 +25,7 @@
  *       s_latch) and are not retried at all until an identity changes.
  * Both are per-zone and RAM-only; nmgr_cfg_invalidate clears the cooldown,
  * because a master-originated edit must be adopted on the next heartbeat and
- * not after the remainder of a cooldown. Treating E_VERSION_* on a PULL as
- * terminal is deliberately NOT here -- mixed-version fleets are SP4's
- * scenario (carry). */
+ * not after the remainder of a cooldown. */
 
 static nmgr_cache_t s_cfg[HG_MAX_ZONES];   /* kind 1, slot = id-1 */
 static nmgr_cache_t s_hw[HG_MAX_ZONES];    /* kind 2 -- display/export only, never pushed (spec §4.4) */
@@ -53,6 +51,9 @@ static uint8_t  s_rr_next = 1;                    /* rule (a): id the next scan 
  * every bit set gets consumed each pass. */
 static volatile uint8_t s_push_req_zone;    /* 0 = none pending; set under nmgr_lock() */
 static volatile uint8_t s_clear_mask;       /* bit (zone-1) set = clear pending; set under nmgr_lock() */
+/* The web UI's write requests are a third such inbox, but they carry a whole
+ * hg_zone_cfg_t payload and belong to the public API -- node_mgr_cfg_api.c
+ * owns that slot; this file only takes writes out of it (nmgr_cfg_take_set_req). */
 
 nmgr_cache_t *nmgr_cfg_cache(uint8_t zone, uint8_t kind) {
     if (zone < 1 || zone > HG_MAX_ZONES) return NULL;
@@ -92,18 +93,39 @@ void nmgr_cfg_note_failed(uint8_t zone, uint8_t kind, int terminal,
     }
 }
 
+/* Has this exact (heartbeat, cache) identity already failed terminally on this
+ * plane? Then the automatic reconciler leaves it alone until one of the two
+ * identities changes. The PULL branches consult it too (SP4): an envelope from
+ * a zone running a newer layout unwraps E_VERSION_NEWER, which retrying cannot
+ * fix, and a failed CFG pull leaves the cache invalid -- so without a gate here
+ * the adopt branch would re-pull on every heartbeat forever. HW carries no gen
+ * concept (ruling #7), so its identity is the two crcs with gen 0. */
+static int latched_on(uint8_t zone, uint8_t kind, uint32_t hb_gen, uint32_t hb_crc,
+                      uint32_t cache_gen, uint32_t cache_crc) {
+    const nmgr_latch_t *L = &s_latch[zone - 1];
+    return L->valid && L->kind == kind &&
+           L->hb_gen == hb_gen && L->hb_crc == hb_crc &&
+           L->cache_gen == cache_gen && L->cache_crc == cache_crc;
+}
+
 /* one reconciliation decision per fresh-HB'd, reachable zone -- spec §4.4 */
 static int try_start(uint8_t zone, const hg_node_t *nd) {
     nmgr_cache_t *cfg = &s_cfg[zone - 1];
     nmgr_cache_t *hw  = &s_hw[zone - 1];
-    if (!cfg->valid) { nmgr_cx_pull(zone, 1); return 1; }
-    if (!hw->valid || nd->hb.hw_crc != hw->crc) { nmgr_cx_pull(zone, 2); return 1; }
+    if (!cfg->valid) {
+        if (latched_on(zone, 1, nd->hb.cfg_gen, nd->hb.cfg_crc, cfg->gen, cfg->crc)) return 0;
+        nmgr_cx_pull(zone, 1, nd->hb.cfg_gen, nd->hb.cfg_crc, cfg->gen, cfg->crc);
+        return 1;
+    }
+    if (!hw->valid || nd->hb.hw_crc != hw->crc) {
+        if (latched_on(zone, 2, 0, nd->hb.hw_crc, 0, hw->crc)) return 0;
+        nmgr_cx_pull(zone, 2, 0, nd->hb.hw_crc, 0, hw->crc);
+        return 1;
+    }
 
     if (nd->hb.cfg_gen == cfg->gen && nd->hb.cfg_crc == cfg->crc) return 0;   /* in sync */
 
-    nmgr_latch_t *L = &s_latch[zone - 1];
-    if (L->valid && L->hb_gen == nd->hb.cfg_gen && L->hb_crc == nd->hb.cfg_crc &&
-        L->cache_gen == cfg->gen && L->cache_crc == cfg->crc)
+    if (latched_on(zone, 1, nd->hb.cfg_gen, nd->hb.cfg_crc, cfg->gen, cfg->crc))
         return 0;   /* this exact identity already failed terminally -- wait for a change */
 
     uint32_t new_gen = (nd->hb.cfg_gen > cfg->gen ? nd->hb.cfg_gen : cfg->gen) + 1;
@@ -121,6 +143,7 @@ void nmgr_cfg_init(void) {
     memset(s_latch, 0, sizeof s_latch);
     memset(s_fresh, 0, sizeof s_fresh);
     memset(s_cooldown_until, 0, sizeof s_cooldown_until);
+    for (uint8_t z = 1; z <= HG_MAX_ZONES; z++) nmgr_cfg_drop_set_req(z);
     s_rr_next = 1;
     nmgr_cx_init();
 }
@@ -146,6 +169,7 @@ void nmgr_cfg_clear(uint8_t zone) {
     if (zone < 1 || zone > HG_MAX_ZONES) return;
     nmgr_cfg_invalidate(zone);
     s_fresh[zone - 1] = 0;
+    nmgr_cfg_drop_set_req(zone);   /* the board answering on this id next is a different one */
 }
 
 void nmgr_cfg_request_clear(uint8_t zone) {
@@ -157,6 +181,34 @@ void nmgr_cfg_request_clear(uint8_t zone) {
 
 void nmgr_cfg_note_fresh_hb(uint8_t zone) {
     if (zone >= 1 && zone <= HG_MAX_ZONES) s_fresh[zone - 1] = 1;
+}
+
+/* Carry one queued write out: the master's cache BECOMES the operator's
+ * payload at gen = max(hb, cache)+1 and is pushed from there. Stamping
+ * generation/source here as well as in the transfer half's start_push keeps the
+ * cache byte-identical to the bytes the chunks will carry, which is what makes
+ * c->crc comparable to the zone's reported cfg_crc (start_push's own stamp is
+ * then idempotent). If the push fails the cache keeps the edit and the ordinary
+ * reconciler re-pushes it on a later heartbeat (hb_gen now < cache_gen) -- the
+ * point of a master-authoritative write; a terminal rejection latches the new
+ * identity, so a config the zone refuses is attempted once, not forever. */
+static void start_set_req(uint8_t zone, const hg_zone_cfg_t *want) {
+    nmgr_cache_t *c = &s_cfg[zone - 1];
+    const hg_node_t *nd = nmgr_node_by_id(zone);
+    uint32_t hb_gen = (nd && nd->used) ? nd->hb.cfg_gen : 0;
+    uint32_t hb_crc = (nd && nd->used) ? nd->hb.cfg_crc : 0;
+    uint32_t new_gen = (hb_gen > c->gen ? hb_gen : c->gen) + 1;
+
+    hg_zone_cfg_t work = *want;
+    work.generation = new_gen;
+    work.source     = HG_SRC_MASTER;
+    hg_blob_wrap(HG_MAGIC_CFG, HG_CFG_VER, new_gen, &work, (uint16_t)sizeof work,
+                  c->blob, sizeof c->blob);
+    c->gen   = new_gen;
+    c->crc   = hg_crc32(0, c->blob + HG_BLOB_HDR_LEN, sizeof work);
+    c->valid = 1;
+    s_cooldown_until[zone - 1] = 0;   /* an operator write waits for no cooldown */
+    nmgr_cx_push(zone, new_gen, hb_gen, hb_crc, c->gen, c->crc);
 }
 
 void nmgr_cfg_tick_1s(uint32_t now) {
@@ -172,6 +224,15 @@ void nmgr_cfg_tick_1s(uint32_t now) {
         if (clear_mask & (uint8_t)(1u << (id - 1))) nmgr_cfg_clear(id);
 
     if (nmgr_cx_tick_1s(now)) return;   /* a transfer owns this tick (streaming / retry / awaiting ACK) */
+
+    /* A queued web/operator write goes before the automatic decision below;
+     * one per tick, since the transfer half carries one push at a time. */
+    hg_zone_cfg_t want;
+    uint8_t set_zone;
+    if (nmgr_cfg_take_set_req(&set_zone, &want)) {
+        start_set_req(set_zone, &want);   /* busy stays 1: the push now holds the slot */
+        return;
+    }
 
     /* manual push bypasses the fresh-HB gate/latch below (both throttle the
      * *automatic* reconciler); re-checks cache validity from this task,

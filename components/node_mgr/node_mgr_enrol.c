@@ -205,6 +205,60 @@ void nmgr_enrol_handle_hb(const ring_frame_t *f) {
     if (f->hdr.src != out_id) send_assign(hb.mac, out_id);
 }
 
+/* SET NODE <z> MAC (node_mgr.h documents the contract). It pre-empts
+ * ztab_enrol's verdict: once id z belongs to this MAC, the board's next
+ * heartbeat resolves to z -- ZTAB_EN_STALE while it still claims its old id,
+ * which re-asserts z with an ASSIGN_ID -- instead of being given the lowest
+ * free id or parked in GET UNASSIGNED. A foreign-task entry point (cmd_task,
+ * and Task 12's httpd), so unlike the rest of this file it takes nmgr_lock()
+ * itself, and drops it before nmgr_cfg_request_clear(), which takes the same
+ * non-recursive mutex. */
+int node_mgr_seed_mac(uint8_t zone, const uint8_t mac[6]) {
+    if (zone < 1 || zone > HG_MAX_ZONES || !mac) return -1;
+    nmgr_lock();
+    int slot = ztab_find_mac(&s_ztab, mac);
+    if (slot >= 0 && s_ztab.e[slot].id == zone) { nmgr_unlock(); return 0; }   /* already so */
+
+    uint8_t old_id = 0;
+    if (slot >= 0) { old_id = s_ztab.e[slot].id; memset(&s_ztab.e[slot], 0, sizeof s_ztab.e[0]); }
+    slot = ztab_find_id(&s_ztab, zone);                    /* replace the current holder of id z */
+    if (slot < 0) for (int i = 0; i < HG_MAX_ZONES && slot < 0; i++) if (!s_ztab.e[i].id) slot = i;
+    if (slot < 0) { nmgr_unlock(); return -1; }            /* unreachable: the release above frees one */
+    memset(&s_ztab.e[slot], 0, sizeof s_ztab.e[0]);
+    memcpy(s_ztab.e[slot].mac, mac, 6);
+    s_ztab.e[slot].id    = zone;
+    s_ztab.e[slot].flags = ZTAB_F_ASSIGNED | ZTAB_F_UNCONFIGURED;
+    node_store_save(&s_ztab);
+
+    /* Both RAM rows start over: the id this MAC left is vacant, the id it moved
+     * to has never been heard from (hops_valid 0 falls out of the memset), and
+     * last_hb_ms is the same boot grace nmgr_enrol_boot_init gives an NVS row,
+     * so no OFFLINE alarm fires before the first heartbeat can arrive. */
+    if (old_id) {
+        hg_node_t *o = nmgr_node_by_id(old_id);
+        if (o) memset(o, 0, sizeof *o);
+        s_seq_known[old_id - 1] = 0;
+    }
+    hg_node_t *nd = nmgr_node_by_id(zone);
+    if (nd) {
+        memset(nd, 0, sizeof *nd);
+        nd->used = 1; nd->id = zone; nd->unconfigured = 1;
+        memcpy(nd->mac, mac, 6);
+        nd->last_hb_ms = nmgr_now_ms();
+    }
+    s_seq_known[zone - 1] = 0;
+    purge_unassigned(mac);
+    s_unassigned_notified = 0;      /* a slot may have just been freed (see nmgr_ztab_clear) */
+    nmgr_unlock();
+
+    /* Either id may now answer for a different board, so neither one's cached
+       config is authoritative (§4.4 adopt -- node_mgr_clear does this for the
+       same reason); queued, because those caches are node_mgr-task-owned. */
+    nmgr_cfg_request_clear(zone);
+    if (old_id) nmgr_cfg_request_clear(old_id);
+    return 0;
+}
+
 void nmgr_broadcast_time_sync(uint32_t now) {
     hg_ts_t t = { 0 };
     t.utc          = (uint32_t)time(NULL);

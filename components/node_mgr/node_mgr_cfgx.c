@@ -25,7 +25,7 @@ typedef struct {
     uint32_t retry_at_ms;
     uint16_t trk_seq;
     uint32_t push_gen;                                    /* push only */
-    uint32_t hb_gen, hb_crc, cache_gen, cache_crc;         /* push only: frozen latch identity, ruling important #2 */
+    uint32_t hb_gen, hb_crc, cache_gen, cache_crc;         /* frozen latch identity, ruling important #2 */
 } cx_t;
 static cx_t        s_cx;
 static ring_casm_t s_casm;
@@ -57,6 +57,8 @@ static void finish_failed(int terminal) {
 static void start_pull(uint8_t zone, uint8_t kind, uint8_t attempt);
 static void start_push(uint8_t zone, uint32_t gen, uint8_t attempt,
                         uint32_t hb_gen, uint32_t hb_crc, uint32_t cache_gen, uint32_t cache_crc);
+
+int nmgr_cx_busy(uint8_t zone) { return s_cx.state != CX_IDLE && s_cx.zone == zone; }
 
 /* terminal=1 skips the retry ladder entirely and latches (ruling #5:
  * CFG_VERSION / INVALID_FIELD ACK details are never retried). */
@@ -95,6 +97,14 @@ static void accept_pull(void) {
      * regardless of version, so the oversized CFG buffer would misreport
      * every HW unwrap even on an exact current-version match. */
     hg_blob_rc_t rc = hg_blob_unwrap(magic, ver, vmin, s_casm.buf, s_casm.total, tmp, (uint16_t)plen, &gen);
+    /* A zone on a NEWER layout than this master understands is not a transient
+     * failure -- no retry, and no amount of waiting, can make its envelope
+     * parseable here (SP4's mixed-version fleet). Terminal, exactly like the
+     * CFG_VERSION token a zone answers a push with: it latches the (heartbeat,
+     * cache) identity frozen at start_pull, so the reconciler stops re-pulling
+     * that zone until its config or ours changes. The remaining unwrap errors
+     * (short/magic/length/crc, i.e. a mangled transfer) stay retryable. */
+    if (rc == HG_BLOB_E_VERSION_NEWER) { fail_or_retry(0, 1); return; }
     if (rc != HG_BLOB_OK && rc != HG_BLOB_MIGRATED) { fail_or_retry(0, 0); return; }
 
     /* Re-wrap canonically so the cache always matches cache_payload_len(kind)
@@ -151,7 +161,14 @@ static void accept_push(void) {
     memset(&s_cx, 0, sizeof s_cx);
 }
 
-void nmgr_cx_pull(uint8_t zone, uint8_t kind) { start_pull(zone, kind, 1); }
+void nmgr_cx_pull(uint8_t zone, uint8_t kind,
+                  uint32_t hb_gen, uint32_t hb_crc, uint32_t cache_gen, uint32_t cache_crc) {
+    /* frozen before the first frame goes out, so a terminal pull failure
+       latches the identity the decision half will see again next tick */
+    s_cx.hb_gen = hb_gen; s_cx.hb_crc = hb_crc;
+    s_cx.cache_gen = cache_gen; s_cx.cache_crc = cache_crc;
+    start_pull(zone, kind, 1);
+}
 
 void nmgr_cx_push(uint8_t zone, uint32_t gen,
                   uint32_t hb_gen, uint32_t hb_crc, uint32_t cache_gen, uint32_t cache_crc) {

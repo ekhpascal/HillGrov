@@ -68,3 +68,6 @@ target_link_libraries(test_hg_json cjson_host)
 hg_test(test_alarm_mgr ${COMP}/alarm_mgr/alarm_mgr.c ${COMP}/alarm_mgr/alarm_mgr_json.c ${COMP}/notify/notify.c)
 target_link_libraries(test_alarm_mgr cjson_host)
 hg_test(test_time_core ${COMP}/time_core/time_core.c)
+hg_test(test_node_mgr_cfg ${COMP}/node_mgr/node_mgr_cfg.c ${COMP}/node_mgr/node_mgr_cfgx.c
+        ${COMP}/node_mgr/node_mgr_cfg_api.c ${COMP}/ring_proto/ring_cfgx.c ${COMP}/hg_blob/hg_blob.c
+        ${HG_CFG_SRC} ${COMP}/notify/notify.c fakes/fake_nmgr.c)

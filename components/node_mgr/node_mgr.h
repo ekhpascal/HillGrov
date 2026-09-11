@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
-#include "ring_proto.h"   /* hg_node_t, ring_status_t */
+#include "ring_proto.h"     /* hg_node_t, ring_status_t */
+#include "hg_cfg_types.h"   /* hg_zone_cfg_t, hg_zone_hw_t (node_mgr_cfg_get/set) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,6 +50,42 @@ int  node_mgr_unassigned(uint8_t macs[][6], int cap);           /* 0xFE heartbea
  * occasional stale -1/0 near a concurrent cache change is possible and
  * harmless (retry). */
 int  node_mgr_push_cfg(uint8_t zone);
+/* ---- §4.4 config primitives (node_mgr_cfg_api.c) ----
+ * The web UI's zone config page and, later, the JSON rows are built on these
+ * three. All are foreign-task safe (httpd workers, cmd_task).
+ *
+ * get: unwrapped COPIES of this zone's two cached planes. 0 = the CFG plane is
+ *   cached; an absent HW plane is zeroed with *hw_gen 0 (a zone is adopted CFG
+ *   first, so that window is real). -1 = zone out of range, or nothing cached
+ *   yet -- the master has not finished adopting the zone. cfg is required,
+ *   hw/cfg_gen/hw_gen may be NULL.
+ * set: ASYNCHRONOUS. The payload is queued for the node_mgr task's next 1 Hz
+ *   tick, which stamps generation = max(heartbeat, cache) + 1 and
+ *   source = MASTER, adopts it into the cache and pushes it (chunks + a
+ *   tracked CFG_COMMIT). 0 = queued -- phrase it to an operator as "saved",
+ *   since the master's cache IS the authority from here on and the reconciler
+ *   keeps re-pushing until the zone matches; a zone that REFUSES the config
+ *   (CFG_VERSION / INVALID_FIELD) is reported through
+ *   NOTIFY NODE <z> CFG_SYNC_FAILED and node_mgr_cfg_sync_failed(), not
+ *   through this return value. -1 = zone unknown or not ONLINE, -2 = a write
+ *   or a transfer for this zone is already in flight (answer HTTP 409).
+ * busy: 1 while that is the case -- poll it to know when a save has landed. */
+int  node_mgr_cfg_get(uint8_t zone, hg_zone_cfg_t *cfg, hg_zone_hw_t *hw,
+                      uint32_t *cfg_gen, uint32_t *hw_gen);
+int  node_mgr_cfg_set(uint8_t zone, const hg_zone_cfg_t *cfg);
+int  node_mgr_cfg_busy(uint8_t zone);
+
+/* SET NODE <z> MAC (node_mgr_enrol.c): pre-seed the id -> MAC binding so a
+ * replacement board is adopted straight into zone z on its first heartbeat
+ * instead of landing in GET UNASSIGNED. The ztab row for id z takes this MAC
+ * with flags ASSIGNED|UNCONFIGURED, replacing whatever MAC held the id (that
+ * board becomes unknown and re-enrols elsewhere), and any row this MAC held
+ * before is released. Persisted immediately; the RAM row is reset to
+ * "assigned, never heard" and the id's cached config is dropped, since the
+ * board answering on it is now a different one. 0 = stored (or already the
+ * case), -1 = zone out of 1..8. */
+int  node_mgr_seed_mac(uint8_t zone, const uint8_t mac[6]);
+
 int  node_mgr_time_valid(void);                                 /* for GET RING display */
 int  node_mgr_cfg_sync_failed(uint8_t zone);                    /* 1 = latched §4.4 CFG_SYNC
                                                                     failure; GET NODE display */

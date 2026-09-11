@@ -24,6 +24,14 @@ int      ring_cobs_decode(const uint8_t *in, size_t n, uint8_t *out);  /* decode
 
 typedef struct { uint8_t src, dst, type, flags, ttl, len; uint16_t seq; } ring_hdr_t;
 
+/* One decoded frame, header plus payload. It lives here rather than in
+   ring_link.h (which re-exports it, and which every ring_link user already
+   includes) so that a module handling frames need not pull in the UART link
+   layer: node_mgr_internal.h's seam is frame-shaped, and keeping it on
+   protocol headers alone is what lets node_mgr_cfg.c / node_mgr_cfgx.c -- the
+   whole section 4.4 decision table -- compile and run on the host. */
+typedef struct { ring_hdr_t hdr; uint8_t payload[RING_MAX_PAYLOAD]; } ring_frame_t;
+
 int  ring_frame_encode(const ring_hdr_t *h, const uint8_t *payload,
                        uint8_t *wire, size_t cap);
      /* builds 0x00 + COBS(hdr+payload+crc16le) + 0x00; returns wire length, or -1

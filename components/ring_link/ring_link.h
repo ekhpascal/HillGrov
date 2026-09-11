@@ -7,7 +7,8 @@
  * routing/dup/tracking policy lives in ring_proto; app wiring (node table,
  * ota_trial hooks) is Tasks 12/13. */
 
-typedef struct { ring_hdr_t hdr; uint8_t payload[RING_MAX_PAYLOAD]; } ring_frame_t;
+/* ring_frame_t now lives in ring_proto.h (included above) -- see the comment
+ * there; every user of this header still gets it from here. */
 typedef struct { uint32_t rx_crc_err, rx_uart_err, rx_drop, fwd_count, tx_count, drop_self; } ring_counters_t;
 
 /* Installs the UART2 driver at HG_RING_BAUD 8N1 on HG_GPIO_RING_TX/RX and

@@ -1,7 +1,9 @@
 #pragma once
 #include <stdint.h>
-#include "ring_proto.h"
-#include "ring_link.h"
+#include "ring_proto.h"   /* hg_node_t, ring_frame_t, ring_trk_ev_t -- protocol
+                              headers only: node_mgr_cfg.c and node_mgr_cfgx.c
+                              are host-tested against this seam (test_node_mgr_cfg),
+                              so nothing here may reach for the link layer. */
 
 /* Private to node_mgr.c / node_mgr_enrol.c / node_mgr_fwd.c / node_mgr_cfg.c
  * -- not part of the component's public surface (node_mgr.h). Split purely

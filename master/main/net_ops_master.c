@@ -8,6 +8,7 @@
 #include "web_auth.h"
 #include "wifi_mgr.h"
 #include "time_svc.h"
+#include "node_mgr.h"
 #include "net_ops_master.h"
 
 static const char *TAG = "net_ops";
@@ -160,13 +161,12 @@ int master_web_set_password(const char *pw) {
     return rc;
 }
 
-/* Task 9 replaces this with node_mgr_seed_mac(): until then every
- * SET NODE <z> MAC answers ERR ZONE_UNKNOWN rather than pretending to have
- * stored a binding. */
+/* node_mgr owns the ztab, so the binding is written there (and to NVS) rather
+ * than through the mcfg path the rest of this file uses -- no s_lock either,
+ * since node_mgr_seed_mac serializes on nmgr_lock() internally. -1 is an
+ * out-of-range zone, which master_cmds reports as ERR ZONE_UNKNOWN. */
 static int net_seed_mac(uint8_t zone, const uint8_t mac[6]) {
-    (void)mac;
-    ESP_LOGW(TAG, "SET NODE %u MAC: node_mgr_seed_mac arrives in Task 9", (unsigned)zone);
-    return -1;
+    return node_mgr_seed_mac(zone, mac);
 }
 
 static const net_ops_t MASTER_NET_OPS = {

@@ -384,9 +384,9 @@ static void test_set_node_mac_bad_mac(void) {
     TEST_ASSERT_EQUAL_INT(0, g_fake_net.seed_mac_calls);
 }
 
-/* Task 9 has not landed yet, so net_ops_master.c's seed_mac is a -1 stub;
- * that rc must read as ERR ZONE_UNKNOWN, not ERR INVALID -- it is the same
- * failure SET NODE <z> NAME already reports for an unknown zone. */
+/* seed_mac's -1 (node_mgr_seed_mac: a zone outside 1..8) must read as
+ * ERR ZONE_UNKNOWN, not ERR INVALID -- it is the same failure
+ * SET NODE <z> NAME already reports for an unknown zone. */
 static void test_set_node_mac_unknown_zone(void) {
     g_fake_net.seed_mac_rc = -1;
     TEST_ASSERT_EQUAL_INT(-1, run("SET NODE 5 MAC 24:6f:28:aa:bb:05"));

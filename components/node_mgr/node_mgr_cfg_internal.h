@@ -43,11 +43,27 @@ void nmgr_cfg_note_failed(uint8_t zone, uint8_t kind, int terminal,
                           uint32_t hb_gen, uint32_t hb_crc,
                           uint32_t cache_gen, uint32_t cache_crc);
 
+/* ---- the write inbox, owned by node_mgr_cfg_api.c ----
+ * node_mgr_cfg_set parks a whole hg_zone_cfg_t there under nmgr_lock(); the
+ * decision half's 1 Hz tick takes it out and pushes it. It is only taken out
+ * once the transfer slot is free, so a queued write is never dropped the way a
+ * superseded manual push can be. */
+int  nmgr_cfg_req_pending(uint8_t zone);                        /* 1 while a write is queued */
+int  nmgr_cfg_take_set_req(uint8_t *zone, hg_zone_cfg_t *out);   /* 1 = one taken, both filled */
+void nmgr_cfg_drop_set_req(uint8_t zone);                        /* CLEAR NODE retired the id */
+
 /* ---- transfer half, called by the decision half ---- */
 
 void nmgr_cx_init(void);
 int  nmgr_cx_tick_1s(uint32_t now);      /* 1 = the tick belonged to a transfer (stream/retry/awaiting ACK) */
-void nmgr_cx_pull(uint8_t zone, uint8_t kind);
+int  nmgr_cx_busy(uint8_t zone);         /* 1 = a transfer for this zone holds the slot */
+/* The identity args are the same frozen (heartbeat, cache) pair a push
+   carries: an E_VERSION_NEWER envelope makes a PULL fail terminally too, and
+   the latch it sets has to name an identity the decision half can recognise
+   again next tick (a failed CFG pull leaves the cache invalid, so without this
+   the adopt branch would re-pull on every single heartbeat). */
+void nmgr_cx_pull(uint8_t zone, uint8_t kind,
+                  uint32_t hb_gen, uint32_t hb_crc, uint32_t cache_gen, uint32_t cache_crc);
 void nmgr_cx_push(uint8_t zone, uint32_t gen,
                   uint32_t hb_gen, uint32_t hb_crc, uint32_t cache_gen, uint32_t cache_crc);
 /* Drop this zone's transfer, withdrawing its tracked frame if it has not been
