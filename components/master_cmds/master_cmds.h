@@ -46,7 +46,13 @@ typedef struct {
  * Every int-returning member is 0 on success and -1 on "the caller asked for
  * something invalid" (a value mcfg_commit's validator rejected, a password
  * outside 8..63, an unknown zone); the rows turn -1 into ERR INVALID, except
- * seed_mac's, which is ERR ZONE_UNKNOWN. */
+ * seed_mac's, which is ERR ZONE_UNKNOWN.
+ *
+ * The four members that persist something may also return -2, "valid, but it
+ * could not be stored" -- an NVS write failure, a commit-mutex timeout, or
+ * (set_web_password) the hash function being unavailable. That is a different
+ * thing to tell an operator than "your value is wrong", so the rows answer
+ * ERR STORAGE for it: retry or check the flash, don't retype the value. */
 typedef struct {
     void (*get_mcfg)(hg_mcfg_t *out);                      /* snapshot copy; never a live pointer */
     int  (*set_sta)(const char *ssid, const char *pass);   /* pass "" = open network */

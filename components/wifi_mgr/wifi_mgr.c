@@ -1,10 +1,11 @@
 #include <stdarg.h>
-#include <stdlib.h>
 #include <string.h>
+#include "freertos/FreeRTOS.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "mdns.h"
 #include "notify.h"
 #include "mcfg_store.h"
 #include "wifi_mgr_priv.h"
@@ -18,9 +19,17 @@ wifi_sta_cb   g_wm_sta_cb;
 
 uint8_t g_wm_started;
 
+/* Guards multi-field updates of g_wm against wifi_mgr_status()'s snapshot.
+ * A portMUX spinlock rather than a mutex: the writers are event-handler
+ * callbacks that must not block, and every critical section here is a handful
+ * of fixed-size copies -- strings are always formatted into locals first. */
+static portMUX_TYPE s_wm_lock = portMUX_INITIALIZER_UNLOCKED;
+
+void wifi_mgr_lock(void)   { portENTER_CRITICAL(&s_wm_lock); }
+void wifi_mgr_unlock(void) { portEXIT_CRITICAL(&s_wm_lock); }
+
 #define AP_CHANNEL   6      /* 2.4 GHz: any AP a zone node joins for a fleet OTA must be */
 #define AP_MAX_CONN  4
-#define SCAN_MAX_AP  24     /* records pulled from the driver per scan */
 
 /* Copies a NUL-terminated src into a fixed uint8_t field, truncating to fit
  * and always forcing a trailing NUL -- strlen()+clamp rather than strnlen,
@@ -60,7 +69,9 @@ static void ap_evt(void *arg, esp_event_base_t base, int32_t id, void *data) {
     uint8_t n = (esp_wifi_ap_get_sta_list(&list) == ESP_OK && list.num > 0) ? (uint8_t)list.num : 0;
     if (id == WIFI_EVENT_AP_STACONNECTED || id == WIFI_EVENT_AP_STADISCONNECTED) {
         if (n == g_wm.ap_clients) return;
+        wifi_mgr_lock();
         g_wm.ap_clients = n;
+        wifi_mgr_unlock();
         wifi_mgr_notify_throttled("AP CLIENTS %u", (unsigned)n);
     }
 }
@@ -104,7 +115,11 @@ static int ap_push_config(const hg_mcfg_t *m, int force) {
     }
     snprintf(s_ap_ssid_live, sizeof s_ap_ssid_live, "%s", m->ap_ssid);
     snprintf(s_ap_pass_live, sizeof s_ap_pass_live, "%s", m->ap_pass);
-    snprintf(g_wm.ap_ssid, sizeof g_wm.ap_ssid, "%s", m->ap_ssid);
+    char ssid[sizeof g_wm.ap_ssid];
+    snprintf(ssid, sizeof ssid, "%s", m->ap_ssid);
+    wifi_mgr_lock();
+    memcpy(g_wm.ap_ssid, ssid, sizeof g_wm.ap_ssid);
+    wifi_mgr_unlock();
     return 0;
 }
 
@@ -131,6 +146,28 @@ static int ap_static_ip(void) {
     }
     snprintf(g_wm.ap_ip, sizeof g_wm.ap_ip, "192.168.7.7");
     return 0;
+}
+
+/* mDNS is published once, at boot, as soon as the AP has its address -- NOT
+ * on the first STA got-IP (Task 8 fix round 1, controller ruling). mdns 1.12
+ * sweeps every netif that already has an IP and hooks the STA's own got-IP
+ * itself, so publishing here covers both interfaces; doing it on the STA edge
+ * instead left "<hostname>.local" dead for a client on the softAP, which is
+ * exactly the initial-provisioning case (a phone on HillGrow with no house
+ * Wi-Fi configured yet). Failures are logged and never abort boot: losing
+ * name resolution must not cost the greenhouse its controller. */
+static void mdns_publish(const hg_mcfg_t *m) {
+    esp_err_t err = mdns_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "mdns_init failed: %s", esp_err_to_name(err));
+        return;
+    }
+    if ((err = mdns_hostname_set(m->hostname)) != ESP_OK)
+        ESP_LOGW(TAG, "mdns_hostname_set(%s) failed: %s", m->hostname, esp_err_to_name(err));
+    if ((err = mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0)) != ESP_OK)
+        ESP_LOGW(TAG, "mdns_service_add failed: %s", esp_err_to_name(err));
+    else
+        ESP_LOGW(TAG, "mDNS up: %s.local (_http._tcp:80)", m->hostname);
 }
 
 /* ---- bring-up ---- */
@@ -191,6 +228,7 @@ int wifi_mgr_start(void) {
         return -1;
     }
     if (ap_static_ip() != 0) return -1;
+    mdns_publish(m);
 
     g_wm_started = 1;
     ESP_LOGW(TAG, "AP \"%s\" up at 192.168.7.7 (ch %d, max %d); STA %s, host \"%s\"",
@@ -219,21 +257,28 @@ int wifi_mgr_apply(void) {
 
 void wifi_mgr_status(wifi_status_t *out) {
     if (!out) return;
-    if (g_wm_started) {
-        wifi_sta_list_t list;
-        if (esp_wifi_ap_get_sta_list(&list) == ESP_OK)
-            g_wm.ap_clients = list.num > 0 ? (uint8_t)list.num : 0;
-        if (g_wm.sta_up) {
-            /* RSSI moves constantly, so it is read live rather than cached
-             * from the join; the same call re-confirms the joined SSID. */
-            wifi_ap_record_t ap;
-            if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
-                g_wm.rssi = ap.rssi;
-                snprintf(g_wm.sta_ssid, sizeof g_wm.sta_ssid, "%s", (const char *)ap.ssid);
-            }
+
+    /* One torn-free snapshot, then the live driver reads go into the CALLER's
+     * copy. This function runs on the CLI task (and soon on httpd workers)
+     * and deliberately never writes g_wm: only the event handlers and
+     * wifi_mgr_sta_apply() own it. */
+    wifi_mgr_lock();
+    *out = g_wm;
+    wifi_mgr_unlock();
+    if (!g_wm_started) return;
+
+    wifi_sta_list_t list;
+    if (esp_wifi_ap_get_sta_list(&list) == ESP_OK)
+        out->ap_clients = list.num > 0 ? (uint8_t)list.num : 0;
+    if (out->sta_up) {
+        /* RSSI moves constantly, so it is read live rather than cached from
+         * the join; the same call re-confirms the joined SSID. */
+        wifi_ap_record_t ap;
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            out->rssi = ap.rssi;
+            snprintf(out->sta_ssid, sizeof out->sta_ssid, "%s", (const char *)ap.ssid);
         }
     }
-    *out = g_wm;
 }
 
 void wifi_mgr_on_sta(wifi_sta_cb cb) {
@@ -242,63 +287,4 @@ void wifi_mgr_on_sta(wifi_sta_cb cb) {
      * wifi_mgr_start() -- a STA that came up in between would otherwise
      * never start SNTP, so a late registration replays the edge. */
     if (cb && g_wm.sta_up) cb(1);
-}
-
-/* ---- scan ---- */
-
-static int rssi_desc(const void *a, const void *b) {
-    int8_t ra = ((const wifi_ap_record_t *)a)->rssi;
-    int8_t rb = ((const wifi_ap_record_t *)b)->rssi;
-    return (rb > ra) - (rb < ra);
-}
-
-int wifi_mgr_scan(wifi_scan_t *out, int cap) {
-    if (!g_wm_started || !out || cap <= 0) return -1;
-
-    /* All-channel active scan. 14 x 120 ms worst case is ~1.7 s, comfortably
-     * inside the 4 s budget the caller (Task 12's /api/wifi/scan) is held to;
-     * the minimum keeps quiet channels from costing the full dwell. */
-    wifi_scan_config_t sc;
-    memset(&sc, 0, sizeof sc);
-    sc.scan_type            = WIFI_SCAN_TYPE_ACTIVE;
-    sc.scan_time.active.min = 40;
-    sc.scan_time.active.max = 120;
-
-    esp_err_t err = esp_wifi_scan_start(&sc, true);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "esp_wifi_scan_start failed: %s", esp_err_to_name(err));
-        return -1;
-    }
-    uint16_t found = 0;
-    if (esp_wifi_scan_get_ap_num(&found) != ESP_OK) return -1;
-    if (found == 0) return 0;
-
-    uint16_t want = found < SCAN_MAX_AP ? found : SCAN_MAX_AP;
-    wifi_ap_record_t *recs = calloc(want, sizeof *recs);
-    if (!recs) {
-        esp_wifi_clear_ap_list();
-        ESP_LOGE(TAG, "scan: out of memory for %u records", (unsigned)want);
-        return -1;
-    }
-    if (esp_wifi_scan_get_ap_records(&want, recs) != ESP_OK) {
-        free(recs);
-        return -1;
-    }
-    qsort(recs, want, sizeof *recs, rssi_desc);
-
-    int n = 0;
-    for (uint16_t i = 0; i < want && n < cap; i++) {
-        const char *ssid = (const char *)recs[i].ssid;
-        if (!ssid[0]) continue;                          /* hidden SSID: nothing to show or click */
-        int dup = 0;
-        for (int j = 0; j < n; j++)
-            if (strcmp(out[j].ssid, ssid) == 0) { dup = 1; break; }
-        if (dup) continue;                               /* strongest copy wins: the list is RSSI-sorted */
-        snprintf(out[n].ssid, sizeof out[n].ssid, "%s", ssid);
-        out[n].rssi = recs[i].rssi;
-        out[n].auth = (uint8_t)recs[i].authmode;
-        n++;
-    }
-    free(recs);
-    return n;
 }

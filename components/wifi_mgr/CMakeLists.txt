@@ -24,7 +24,7 @@
 # INTERFACE library an empty-SRCS registration produces).
 set(WIFI_MGR_SRCS "")
 if("${CMAKE_PROJECT_NAME}" STREQUAL "hillgrow_master")
-    set(WIFI_MGR_SRCS "wifi_mgr.c" "wifi_mgr_sta.c")
+    set(WIFI_MGR_SRCS "wifi_mgr.c" "wifi_mgr_sta.c" "wifi_mgr_scan.c")
 endif()
 
 idf_component_register(

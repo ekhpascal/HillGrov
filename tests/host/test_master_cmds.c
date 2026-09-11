@@ -394,6 +394,44 @@ static void test_set_node_mac_unknown_zone(void) {
     TEST_ASSERT_EQUAL_INT(1, g_fake_net.seed_mac_calls);
 }
 
+/* rc -2 from any op that persists something is "valid but not stored" (NVS,
+ * a commit-mutex timeout, an unavailable hash) -- a different thing to tell
+ * an operator than ERR INVALID, so it gets its own token. */
+static void test_net_rows_storage_failure(void) {
+    g_fake_net.set_sta_rc = -2;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET WIFI STA Home pass1234"));
+    TEST_ASSERT_EQUAL_STRING("ERR STORAGE\n", resp);
+
+    g_fake_net.set_ap_rc = -2;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET WIFI AP GrowAP hillgrow1"));
+    TEST_ASSERT_EQUAL_STRING("ERR STORAGE\n", resp);
+
+    g_fake_net.set_pw_rc = -2;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET WEB PASSWORD sekret12"));
+    TEST_ASSERT_EQUAL_STRING("ERR STORAGE\n", resp);
+
+    g_fake_net.set_tz_rc = -2;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET TZ EST5EDT,M3.2.0,M11.1.0"));
+    TEST_ASSERT_EQUAL_STRING("ERR STORAGE\n", resp);
+
+    /* -1 must still be ERR INVALID on every one of them: the two rcs are not
+     * interchangeable. */
+    g_fake_net.set_sta_rc = -1;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET WIFI STA Home pass1234"));
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID\n", resp);
+    g_fake_net.set_tz_rc = -1;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET TZ EST5EDT,M3.2.0,M11.1.0"));
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID\n", resp);
+}
+
+/* seed_mac has no persistence path of its own, so it keeps the node_ops
+ * convention: any non-zero rc is an unusable zone. */
+static void test_set_node_mac_storage_rc_is_zone_unknown(void) {
+    g_fake_net.seed_mac_rc = -2;
+    TEST_ASSERT_EQUAL_INT(-1, run("SET NODE 5 MAC 24:6f:28:aa:bb:05"));
+    TEST_ASSERT_EQUAL_STRING("ERR ZONE_UNKNOWN\n", resp);
+}
+
 /* master_cmds_init() (the SP3 entry point) leaves net NULL: every NET/TIME
  * row must then answer ERR INTERNAL rather than dereference it. */
 static void test_net_rows_without_ops(void) {
@@ -475,6 +513,8 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_set_node_mac_out_of_range);
     RUN_TEST(test_set_node_mac_bad_mac);
     RUN_TEST(test_set_node_mac_unknown_zone);
+    RUN_TEST(test_net_rows_storage_failure);
+    RUN_TEST(test_set_node_mac_storage_rc_is_zone_unknown);
     RUN_TEST(test_net_rows_without_ops);
     RUN_TEST(test_help_lists_net_rows);
     return UNITY_END(); }

@@ -4,7 +4,6 @@
 #include "esp_event.h"
 #include "esp_timer.h"
 #include "esp_log.h"
-#include "mdns.h"
 #include "wifi_mgr_priv.h"
 
 static const char *TAG = "wifi_mgr_sta";
@@ -15,12 +14,22 @@ static const char *TAG = "wifi_mgr_sta";
 static const uint32_t BACKOFF_S[] = { 5, 10, 20, 40, 60 };
 #define BACKOFF_N ((int)(sizeof BACKOFF_S / sizeof BACKOFF_S[0]))
 
+/* How long a self-inflicted-disconnect marker stays valid. A locally issued
+ * esp_wifi_disconnect() posts its WIFI_EVENT_STA_DISCONNECTED within
+ * microseconds, so 1.5 s is enormously generous -- the point of the deadline
+ * is that a marker set when there was nothing to disconnect (the driver posts
+ * no event if the STA was already idle) EXPIRES instead of lying in wait and
+ * swallowing the next genuine disconnect, which would leave the ladder unarmed
+ * and the master silently stuck until a reboot. */
+#define SELF_DISC_VALID_US 1500000ull
+
 static esp_timer_handle_t s_retry;
 static int                s_step;          /* index into BACKOFF_S, clamped at BACKOFF_N-1 */
 static uint8_t            s_configured;    /* mcfg has a non-empty sta_ssid */
 static uint8_t            s_want_down_ntf; /* report the next disconnect even though we were never up */
-static uint8_t            s_mdns_up;
-static char               s_hostname[24];
+static uint64_t           s_self_disc_us;  /* 0 = none pending; else esp_timer_get_time() at our disconnect */
+
+static void schedule_retry(void);
 
 /* Short, operator-readable disconnect reasons. The brief's four buckets are
  * the whole vocabulary; the raw numeric code goes to the log, which is where
@@ -52,6 +61,17 @@ static const char *reason_text(uint8_t r) {
     }
 }
 
+/* EVERY esp_wifi_disconnect() this component issues goes through here, so the
+ * disconnect event it provokes is recognisable as ours: a reconfigure, an
+ * unconfigure, or the scan pause. Without it a plain "configured -> different
+ * SSID" change reported a bogus NOTIFY WIFI 0 STA DOWN OTHER and armed a
+ * ladder step that could fire esp_wifi_connect() mid-association. */
+static void self_disconnect(void) {
+    if (!g_wm_started) return;
+    s_self_disc_us = (uint64_t)esp_timer_get_time();
+    esp_wifi_disconnect();   /* harmless when not associated -- then no event comes and the marker expires */
+}
+
 /* Gated on s_configured ONLY, deliberately not on g_wm_started: this runs
  * from the WIFI_EVENT_STA_START handler, which the event-loop task dispatches
  * concurrently with the tail of wifi_mgr_start(), and g_wm_started is not set
@@ -60,11 +80,18 @@ static const char *reason_text(uint8_t r) {
  * called esp_wifi_connect(), and the STA sat idle with no disconnect event and
  * an empty StaReason until the next SET WIFI STA. Callers that can run BEFORE
  * the driver is started (wifi_mgr_sta_apply) do the g_wm_started check
- * themselves instead. */
+ * themselves instead.
+ *
+ * A refused connect (ESP_ERR_WIFI_CONN, ESP_ERR_WIFI_STATE, ...) produces no
+ * disconnect event, so nothing would ever re-arm the ladder: arm it here, or
+ * one transient refusal wedges the STA until the next reboot. */
 static void sta_connect_now(void) {
     if (!s_configured) return;
     esp_err_t err = esp_wifi_connect();
-    if (err != ESP_OK) ESP_LOGW(TAG, "esp_wifi_connect failed: %s", esp_err_to_name(err));
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_connect failed: %s -- arming retry", esp_err_to_name(err));
+        schedule_retry();
+    }
 }
 
 static void retry_cb(void *arg) {
@@ -83,23 +110,6 @@ static void schedule_retry(void) {
     else               ESP_LOGI(TAG, "retry in %us", (unsigned)BACKOFF_S[i]);
 }
 
-/* mDNS is published once, on the first address we ever get: it binds to the
- * netifs, not to a particular lease, so a later re-join needs no repeat. */
-static void mdns_start_once(void) {
-    if (s_mdns_up) return;
-    esp_err_t err = mdns_init();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "mdns_init failed: %s", esp_err_to_name(err));
-        return;
-    }
-    if ((err = mdns_hostname_set(s_hostname)) != ESP_OK)
-        ESP_LOGW(TAG, "mdns_hostname_set(%s) failed: %s", s_hostname, esp_err_to_name(err));
-    if ((err = mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0)) != ESP_OK)
-        ESP_LOGW(TAG, "mdns_service_add failed: %s", esp_err_to_name(err));
-    s_mdns_up = 1;
-    ESP_LOGW(TAG, "mDNS up: %s.local (_http._tcp:80)", s_hostname);
-}
-
 static void sta_evt(void *arg, esp_event_base_t base, int32_t id, void *data) {
     (void)arg; (void)base;
 
@@ -111,58 +121,84 @@ static void sta_evt(void *arg, esp_event_base_t base, int32_t id, void *data) {
     }
     if (id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *d = (const wifi_event_sta_disconnected_t *)data;
+        unsigned raw = (unsigned)(d ? d->reason : 0);
         const char *why = reason_text(d ? d->reason : 0);
-        int was_up = g_wm.sta_up;
-        int changed = strcmp(g_wm.sta_reason, why) != 0;
 
+        int self = s_self_disc_us != 0 &&
+                   (uint64_t)esp_timer_get_time() - s_self_disc_us < SELF_DISC_VALID_US;
+        if (s_self_disc_us) s_self_disc_us = 0;   /* one marker, one event */
+
+        char reason[sizeof g_wm.sta_reason];
+        snprintf(reason, sizeof reason, "%s", self ? "" : why);
+
+        /* The event handler owns every sta_up transition, so was_up here is
+         * the real previous state -- wifi_mgr_sta_apply() must NOT pre-clear
+         * it, or the observer below never fires and time_svc keeps SNTP
+         * running against a link that is gone. prev is kept for the
+         * reason-changed edge test, which has to compare against what the
+         * status held BEFORE this event overwrote it. */
+        char prev[sizeof g_wm.sta_reason];
+        wifi_mgr_lock();
+        int was_up = g_wm.sta_up;
+        memcpy(prev, g_wm.sta_reason, sizeof prev);
         g_wm.sta_up = 0;
         g_wm.sta_ip[0] = '\0';
         g_wm.rssi = 0;
+        memcpy(g_wm.sta_reason, reason, sizeof g_wm.sta_reason);
+        wifi_mgr_unlock();
 
-        /* With no SSID configured, the only thing that can produce this event
-         * is our own esp_wifi_disconnect() from wifi_mgr_sta_apply -- there is
-         * nothing to report and nothing to retry. Bench-found: without this,
-         * "SET WIFI STA - -" left GET WIFI showing "StaReason : OTHER"
-         * (WIFI_REASON_STA_LEAVING) for a link nobody asked for. */
-        if (!s_configured) {
-            g_wm.sta_reason[0] = '\0';
-            ESP_LOGI(TAG, "STA disconnected (unconfigured), reason %u", (unsigned)(d ? d->reason : 0));
-            if (was_up && g_wm_sta_cb) g_wm_sta_cb(0);
+        /* Our own disconnect: nothing to report, nothing to retry (the
+         * caller either re-issues the join itself or deliberately stopped). */
+        if (self) {
+            ESP_LOGI(TAG, "STA disconnected by us (reason %u)", raw);
+            if (was_up && g_wm_sta_cb) { ESP_LOGI(TAG, "STA observer: down"); g_wm_sta_cb(0); }
             return;
         }
 
-        snprintf(g_wm.sta_reason, sizeof g_wm.sta_reason, "%s", why);
-        ESP_LOGW(TAG, "STA disconnected: %s (reason %u)", why, (unsigned)(d ? d->reason : 0));
+        ESP_LOGW(TAG, "STA disconnected: %s (reason %u)", why, raw);
 
         /* An edge is: we were associated and lost it; or this is the first
          * failure after an explicit connect request; or the reason itself
          * changed. Every further identical retry failure stays silent -- the
          * ladder can run for days. */
-        if (was_up || s_want_down_ntf || changed)
+        if (was_up || s_want_down_ntf || strcmp(prev, why) != 0)
             wifi_mgr_notify_edge("STA DOWN %s", why);
         s_want_down_ntf = 0;
 
-        if (was_up && g_wm_sta_cb) g_wm_sta_cb(0);
+        if (was_up && g_wm_sta_cb) { ESP_LOGI(TAG, "STA observer: down"); g_wm_sta_cb(0); }
         schedule_retry();
         return;
     }
     if (id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *e = (const ip_event_got_ip_t *)data;
-        g_wm.sta_up = 1;
-        g_wm.sta_reason[0] = '\0';
-        if (e) snprintf(g_wm.sta_ip, sizeof g_wm.sta_ip, IPSTR, IP2STR(&e->ip_info.ip));
+        char ip[sizeof g_wm.sta_ip]   = "";
+        char ssid[sizeof g_wm.sta_ssid];
+        int  have_ap;
+
+        if (e) snprintf(ip, sizeof ip, IPSTR, IP2STR(&e->ip_info.ip));
         wifi_ap_record_t ap;
-        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+        have_ap = esp_wifi_sta_get_ap_info(&ap) == ESP_OK;
+        if (have_ap) snprintf(ssid, sizeof ssid, "%s", (const char *)ap.ssid);
+
+        /* sta_ip is written BEFORE sta_up, so a reader that sees UP can never
+         * see an empty address. */
+        wifi_mgr_lock();
+        memcpy(g_wm.sta_ip, ip, sizeof g_wm.sta_ip);
+        if (have_ap) {
+            memcpy(g_wm.sta_ssid, ssid, sizeof g_wm.sta_ssid);
             g_wm.rssi = ap.rssi;
-            snprintf(g_wm.sta_ssid, sizeof g_wm.sta_ssid, "%s", (const char *)ap.ssid);
         }
+        g_wm.sta_reason[0] = '\0';
+        g_wm.sta_up = 1;
+        wifi_mgr_unlock();
+
         s_step = 0;                       /* ladder resets on success */
         s_want_down_ntf = 0;
+        s_self_disc_us = 0;
         if (s_retry) esp_timer_stop(s_retry);
         ESP_LOGW(TAG, "STA up: %s on \"%s\" (%d dBm)", g_wm.sta_ip, g_wm.sta_ssid, (int)g_wm.rssi);
-        mdns_start_once();
         wifi_mgr_notify_edge("STA UP %s", g_wm.sta_ip);
-        if (g_wm_sta_cb) g_wm_sta_cb(1);
+        if (g_wm_sta_cb) { ESP_LOGI(TAG, "STA observer: up"); g_wm_sta_cb(1); }
     }
 }
 
@@ -188,22 +224,37 @@ int wifi_mgr_sta_init(void) {
     return 0;
 }
 
+void wifi_mgr_sta_pause(void) {
+    if (s_retry) esp_timer_stop(s_retry);
+    self_disconnect();
+}
+
+void wifi_mgr_sta_resume(void) { sta_connect_now(); }
+
 int wifi_mgr_sta_apply(const hg_mcfg_t *m) {
     esp_err_t err;
-    snprintf(s_hostname, sizeof s_hostname, "%s", m->hostname);
     s_step = 0;
     if (s_retry) esp_timer_stop(s_retry);
 
     if (!m->sta_ssid[0]) {
         /* No house Wi-Fi configured: stop trying, but keep the AP (and the
-         * whole greenhouse) running. */
+         * whole greenhouse) running. s_configured goes first so a retry_cb
+         * that is already queued on the esp_timer task turns into a no-op,
+         * and the stored config is zeroed so even a connect that slips
+         * through has no network left to rejoin. */
         s_configured = 0;
         s_want_down_ntf = 0;
-        g_wm.sta_up = 0;
-        g_wm.sta_ip[0] = '\0';
+        wifi_mgr_lock();
         g_wm.sta_ssid[0] = '\0';
-        g_wm.rssi = 0;
-        if (g_wm_started) esp_wifi_disconnect();
+        g_wm.sta_reason[0] = '\0';
+        wifi_mgr_unlock();
+        self_disconnect();
+        if (g_wm_started) {
+            wifi_config_t zero;
+            memset(&zero, 0, sizeof zero);
+            if ((err = esp_wifi_set_config(WIFI_IF_STA, &zero)) != ESP_OK)
+                ESP_LOGW(TAG, "clearing the stored STA config failed: %s", esp_err_to_name(err));
+        }
         return 0;
     }
 
@@ -227,17 +278,17 @@ int wifi_mgr_sta_apply(const hg_mcfg_t *m) {
         wc.sta.threshold.authmode = WIFI_AUTH_OPEN;
     }
 
-    if (g_wm_started) esp_wifi_disconnect();   /* harmless no-op when not associated */
+    self_disconnect();
     if ((err = esp_wifi_set_config(WIFI_IF_STA, &wc)) != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_set_config(STA) failed: %s", esp_err_to_name(err));
         return -1;
     }
     s_configured = 1;
     s_want_down_ntf = 1;         /* the first failure after this request is worth a NOTIFY */
-    g_wm.sta_up = 0;
-    g_wm.sta_ip[0] = '\0';
+    wifi_mgr_lock();
     g_wm.sta_reason[0] = '\0';
     snprintf(g_wm.sta_ssid, sizeof g_wm.sta_ssid, "%s", m->sta_ssid);
+    wifi_mgr_unlock();
 
     /* Two callers, two paths. At boot (g_wm_started still 0) the driver is
      * not started yet, so the join is left to WIFI_EVENT_STA_START, which

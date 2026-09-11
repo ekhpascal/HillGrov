@@ -213,6 +213,14 @@ static const char *dash_is_empty(const char *s) {
  * the column layout never collapses. */
 static const char *or_dash(const char *s) { return s[0] ? s : "-"; }
 
+/* Shared rc mapping for the net ops that persist something: -2 is "the value
+ * was fine, storing it failed" (NVS, a commit-mutex timeout, an unavailable
+ * hash), which an operator must not answer by retyping the value -- hence its
+ * own token rather than ERR INVALID. */
+static int net_rc_err(char *r, int l, int rc) {
+    return cmd_err(r, l, rc == -2 ? "STORAGE" : "INVALID");
+}
+
 /* ---- GET WIFI ---- */
 
 static int h_get_wifi(cmd_req_t *q, char *r, int l) {
@@ -237,8 +245,8 @@ static int h_get_wifi(cmd_req_t *q, char *r, int l) {
 
 static int h_set_wifi_sta(cmd_req_t *q, char *r, int l) {
     NEED_NET();
-    if (s_net->set_sta(dash_is_empty(q->tok[0]), dash_is_empty(q->tok[1])) != 0)
-        return cmd_err(r, l, "INVALID");
+    int rc = s_net->set_sta(dash_is_empty(q->tok[0]), dash_is_empty(q->tok[1]));
+    if (rc != 0) return net_rc_err(r, l, rc);
     /* Echoes the token as typed, so clearing the STA reads back as
      * "OK WIFI STA -". */
     return cmd_okf(r, l, "WIFI STA %s", q->tok[0]);
@@ -246,8 +254,8 @@ static int h_set_wifi_sta(cmd_req_t *q, char *r, int l) {
 
 static int h_set_wifi_ap(cmd_req_t *q, char *r, int l) {
     NEED_NET();
-    if (s_net->set_ap(dash_is_empty(q->tok[0]), dash_is_empty(q->tok[1])) != 0)
-        return cmd_err(r, l, "INVALID");
+    int rc = s_net->set_ap(dash_is_empty(q->tok[0]), dash_is_empty(q->tok[1]));
+    if (rc != 0) return net_rc_err(r, l, rc);
     return cmd_okf(r, l, "WIFI AP %s", q->tok[0]);
 }
 
@@ -256,7 +264,8 @@ static int h_set_wifi_ap(cmd_req_t *q, char *r, int l) {
 
 static int h_set_web_password(cmd_req_t *q, char *r, int l) {
     NEED_NET();
-    if (s_net->set_web_password(q->tok[0]) != 0) return cmd_err(r, l, "INVALID");
+    int rc = s_net->set_web_password(q->tok[0]);
+    if (rc != 0) return net_rc_err(r, l, rc);
     return cmd_okf(r, l, "WEB PASSWORD");
 }
 
@@ -271,7 +280,8 @@ static int h_tz(cmd_req_t *q, char *r, int l) {
         s_net->get_mcfg(&m);
         return cmd_okf(r, l, "TZ %s", m.tz);
     }
-    if (s_net->set_tz(q->tok[0]) != 0) return cmd_err(r, l, "INVALID");
+    int rc = s_net->set_tz(q->tok[0]);
+    if (rc != 0) return net_rc_err(r, l, rc);
     return cmd_okf(r, l, "TZ %s", q->tok[0]);
 }
 

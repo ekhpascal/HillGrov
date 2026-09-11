@@ -13,10 +13,13 @@ extern "C" {
  *          greenhouse must stay reachable with no house Wi-Fi at all, and any
  *          AP a zone node joins for a fleet OTA has to be 2.4 GHz).
  *   STA -- joins the house Wi-Fi when mcfg's sta_ssid is non-empty, with a
- *          5/10/20/40/60/60... s reconnect backoff ladder (reset on success),
- *          the mcfg hostname pushed into DHCP, and mDNS (_http._tcp on 80)
- *          published once the first address arrives, so "<hostname>.local"
- *          resolves on the house LAN.
+ *          5/10/20/40/60/60... s reconnect backoff ladder (reset on success)
+ *          and the mcfg hostname pushed into DHCP.
+ *   mDNS - "<hostname>.local" plus _http._tcp on 80, published at boot once
+ *          the AP has its address, so the name works for a client on the
+ *          softAP (the provisioning case) as well as on the house LAN --
+ *          mdns sweeps every netif that already has an IP and picks up the
+ *          STA's own got-IP itself.
  *
  * Caveat worth knowing on the bench: with a single radio, ESP-IDF's softAP
  * follows the STA's channel once the STA associates, so the AP does not stay
@@ -59,9 +62,16 @@ void wifi_mgr_status(wifi_status_t *out);
  * 0 ok / -1 (not started, or an esp_ call failed). */
 int  wifi_mgr_apply(void);
 
-/* Blocking all-channel active scan (~2 s, well inside the 4 s budget), newest
- * results sorted by RSSI descending with duplicate SSIDs and hidden (empty)
- * SSIDs dropped. Returns the number written (<= cap) or -1. */
+/* Blocking all-channel active scan, results sorted by RSSI descending with
+ * duplicate and hidden (empty) SSIDs dropped. Returns the number written
+ * (<= cap) or -1.
+ *
+ * BLOCKS the calling task for ~2 s (inside the 4 s budget) and parks the
+ * single radio for that whole time: the AP stops beaconing and an associated
+ * station may see a stall, and if a STA connect attempt is in flight IDF
+ * refuses the scan outright, so this drops the attempt first and re-issues it
+ * afterwards. Call it from a task that can afford to wait, never from an
+ * event handler, and not more often than a human is clicking "rescan". */
 int  wifi_mgr_scan(wifi_scan_t *out, int cap);
 
 /* Registers the single STA up/down observer (time_svc_sta_changed in

@@ -4,17 +4,19 @@
 #include "hg_mcfg.h"
 #include "wifi_mgr.h"
 
-/* Internals shared between wifi_mgr.c (driver/AP/scan/status) and
+/* Internals shared between wifi_mgr.c (driver/AP/mDNS/scan/status) and
  * wifi_mgr_sta.c (the STA join + reconnect-backoff state machine). Split
  * purely to keep each file well under the 300-line guideline; they are one
  * component and there is exactly one instance of everything here. */
 
-/* The live status. Written from the Wi-Fi/IP event handler task and from
- * wifi_mgr_status() (which only refreshes the driver-derived rssi/ssid/
- * ap_clients fields); read from CLI and HTTP tasks. Every field is either a
- * scalar or a NUL-terminated fixed buffer written with snprintf, so a
- * concurrent reader can see a stale value but never an out-of-bounds one --
- * a mutex would buy nothing that matters for a status display. */
+/* The live status. Written only by the Wi-Fi/IP event handlers and by the two
+ * apply paths (ap_push_config / wifi_mgr_sta_apply, which write the CONFIGURED
+ * ssid fields); every update is bracketed by wifi_mgr_lock()/wifi_mgr_unlock()
+ * so wifi_mgr_status() can take a torn-free snapshot. Readers never write it
+ * -- wifi_mgr_status() refreshes the driver-derived rssi/ssid/ap_clients
+ * fields into the CALLER's copy, not here.
+ * Build strings into locals first: the lock is a portMUX critical section, so
+ * only small fixed-size copies belong inside it. */
 extern wifi_status_t g_wm;
 
 /* 1 once esp_wifi_start() has succeeded. esp_wifi_connect()/
@@ -26,15 +28,27 @@ extern esp_netif_t  *g_wm_sta_netif;
 extern esp_netif_t  *g_wm_ap_netif;
 extern wifi_sta_cb   g_wm_sta_cb;
 
+void wifi_mgr_lock(void);
+void wifi_mgr_unlock(void);
+
 /* Registers the STA/IP event handlers and creates the one-shot backoff timer.
  * Called once from wifi_mgr_start() before esp_wifi_start(). 0 / -1. */
 int  wifi_mgr_sta_init(void);
 
 /* Pushes m's sta_ssid/sta_pass into the driver and asks for a connect (or,
- * when sta_ssid is empty, disconnects and cancels any pending retry). Resets
- * the backoff ladder. Safe to call before esp_wifi_start(): the actual
- * esp_wifi_connect() then happens on WIFI_EVENT_STA_START. 0 / -1. */
+ * when sta_ssid is empty, disconnects, zeroes the stored config and cancels
+ * any pending retry). Resets the backoff ladder. Safe to call before
+ * esp_wifi_start(): the actual esp_wifi_connect() then happens on
+ * WIFI_EVENT_STA_START. 0 / -1. */
 int  wifi_mgr_sta_apply(const hg_mcfg_t *m);
+
+/* Parks the STA so a blocking scan can have the radio: cancels any pending
+ * retry and drops the association / in-flight connect attempt, marked as
+ * self-inflicted so no NOTIFY or ladder step comes out of it.
+ * wifi_mgr_sta_resume() puts the join back in flight (no-op if the STA is
+ * unconfigured). Only wifi_mgr_scan() uses this pair. */
+void wifi_mgr_sta_pause(void);
+void wifi_mgr_sta_resume(void);
 
 /* Both files emit NOTIFY WIFI lines; this keeps the "clear the rate-limit
  * latch first" decision in one place. STA up/down are rare, genuinely
