@@ -113,6 +113,30 @@ static int ap_push_config(const hg_mcfg_t *m, int force) {
         ESP_LOGE(TAG, "esp_wifi_set_config(AP) failed: %s", esp_err_to_name(err));
         return -1;
     }
+
+    /* SP4 Task 11 bench finding: PMF (802.11w) must be OFF on this softAP.
+     * wifi_ap_config_t.pmf_cfg.capable is deprecated and ignored -- IDF 6
+     * always advertises PMF capability in the AP's RSN IE -- and with it
+     * advertised, a Windows 11 client (Intel AX211) associates, gets its
+     * DHCP lease, and is then disassociated every ~5 s:
+     *     wifi: starting SA query procedure with STA(...)
+     *     wifi: STA not responded to 6 SA Query attempts, Reset connection
+     *           sending disassoc
+     *     wifi: station ... leave, AID = 1, reason = 209
+     * i.e. the AP runs an 802.11w SA Query the client never answers and then
+     * kicks it. That makes the web UI unusable from the one client that
+     * matters -- the operator's laptop standing in the greenhouse -- so the
+     * AP drops PMF and stays plain WPA2-PSK+CCMP. What is given up is
+     * management-frame protection (a deauth-spoofing DoS by someone already
+     * in radio range); what is gained is a web UI that works. This is the
+     * documented escape hatch for exactly this case and must be called after
+     * esp_wifi_set_config(): at boot that is also before esp_wifi_start(), as
+     * the API asks. A later SET WIFI AP re-pushes the config while the radio
+     * is running, where the call may be refused -- hence a warning, not a
+     * failure; a reboot restores the intended setting. */
+    if ((err = esp_wifi_disable_pmf_config(WIFI_IF_AP)) != ESP_OK)
+        ESP_LOGW(TAG, "esp_wifi_disable_pmf_config(AP) failed: %s (clients may be disassociated every ~5 s until reboot)",
+                 esp_err_to_name(err));
     snprintf(s_ap_ssid_live, sizeof s_ap_ssid_live, "%s", m->ap_ssid);
     snprintf(s_ap_pass_live, sizeof s_ap_pass_live, "%s", m->ap_pass);
     char ssid[sizeof g_wm.ap_ssid];

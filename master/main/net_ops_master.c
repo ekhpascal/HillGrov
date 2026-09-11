@@ -2,10 +2,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
-#include "esp_random.h"
-#include "psa/crypto.h"
 #include "mcfg_store.h"
-#include "web_auth.h"
+#include "http_srv.h"
 #include "wifi_mgr.h"
 #include "time_svc.h"
 #include "node_mgr.h"
@@ -101,61 +99,27 @@ static int net_set_tz(const char *tz) {
 }
 
 /* ---- web password ----
- * web_auth_set_password() needs the runtime wa_state_t for its sha/rand hooks.
- * Task 11's http_srv owns the real one (it also holds the live login
- * sessions); until it exists, this file-static stands in -- it is only ever
- * used for its two function pointers here, so the sessions it carries are
- * irrelevant. TASK 11: delete s_wa/s_wa_ready and take http_srv's shared
- * wa_state_t instead, so a CLI password change also invalidates web sessions. */
-
-static wa_state_t s_wa;
-static uint8_t    s_wa_ready;
-static uint8_t    s_sha_failed;   /* set by sha256_fn; checked before we commit a hash */
-
-static void sha256_fn(const uint8_t *in, size_t n, uint8_t out[32]) {
-    size_t olen = 0;
-    psa_status_t st = psa_hash_compute(PSA_ALG_SHA_256, in, n, out, 32, &olen);
-    if (st != PSA_SUCCESS || olen != 32) {
-        /* web_auth's signature has no way to report this, so the failure is
-         * latched for master_web_set_password() to refuse the commit on.
-         * Zeroing the buffer as well keeps the digest deterministic rather
-         * than half-written, in case anything ever ignores the latch. */
-        ESP_LOGE(TAG, "psa_hash_compute failed (%d)", (int)st);
-        memset(out, 0, 32);
-        s_sha_failed = 1;
-    }
-}
-
-static void rand_fn(uint8_t *out, size_t n) { esp_fill_random(out, n); }
+ * The wa_state_t that hashes this password lives in http_srv (http_auth.c):
+ * it is the same state that holds the live web login sessions, so a password
+ * changed from the console invalidates the cookies issued against the old one
+ * -- which is the whole reason for there being exactly one of it.
+ *
+ * Order matters: hash into a LOCAL mcfg copy, commit it, and only then drop
+ * the sessions. Dropping them first would log every operator out even when
+ * the commit went on to fail with the old password still in force. */
 
 int master_web_set_password(const char *pw) {
     if (!lock_take()) return -2;
-    int rc = -1;
-    if (!s_wa_ready) {
-        psa_status_t st = psa_crypto_init();
-        if (st != PSA_SUCCESS) {
-            /* No crypto provider at all: an internal fault, not a storage
-             * problem -- nothing the operator can retry their way out of. */
-            ESP_LOGE(TAG, "psa_crypto_init failed (%d)", (int)st);
-            lock_give();
-            return -3;
-        }
-        web_auth_init(&s_wa, sha256_fn, rand_fn);
-        s_wa_ready = 1;
-    }
     hg_mcfg_t m = *mcfg_get();
-    s_sha_failed = 0;
-    /* Length rule (8..63) and the salt+hash+clear-MCFG_F_WEB_DEFAULT work
-     * all live in web_auth; -1 here is "too short/too long". */
-    if (web_auth_set_password(&s_wa, &m, pw) != 0) {
+    /* 0 ok, -1 outside 8..63, -3 SHA-256 unavailable (a broken board: the
+     * all-zero digest a failed hash would commit can never be matched again,
+     * so nothing is written). */
+    int rc = http_auth_hash_password(&m, pw);
+    if (rc == -1) {
         ESP_LOGW(TAG, "SET WEB PASSWORD: length must be 8..63");
-    } else if (s_sha_failed) {
-        /* Committing now would store a hash nothing can ever match and lock
-         * the web UI out permanently -- refuse and leave the old one intact. */
-        ESP_LOGE(TAG, "SET WEB PASSWORD: SHA-256 unavailable, password NOT changed");
-        rc = -3;
-    } else {
+    } else if (rc == 0) {
         rc = commit_and_log(&m, "SET WEB PASSWORD");
+        if (rc == 0) http_auth_sessions_drop();
     }
     lock_give();
     return rc;

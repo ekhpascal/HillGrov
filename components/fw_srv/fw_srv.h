@@ -1,12 +1,13 @@
 #pragma once
+#include "esp_http_server.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /* Master's zone-firmware image server (Task 15 controller ruling #2):
- * an IDF httpd (stack 4096) with exactly one URI, GET /fw/zone.bin, that
- * streams the "zone_fw" data partition (master's partitions.csv, offset
+ * exactly one URI, GET /fw/zone.bin, that streams the "zone_fw" data
+ * partition (master's partitions.csv, offset
  * 0x570000, size 0x180000) to a zone rebooted into rescue for a fleet
  * update.
  *
@@ -21,16 +22,31 @@ extern "C" {
  * 0xFFFFFFFF-seeded esp_rom_crc32_le convention tools/hg_otadata.py uses
  * for otadata (a different check value family; do not conflate the two).
  *
- * fw_srv_start() validates the header + the crc32 over the len image bytes
- * exactly ONCE (at startup) and caches the verdict; fw_srv_image_ok()
+ * fw_srv_validate() validates the header + the crc32 over the len image
+ * bytes exactly ONCE (at startup) and caches the verdict; fw_srv_image_ok()
  * exposes it without re-reading flash. GET /fw/zone.bin: verdict bad ->
  * 404 "FW_NO_IMAGE"; good -> Content-Length = len, then esp_partition_read
- * + httpd_resp_send_chunk in 4 KB pieces, esp_task_wdt_add/reset/delete
- * around the loop (the same SP1 rescue-upload TWDT pattern rescue_http.c's
- * upload_post uses). 0/-1, every failure logged. */
-int fw_srv_start(void);
+ * + send_all in 4 KB pieces, esp_task_wdt_add/reset/delete around the loop
+ * (the same SP1 rescue-upload TWDT pattern rescue_http.c's upload_post
+ * uses). 0/-1, every failure logged.
+ *
+ * SP4 Task 11 split this in two: the master now runs exactly ONE
+ * esp_http_server instance (components/http_srv), so fw_srv no longer starts
+ * a server of its own -- it validates the image here and hands its one URI
+ * handler to the shared instance through fw_srv_register(). Nothing else
+ * changed: the handler still frames the response by hand (identity, explicit
+ * Content-Length) because the zone's rescue_pull() client rejects the
+ * chunked+Content-Length pair httpd_resp_send_chunk() would produce. */
+int fw_srv_validate(void);
 
-/* Cached verdict from fw_srv_start()'s one-time validation; 1 = the
+/* Registers GET /fw/zone.bin on an already-started server. Called by
+ * http_srv_start() after it has registered its own routes; safe to call
+ * before or after fw_srv_validate() (the handler reads the cached verdict at
+ * request time and 404s "FW_NO_IMAGE" when it is bad). 0 ok, -1 if the
+ * registration failed (logged). */
+int fw_srv_register(httpd_handle_t server);
+
+/* Cached verdict from fw_srv_validate()'s one-time validation; 1 = the
  * zone_fw partition holds a good HGFW-prefixed image, 0 = missing/invalid
  * (fw_srv's own GET handler already 404s on this; the fleet sequencer's
  * PRECHECK step reads it too, per-zone, before starting an update). */

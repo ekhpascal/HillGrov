@@ -17,10 +17,11 @@ static const esp_partition_t *s_part;
 static uint32_t                s_img_len;
 static uint8_t                 s_img_ok;
 
-/* Shared by validate_image() (fw_srv_start(), before httpd exists) and
- * zone_bin_get() (the httpd worker, after) -- never touched concurrently
- * (fix round minor #8: validation always finishes before httpd_start()
- * even runs, so one 4 KB buffer is enough for both). */
+/* Shared by validate_image() (fw_srv_validate(), at boot) and zone_bin_get()
+ * (the httpd task, later) -- never touched concurrently (fix round minor #8:
+ * app_main calls fw_srv_validate() before http_srv_start(), so validation
+ * always finishes before any request can arrive and one 4 KB buffer is enough
+ * for both). */
 static uint8_t s_buf[FW_CHUNK];
 
 /* Explicit little-endian byte-offset reads (C code rule: wire/persisted
@@ -120,7 +121,7 @@ static esp_err_t zone_bin_get(httpd_req_t *req) {
     return rc;
 }
 
-int fw_srv_start(void) {
+int fw_srv_validate(void) {
     s_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "zone_fw");
     if (!s_part) {
         ESP_LOGE(TAG, "zone_fw partition not found");
@@ -131,20 +132,20 @@ int fw_srv_start(void) {
     if (!s_img_ok)
         ESP_LOGW(TAG, "zone_fw image missing/invalid (magic/len/crc) -- GET /fw/zone.bin will 404 FW_NO_IMAGE");
 
-    httpd_handle_t server = NULL;
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.stack_size = 4096;
-    if (httpd_start(&server, &config) != ESP_OK) {
-        ESP_LOGE(TAG, "httpd_start failed");
-        return -1;
-    }
+    return 0;
+}
 
+/* The master serves this path from the one shared httpd instance (Task 11);
+ * the 4096-byte stack this server used to run on is gone with it -- the
+ * shared instance runs at 8192, which the 4 KB static chunk buffer and the
+ * hand-framed response are comfortably inside. */
+int fw_srv_register(httpd_handle_t server) {
     static const httpd_uri_t get_zone_bin = { .uri = "/fw/zone.bin", .method = HTTP_GET, .handler = zone_bin_get };
-    if (httpd_register_uri_handler(server, &get_zone_bin) != ESP_OK) {
-        ESP_LOGE(TAG, "httpd_register_uri_handler failed");
+    esp_err_t rc = httpd_register_uri_handler(server, &get_zone_bin);
+    if (rc != ESP_OK) {
+        ESP_LOGE(TAG, "register GET /fw/zone.bin failed: %s", esp_err_to_name(rc));
         return -1;
     }
-
     return 0;
 }
 

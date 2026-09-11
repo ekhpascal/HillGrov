@@ -12,10 +12,12 @@ extern "C" {
  * sequence and must not grow a second copy of it. */
 const net_ops_t *master_net_ops(void);
 
-/* The set_web_password member, exposed on its own because it is the one op
- * with a runtime dependency of its own (a wa_state_t for web_auth's sha/rand
- * hooks) that Task 11 will re-point at http_srv's shared state. 0 ok, -1 if
- * the password is outside 8..63 or the commit could not be stored. */
+/* The set_web_password member, exposed on its own because http_srv's
+ * POST /api/password calls it directly (it owns the mcfg commit and the ops
+ * mutex, which the handler must not duplicate). Hashes through http_srv's
+ * shared wa_state_t and, once the commit has landed, drops every live web
+ * session. 0 ok, -1 password outside 8..63, -2 valid but not stored,
+ * -3 SHA-256 unavailable (nothing was written). */
 int master_web_set_password(const char *pw);
 
 #ifdef __cplusplus
