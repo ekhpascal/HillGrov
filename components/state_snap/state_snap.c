@@ -105,7 +105,17 @@ static int ss_node(char *buf, size_t cap, size_t *off, const hg_node_t *nd, uint
 
     int stale  = (nd->health == NODE_H_OFFLINE);
     int failed = cfg_sync_failed && nd->id >= 1 && nd->id <= HG_MAX_ZONES && cfg_sync_failed[nd->id - 1];
-    uint32_t age = (now_ms >= nd->last_hb_ms) ? (now_ms - nd->last_hb_ms) / 1000 : 0;
+    /* Plain unsigned subtraction (ring_health.c's own convention), NOT a
+     * "now_ms >= last_hb_ms" guard: last_hb_ms/now_ms are millisecond
+     * counters that wrap at 2^32 (~49.7 days), and modular arithmetic
+     * already gives the right answer across that wrap -- a guard that
+     * falls back to 0 instead would make a long-dead node (last heard
+     * before the wrap) look "just heard" the moment now_ms wraps past it.
+     * A never-heard row (last_hb_ms == 0, e.g. loaded fresh from NVS) has
+     * no real "last heard" instant to measure from, so this reports the
+     * plain result (now_ms/1000) rather than a sentinel -- see
+     * test_hb_age_s_never_heard_row_is_plain_now_ms. */
+    uint32_t age = (uint32_t)(now_ms - nd->last_hb_ms) / 1000;
 
     if (raw(buf, cap, off, "{")) return -1;
     if (fmt(buf, cap, off, "\"id\":%u,", (unsigned)nd->id)) return -1;
@@ -123,8 +133,7 @@ static int ss_node(char *buf, size_t cap, size_t *off, const hg_node_t *nd, uint
     if (raw(buf, cap, off, "\"faults\":") || jstr(buf, cap, off, faults)) return -1;
     if (fmt(buf, cap, off, ",\"mode\":%u,\"shelves\":[", (unsigned)nd->hb.mode)) return -1;
 
-    int ns = nd->hb.n_shelves;
-    if (ns < 0) ns = 0;
+    int ns = nd->hb.n_shelves;   /* uint8_t, so never negative -- only the upper bound needs clamping */
     if (ns > 4) ns = 4;
     for (int i = 0; i < ns; i++) {
         const hg_hb_shelf_t *s = &nd->hb.shelf[i];
