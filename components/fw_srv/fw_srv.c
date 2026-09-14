@@ -24,6 +24,18 @@ static uint8_t                 s_img_ok;
  * for both). */
 static uint8_t s_buf[FW_CHUNK];
 
+/* esp_task_wdt_reset() is NOT a quiet no-op for a task that is not
+ * subscribed: it logs an ESP_LOGE("task not found") every time (bench: ~60
+ * error lines at boot, one per 4 KB chunk, from fw_srv_validate() -- and 384
+ * for a full-size image). Both loops below run in two different worlds --
+ * fw_srv_validate() at boot on an unsubscribed task, fw_srv_revalidate() and
+ * zone_bin_get() on the httpd task inside its own subscription -- so the
+ * reset is gated on the subscription rather than called blind.
+ * esp_task_wdt_status() is silent when the answer is "not subscribed". */
+static void wdt_kick(void) {
+    if (esp_task_wdt_status(NULL) == ESP_OK) esp_task_wdt_reset();
+}
+
 /* Explicit little-endian byte-offset reads (C code rule: wire/persisted
  * data is packed by explicit offset, never via struct-cast) -- mirrors
  * hg_blob.c's rd32(). */
@@ -45,6 +57,10 @@ static int validate_image(const esp_partition_t *part, uint32_t *len_out) {
 
     uint32_t rem = len, off = FW_HDR_LEN, crc = 0;
     while (rem) {
+        /* Silent at boot (that caller is not subscribed); load-bearing for
+         * fw_srv_revalidate(), which runs on the TWDT-subscribed httpd task
+         * right after a browser upload and re-reads the whole image. */
+        wdt_kick();
         uint32_t n = rem < FW_CHUNK ? rem : FW_CHUNK;
         if (esp_partition_read(part, off, s_buf, n) != ESP_OK) return -1;
         crc = hg_crc32(crc, s_buf, n);
@@ -72,8 +88,37 @@ static int send_all(httpd_req_t *r, const char *buf, size_t len) {
         int n = httpd_send(r, buf + sent, len - sent);
         if (n <= 0) return -1;
         sent += (size_t)n;
+        /* SP4 Task 13 bench fix: each httpd_send() can block for the socket's
+         * full 5 s SO_SNDTIMEO and still come back with only a partial count
+         * on a marginal AP link, so two slow partial sends inside ONE 4 KB
+         * chunk already exceed the 8 s TWDT -- and the caller below only
+         * resets between chunks. That is not a hypothetical: a fleet pull to
+         * a zone in rescue tripped it on the bench and PANIC=y rebooted the
+         * master mid-update (the zone's own retry then recovered, but the
+         * master lost its sequencer state and never reported DONE). Feeding
+         * the dog on PROGRESS keeps hang detection intact: a peer that has
+         * genuinely stopped reading makes httpd_send return <= 0 after one
+         * 5 s timeout and the loop above bails out to close the socket. */
+        wdt_kick();
     }
     return 0;
+}
+
+/* SP4 Task 13: re-run the one-time validation after POST /api/fw/zone has
+ * rewritten the partition (http_upload_zone.c). Callable ONLY from the httpd
+ * task: it reuses the same s_buf that zone_bin_get() streams from, and both
+ * only ever run on that one task (see s_buf's comment above). Unlike
+ * fw_srv_validate() it also clears s_img_len on a bad verdict -- validate_image
+ * leaves *len_out untouched when it fails, and a stale length behind
+ * s_img_ok = 0 is a trap for anything that ever reads the two together.
+ * 0 = the partition now holds a good image, -1 = it does not (which is the
+ * expected answer when the caller has deliberately erased the header). */
+int fw_srv_revalidate(void) {
+    if (!s_part) return -1;
+    s_img_ok = (validate_image(s_part, &s_img_len) == 0) ? 1 : 0;
+    if (!s_img_ok) s_img_len = 0;
+    ESP_LOGI(TAG, "zone_fw revalidated: %s (%lu B)", s_img_ok ? "ok" : "no image", (unsigned long)s_img_len);
+    return s_img_ok ? 0 : -1;
 }
 
 /* fix round 1 CRITICAL fix: httpd_resp_send_chunk() UNCONDITIONALLY emits
@@ -87,6 +132,18 @@ static int send_all(httpd_req_t *r, const char *buf, size_t len) {
  * headers + blank line via one send_all(), then the body via send_all()
  * chunks -- and never touches httpd_resp_send_chunk/httpd_resp_set_hdr at
  * all. */
+/* How this handler returns (SP4 Task 11 record item, settled in Task 13) --
+ * the same rule http_srv_done() states for every other handler on the shared
+ * instance, applied by hand here because this file deliberately does not use
+ * http_srv's helpers:
+ *   404 FW_NO_IMAGE -> ESP_OK. This is a GET with no request body, so there
+ *       is nothing for httpd to purge and the connection may be kept; the
+ *       rescue client closes it itself after reading the 404.
+ *   any failure after the headers are on the wire -> ESP_FAIL, so httpd
+ *       CLOSES the socket. The client has been promised Content-Length bytes
+ *       it is not going to get, and a truncated body on a kept-alive
+ *       connection would be parsed as the next response. The close is the
+ *       only honest framing left. */
 static esp_err_t zone_bin_get(httpd_req_t *req) {
     if (!s_img_ok) {
         httpd_resp_set_status(req, "404 Not Found");

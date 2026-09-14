@@ -39,6 +39,19 @@ extern "C" {
  * chunked+Content-Length pair httpd_resp_send_chunk() would produce. */
 int fw_srv_validate(void);
 
+/* SP4 Task 13: re-runs that validation after the zone_fw partition has been
+ * rewritten from the browser (POST /api/fw/zone, http_upload_zone.c) and
+ * updates the cached verdict + length. 0 = the partition now holds a good
+ * HGFW-prefixed image, -1 = it does not (the normal answer while the upload
+ * has the header sector erased, and after a failed upload).
+ *
+ * Call it ONLY from the httpd task: it shares fw_srv.c's one 4 KB static
+ * buffer with the GET /fw/zone.bin handler, and the whole "never touched
+ * concurrently" argument for that buffer rests on both living on that single
+ * task. Everything else (the fleet sequencer's PRECHECK) only ever READS the
+ * verdict through fw_srv_image_ok(). */
+int fw_srv_revalidate(void);
+
 /* Registers GET /fw/zone.bin on an already-started server. Called by
  * http_srv_start() after it has registered its own routes; safe to call
  * before or after fw_srv_validate() (the handler reads the cached verdict at

@@ -11,7 +11,8 @@
 set(HTTP_SRV_SRCS "")
 if("${CMAKE_PROJECT_NAME}" STREQUAL "hillgrow_master")
     list(APPEND HTTP_SRV_SRCS "http_routes.c" "http_srv.c" "http_auth.c" "http_login.c" "http_cmd.c" "http_static.c"
-         "http_api.c" "http_api_cfg.c" "http_upload.c")
+         "http_api.c" "http_api_cfg.c" "http_upload.c" "http_upload_master.c" "http_upload_zone.c"
+         "http_fleet.c")
 endif()
 
 idf_component_register(
@@ -19,5 +20,6 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES esp_http_server cmd_core cmd_task web_auth hg_mcfg web_assets fw_srv
     PRIV_REQUIRES app_common time_svc time_core hg_blob nvs_flash mbedtls esp_hw_support espressif__cjson
+                  app_update esp_partition
                   state_snap hg_json alarm_mgr node_mgr wifi_mgr master_cmds
 )
