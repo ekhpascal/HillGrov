@@ -30,11 +30,27 @@ extern void master_net_ops_unlock(void);
  * curl) target the master's own mcfg instead of failing loudly. Tri-state:
  * 0 = key absent, caller uses its own default; 1 = parsed, *out set; -1 =
  * present but not a plain integer (trailing garbage, empty value, no digits
- * at all) -- caller must answer 400 BAD_QUERY, not proceed. */
+ * at all) -- caller must answer 400 BAD_QUERY, not proceed.
+ *
+ * Review fix round 2: both httpd_req_get_url_query_str and
+ * httpd_query_key_value can also return ESP_ERR_HTTPD_RESULT_TRUNC (the
+ * query string, or one key's value, didn't fit the scratch buffer) -- round
+ * 1's blanket "!= ESP_OK -> absent" collapsed that into the same case as a
+ * genuinely missing key, so ?zone=123456789 (9 digits into val[8]) silently
+ * became "zone absent" -> defaulted to zone 0, the exact class of bug this
+ * whole helper exists to close. Only ESP_ERR_NOT_FOUND now means "absent";
+ * every other non-OK (TRUNC, INVALID_ARG) means "present but unusable". */
 static int query_int(httpd_req_t *req, const char *key, long *out) {
     char q[64], val[8];
-    if (httpd_req_get_url_query_str(req, q, sizeof q) != ESP_OK) return 0;
-    if (httpd_query_key_value(q, key, val, sizeof val) != ESP_OK) return 0;
+
+    esp_err_t qrc = httpd_req_get_url_query_str(req, q, sizeof q);
+    if (qrc == ESP_ERR_NOT_FOUND) return 0;   /* no query string at all: every key is absent */
+    if (qrc != ESP_OK) return -1;             /* e.g. TRUNC: query string too long to trust */
+
+    esp_err_t rc = httpd_query_key_value(q, key, val, sizeof val);
+    if (rc == ESP_ERR_NOT_FOUND) return 0;    /* this key genuinely absent */
+    if (rc != ESP_OK) return -1;              /* e.g. TRUNC: value too long to trust */
+
     if (val[0] == '\0') return -1;
     char *end = NULL;
     long v = strtol(val, &end, 10);
