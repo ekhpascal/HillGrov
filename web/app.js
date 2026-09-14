@@ -20,14 +20,29 @@ HG.state = {
   route: { name: "dashboard" },
   lastRoute: null,      /* hash to return to after a login forced by a 401 */
   loginError: "",
-  console: {}            /* zoneId -> { log, history, histIdx, draft, forward } */
+  console: {}            /* zoneId -> { log, history, histIdx, forward } -- drafts live in HG.drafts */
 };
 
 HG.consoleState = function (id) {
   if (!HG.state.console[id]) {
-    HG.state.console[id] = { log: [], history: [], histIdx: 0, draft: "", forward: false };
+    HG.state.console[id] = { log: [], history: [], histIdx: 0, forward: false };
   }
   return HG.state.console[id];
+};
+
+/* ---------- HG.drafts: survives a poll-driven rerender ----------
+ * A poll tick replaces #app's innerHTML wholesale; withFocusPreserved keeps
+ * focus+selection but NOT the value, so any input that must survive a tick
+ * mid-type has to thread its value through here instead of relying on the
+ * DOM to remember it. Every such input carries `data-draft` and is rendered
+ * with `value="${HG.esc(HG.drafts[key] || '')}"`; the delegated `input`
+ * listener below writes back on every keystroke. console-input is keyed per
+ * zone (HG.consoleDraftKey) so switching zones doesn't leak one zone's
+ * half-typed command into another's input. */
+HG.drafts = {};
+HG.consoleDraftKey = function (id) { return "console-input:" + id; };
+HG.draftKey = function (el) {
+  return el.id === "console-input" ? HG.consoleDraftKey(HG.state.route.id) : el.id;
 };
 
 /* ---------- ApiError ---------- */
@@ -188,12 +203,26 @@ HG.api = {
 HG.poll = (function () {
   var backoff = 2000;
   var timer = null;
+  var inFlight = false;
   function schedule(ms) {
     if (timer) clearTimeout(timer);
     timer = setTimeout(tick, ms);
   }
   function tick() {
+    /* One outstanding request at a time: a stray immediate retick (the
+     * visibilitychange handler's schedule(0), or a manual HG.poll.tick())
+     * while a fetch is already in flight is a no-op -- the in-flight
+     * request's own completion is what reschedules the next tick, so
+     * nothing is lost by just returning here. */
+    if (inFlight) return;
     if (document.hidden) { schedule(2000); return; }
+    /* No point polling while sitting on the login form (nothing to show,
+     * and it only hammers the master with 401s) or once we positively know
+     * we're logged out. auth===null (cold boot, not yet determined) must
+     * still poll -- that first request is how auth gets determined at all.
+     * HG.actions.login resumes this explicitly once both conditions clear. */
+    if (HG.state.route.name === "login" || HG.state.auth === false) { schedule(2000); return; }
+    inFlight = true;
     HG.api.get("/api/state").then(function (snap) {
       HG.state.snap = snap;
       backoff = 2000;
@@ -204,6 +233,7 @@ HG.poll = (function () {
       HG.state.online = err && err.status === 401 ? true : false;
       backoff = Math.min(backoff * 2, 30000);
     }).then(function () {
+      inFlight = false;
       HG.rerender();
       schedule(backoff);
     });
@@ -218,17 +248,32 @@ HG.poll = (function () {
 HG.rewriteForZone = function (line, zoneId) {
   var parts = line.split(/\s+/).filter(function (p) { return p.length; });
   if (!parts.length) return line;
+  /* Already addressed (operator pre-typed "SET ZONE 2 ..."): don't double it
+   * up into "SET ZONE 3 ZONE 2 ...". */
+  if (parts.length > 1 && parts[1].toUpperCase() === "ZONE") return line;
   var verb = parts.shift();
   return verb + " ZONE " + zoneId + (parts.length ? " " + parts.join(" ") : "");
 };
 
+/* Class names built from server enums are whitelisted, not just
+ * lower-cased: an unexpected value must never reach a class/attribute
+ * position unescaped (a stray `"` in it could break out of the attribute),
+ * and it should render as a neutral fallback rather than a broken class. */
+var HEALTH_CLASS = { ONLINE: "online", DEGRADED: "degraded", OFFLINE: "offline", UPDATING: "updating", EMPTY: "empty" };
+function healthBadgeClass(h) { return "badge badge-" + (HEALTH_CLASS[h] || "empty"); }
+var TIME_SRC_CLASS = { NTP: "ntp", SET: "set", NONE: "none" };
+function timeSrcBadgeClass(s) { return "badge badge-src-" + (TIME_SRC_CLASS[s] || "none"); }
+
+function shelfNum(x) { return Number(x) | 0; }
+
 function shelfTotals(shelves) {
   var soilSum = 0, soilN = 0, lightSum = 0, lightN = 0, pumpSum = 0, any = false;
   (shelves || []).forEach(function (s) {
-    if (s.pct_a || s.pct_b || s.white || s.red || s.pump_s) any = true;
-    soilSum += (s.pct_a || 0) + (s.pct_b || 0); soilN += 2;
-    lightSum += (s.white || 0) + (s.red || 0); lightN += 2;
-    pumpSum += s.pump_s || 0;
+    var a = shelfNum(s.pct_a), b = shelfNum(s.pct_b), w = shelfNum(s.white), r = shelfNum(s.red), p = shelfNum(s.pump_s);
+    if (a || b || w || r || p) any = true;
+    soilSum += a + b; soilN += 2;
+    lightSum += w + r; lightN += 2;
+    pumpSum += p;
   });
   return {
     soil: any ? Math.round(soilSum / soilN) + "%" : "—",
@@ -245,7 +290,8 @@ HG.views.login = function () {
   return '<div class="login-wrap"><form class="login-card" data-action="login">' +
     "<h1>HillGrow</h1>" +
     '<label for="login-password">Password</label>' +
-    '<input id="login-password" name="password" type="password" autocomplete="current-password" required>' +
+    '<input id="login-password" name="password" type="password" autocomplete="current-password" data-draft value="' +
+    HG.esc(HG.drafts["login-password"] || "") + '" required>' +
     err +
     '<button type="submit">Log in</button>' +
     "</form></div>";
@@ -300,7 +346,7 @@ HG.views.dashboard = function () {
   var quarantine = (m.http && m.http.cmd_quarantined > 0)
     ? '<p class="warn-line">⚠ ' + m.http.cmd_quarantined + " console slot(s) degraded</p>" : "";
   var master = '<section class="card master-card"><h2>Master <span>v' + HG.esc(m.version) + "</span></h2>" +
-    "<dl><dt>Time</dt><dd>" + HG.esc(m.time) + ' <span class="badge badge-src-' + m.time_src.toLowerCase() + '">' + HG.esc(m.time_src) + "</span></dd>" +
+    "<dl><dt>Time</dt><dd>" + HG.esc(m.time) + ' <span class="' + timeSrcBadgeClass(m.time_src) + '">' + HG.esc(m.time_src) + "</span></dd>" +
     "<dt>STA</dt><dd>" + sta + "</dd>" +
     "<dt>AP</dt><dd>" + HG.esc(m.wifi.ap.ssid) + " · " + m.wifi.ap.clients + " client(s)</dd>" +
     "<dt>Heap min</dt><dd>" + m.heap_min_kb + " KB</dd></dl>" + quarantine + "</section>";
@@ -310,7 +356,7 @@ HG.views.dashboard = function () {
 
 HG.views.nodeCard = function (n) {
   var name = n.name ? HG.esc(n.name) : ("Z" + n.id);
-  var hcls = "badge badge-" + n.health.toLowerCase();
+  var hcls = healthBadgeClass(n.health);
   var stale = n.link_stale ? '<span class="pill">stale</span>' : "";
   var t = shelfTotals(n.shelves);
   return '<a class="card node-card" href="#/zone/' + n.id + '">' +
@@ -348,8 +394,9 @@ HG.views.zone = function (id) {
 
 HG.views.shelfTable = function (shelves) {
   var rows = shelves.map(function (s, i) {
-    return "<tr><td>" + i + "</td><td>" + s.pct_a + "</td><td>" + s.pct_b + "</td><td>" + s.white +
-      "</td><td>" + s.red + "</td><td>" + (s.out ? "on" : "off") + "</td><td>" + s.pump_s + "s</td></tr>";
+    var a = shelfNum(s.pct_a), b = shelfNum(s.pct_b), w = shelfNum(s.white), r = shelfNum(s.red), p = shelfNum(s.pump_s);
+    return "<tr><td>" + i + "</td><td>" + a + "</td><td>" + b + "</td><td>" + w +
+      "</td><td>" + r + "</td><td>" + (s.out ? "on" : "off") + "</td><td>" + p + "s</td></tr>";
   }).join("");
   return '<table class="shelf-table"><thead><tr><th>#</th><th>Soil A</th><th>Soil B</th><th>White</th><th>Red</th><th>Out</th><th>Pump</th></tr></thead><tbody>' + rows + "</tbody></table>";
 };
@@ -357,19 +404,21 @@ HG.views.shelfTable = function (shelves) {
 HG.views.replaceBoardForm = function (id) {
   return '<section class="card"><h2>Replace board</h2>' +
     '<form data-action="replace-board" class="inline-form">' +
-    '<input id="mac-input" placeholder="aa:bb:cc:dd:ee:ff" required>' +
+    '<input id="mac-input" data-draft value="' + HG.esc(HG.drafts["mac-input"] || "") +
+    '" placeholder="aa:bb:cc:dd:ee:ff" required>' +
     '<button type="submit">Set</button></form><p class="form-error"></p></section>';
 };
 
 HG.views.console = function (id) {
   var cs = HG.consoleState(id);
+  var draft = HG.drafts[HG.consoleDraftKey(id)] || "";
   var log = cs.log.map(function (e) {
     return "&gt; " + HG.esc(e.sent) + "\n" + HG.esc(e.reply) + "\n";
   }).join("\n");
   return '<section class="card console-card"><h2>Console</h2>' +
     '<pre class="console-log" id="console-log">' + log + "</pre>" +
     '<form data-action="console" class="console-form">' +
-    '<input id="console-input" autocomplete="off" placeholder="GET ID" value="' + HG.esc(cs.draft) + '">' +
+    '<input id="console-input" autocomplete="off" data-draft placeholder="GET ID" value="' + HG.esc(draft) + '">' +
     '<button type="submit">Send</button></form>' +
     '<label class="forward-label"><input type="checkbox" id="forward-zone"' + (cs.forward ? " checked" : "") +
     "> Forward to zone " + id + "</label></section>";
@@ -442,11 +491,12 @@ HG.actions = {
     var pwd = form.querySelector("#login-password").value;
     HG.api.post("/api/login", { password: pwd }, "json").then(function () {
       HG.state.auth = true;
+      HG.drafts["login-password"] = "";
       var dest = HG.state.lastRoute || "#/dashboard";
       HG.state.lastRoute = null;
       location.hash = dest;
       HG.render();
-      HG.poll.tick();
+      HG.poll.tick();   /* route/auth just cleared the poll's login-page gate */
     }, function (err) {
       var msg = "Login failed";
       if (err.status === 401) msg = "Wrong password";
@@ -465,13 +515,14 @@ HG.actions = {
   consoleSend: function () {
     var id = HG.state.route.id;
     var cs = HG.consoleState(id);
+    var draftKey = HG.consoleDraftKey(id);
     var input = document.getElementById("console-input");
     var line = (input.value || "").trim();
     if (!line) return;
     var sent = cs.forward ? HG.rewriteForZone(line, id) : line;
     cs.history.push(line);
     cs.histIdx = cs.history.length;
-    cs.draft = "";
+    HG.drafts[draftKey] = "";
     var entry = { sent: sent, reply: "…" };
     cs.log.push(entry);
     if (cs.log.length > 20) cs.log.shift();
@@ -485,20 +536,22 @@ HG.actions = {
   consoleKey: function (e) {
     var id = HG.state.route.id;
     var cs = HG.consoleState(id);
+    var draftKey = HG.consoleDraftKey(id);
     if (e.key === "ArrowUp") {
       e.preventDefault();
       if (cs.histIdx > 0) cs.histIdx--;
-      if (cs.history[cs.histIdx] != null) { cs.draft = cs.history[cs.histIdx]; e.target.value = cs.draft; }
+      if (cs.history[cs.histIdx] != null) { HG.drafts[draftKey] = cs.history[cs.histIdx]; e.target.value = HG.drafts[draftKey]; }
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
       if (cs.histIdx < cs.history.length) cs.histIdx++;
-      cs.draft = cs.history[cs.histIdx] || "";
-      e.target.value = cs.draft;
+      HG.drafts[draftKey] = cs.history[cs.histIdx] || "";
+      e.target.value = HG.drafts[draftKey];
     }
   },
   replaceBoard: function (form) {
     var id = HG.state.route.id;
-    var mac = form.querySelector("#mac-input").value.trim();
+    var macInput = form.querySelector("#mac-input");
+    var mac = macInput.value.trim();
     var out = form.querySelector(".form-error");
     if (!/^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/.test(mac)) {
       out.textContent = "Enter a MAC like aa:bb:cc:dd:ee:ff";
@@ -507,6 +560,8 @@ HG.actions = {
     out.textContent = "…";
     HG.api.post("/api/cmd", "SET NODE " + id + " MAC " + mac, "text").then(function (reply) {
       out.textContent = reply;
+      HG.drafts["mac-input"] = "";
+      macInput.value = "";
     }, function (err) {
       out.textContent = (err && err.message) || "Failed";
     });
@@ -533,11 +588,8 @@ HG.bindEvents = function () {
     if (e.target && e.target.id === "console-input") HG.actions.consoleKey(e);
   });
   document.addEventListener("input", function (e) {
-    if (!e.target || !e.target.id) return;
-    if (e.target.id === "console-input") {
-      var id = HG.state.route.id;
-      HG.consoleState(id).draft = e.target.value;
-    }
+    if (!e.target || !e.target.hasAttribute || !e.target.hasAttribute("data-draft")) return;
+    HG.drafts[HG.draftKey(e.target)] = e.target.value;
   });
   document.addEventListener("change", function (e) {
     if (e.target && e.target.id === "forward-zone") {

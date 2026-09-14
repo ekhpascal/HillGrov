@@ -1,15 +1,23 @@
 :root {
   --bg: #f4f6f4; --card: #ffffff; --text: #16211a; --muted: #5b6b5b; --border: #d8e0d8;
+  /* Solid fills (buttons, badges): always paired with fixed #fff text, so
+     these stay put across themes -- only the *-text tokens below move. */
   --accent: #2f7d32; --ok: #2f7d32; --degraded: #b8860b; --offline: #c0392b;
   --updating: #2b6fb8; --empty: #8a8a8a; --warn: #9a6b00;
+  /* Status colour used AS TEXT (links, ring/banner copy, form errors) sits
+     directly on --bg/--card, which the fills above don't -- kept separate so
+     dark mode can brighten them without washing out white-on-fill contrast. */
+  --link: #2f7d32; --ok-text: #2f7d32; --offline-text: #c0392b; --warn-text: #9a6b00;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #121812; --card: #1c241c; --text: #e6efe6; --muted: #9fb09f; --border: #2c382c;
+    --link: #5fbf62; --ok-text: #5fbf62; --offline-text: #eb6f63; --warn-text: #e0ad3d;
   }
 }
 :root[data-theme="dark"] {
   --bg: #121812; --card: #1c241c; --text: #e6efe6; --muted: #9fb09f; --border: #2c382c;
+  --link: #5fbf62; --ok-text: #5fbf62; --offline-text: #eb6f63; --warn-text: #e0ad3d;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
@@ -17,7 +25,7 @@ body {
   background: var(--bg); color: var(--text);
   font: 15px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif;
 }
-a { color: var(--accent); }
+a { color: var(--link); }
 h1, h2 { margin: 10px 0 6px; }
 h1 { font-size: 20px; }
 h2 { font-size: 16px; }
@@ -36,7 +44,7 @@ p.loading, p.empty { color: var(--muted); }
   text-decoration: none; color: var(--muted); display: flex; align-items: center;
   justify-content: center; min-height: 44px; font-size: 13px;
 }
-.nav a.active { color: var(--accent); font-weight: 700; }
+.nav a.active { color: var(--link); font-weight: 700; }
 
 input, select, button, textarea {
   font: inherit; min-height: 44px; border-radius: 8px; border: 1px solid var(--border);
@@ -65,12 +73,12 @@ label { display: block; font-size: 13px; color: var(--muted); margin: 6px 0 2px;
 .pill { font-size: 10px; background: var(--muted); color: #fff; border-radius: 6px; padding: 1px 6px; margin-left: 4px; }
 
 .ring-banner, .banner { padding: 8px 12px; border-radius: 10px; margin: 8px 0; font-weight: 600; }
-.ring-ok { background: rgba(47, 125, 50, .15); color: var(--ok); }
-.ring-open { background: rgba(192, 57, 43, .15); color: var(--offline); }
+.ring-ok { background: rgba(47, 125, 50, .15); color: var(--ok-text); }
+.ring-open { background: rgba(192, 57, 43, .15); color: var(--offline-text); }
 .ring-idle { background: rgba(138, 138, 138, .18); color: var(--muted); }
-.banner-warn { background: rgba(184, 134, 11, .18); color: var(--warn); }
-.banner-offline { background: rgba(192, 57, 43, .15); color: var(--offline); }
-.warn-line { color: var(--warn); font-size: 13px; margin: 4px 0 0; }
+.banner-warn { background: rgba(184, 134, 11, .18); color: var(--warn-text); }
+.banner-offline { background: rgba(192, 57, 43, .15); color: var(--offline-text); }
+.warn-line { color: var(--warn-text); font-size: 13px; margin: 4px 0 0; }
 
 dl { margin: 4px 0; }
 .master-card dl, .zone-dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; }
@@ -98,12 +106,11 @@ dl dd { margin: 0; }
 }
 .console-form { display: flex; gap: 6px; margin-top: 6px; }
 .console-form input { flex: 1; }
-.forward-label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); margin-top: 8px; }
-.forward-label input { min-height: auto; }
+.forward-label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); margin-top: 8px; min-height: 44px; }
 
 .inline-form { display: flex; gap: 6px; flex-wrap: wrap; }
 .inline-form input { flex: 1; min-width: 160px; }
-.form-error { color: var(--offline); font-size: 13px; margin: 4px 0 0; min-height: 1em; }
+.form-error { color: var(--offline-text); font-size: 13px; margin: 4px 0 0; min-height: 1em; }
 
 .back-link { display: inline-block; margin: 10px 0; text-decoration: none; }
 
