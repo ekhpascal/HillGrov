@@ -212,7 +212,11 @@ esp_err_t h_wifi_scan(httpd_req_t *req) {
 /* ---- POST /api/wifi ---- */
 
 esp_err_t h_wifi_set(httpd_req_t *req) {
-    char body[192];   /* {"sta":{"ssid":"<=32 B","pass":"<=63 B"}} plus punctuation */
+    /* Review fix round 1 (IMPORTANT #4): a legal 63-char password (or a
+     * 32-char ssid) built entirely of '"'/'\\' doubles under JSON-string
+     * escaping on the wire, so 192 B was not actually enough headroom for a
+     * legal worst-case body -- sized for 2x(32+63) plus punctuation/keys. */
+    char body[384];
     int n = http_srv_body(req, body, sizeof body);
     if (n == HTTP_BODY_TOO_LONG) { http_srv_error(req, 413, "TOO_LONG", NULL);    return http_srv_done(req, 0); }
     if (n == HTTP_BODY_CHUNKED)  { http_srv_error(req, 400, "CHUNKED", NULL);     return http_srv_done(req, 0); }
