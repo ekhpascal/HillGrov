@@ -131,6 +131,9 @@ static void test_two_node_snapshot_shapes_and_values(void) {
     cJSON *defaults = cJSON_GetObjectItem(master, "defaults");
     TEST_ASSERT_TRUE(cJSON_IsTrue(cJSON_GetObjectItem(defaults, "web")));
     TEST_ASSERT_TRUE(cJSON_IsFalse(cJSON_GetObjectItem(defaults, "ap")));
+    cJSON *http = cJSON_GetObjectItem(master, "http");
+    TEST_ASSERT_NOT_NULL(http);
+    TEST_ASSERT_EQUAL_INT(0, cJSON_GetObjectItem(http, "cmd_quarantined")->valueint);
 
     cJSON *nodes = cJSON_GetObjectItem(root, "nodes");
     TEST_ASSERT_TRUE(cJSON_IsArray(nodes));
@@ -308,6 +311,7 @@ static void test_master_block_worst_case_size_fits(void) {
     m.version = version_buf;
     m.fleet_line = fleet_buf;
     m.time_src = "NTP";
+    m.cmd_quarantined = 255;
     m.fw.slot = "MASTER-A";        /* 8 */
     m.fw.state = "UPLOADNG";       /* 8 */
     m.fw.other = "ZONE-B12";       /* 8 */
@@ -333,6 +337,7 @@ static void test_master_block_worst_case_size_fits(void) {
     TEST_ASSERT_NOT_NULL(root);
     cJSON *master = cJSON_GetObjectItem(root, "master");
     TEST_ASSERT_EQUAL_STRING(version_buf, cJSON_GetObjectItem(master, "version")->valuestring);
+    TEST_ASSERT_EQUAL_INT(255, cJSON_GetObjectItem(cJSON_GetObjectItem(master, "http"), "cmd_quarantined")->valueint);
     cJSON *ring = cJSON_GetObjectItem(root, "ring");
     TEST_ASSERT_EQUAL_size_t(47, strlen(cJSON_GetObjectItem(ring, "blame")->valuestring));
     TEST_ASSERT_EQUAL_INT(0, cJSON_GetArraySize(cJSON_GetObjectItem(root, "nodes")));

@@ -103,18 +103,18 @@ esp_err_t h_login(httpd_req_t *req) {
 
     char cookie[96];
     ESP_LOGI(TAG, "login ok");
-    http_srv_no_content(req, session_cookie(cookie, sizeof cookie, token));
-    return http_srv_done(req, 1);
+    int sent = http_srv_no_content(req, session_cookie(cookie, sizeof cookie, token));
+    return sent == 0 ? http_srv_done(req, 1) : ESP_FAIL;
 }
 
 esp_err_t h_logout(httpd_req_t *req) {
     char hdr[COOKIE_HDR_MAX];
     if (cookie_header(req, hdr, sizeof hdr) == 0) http_auth_logout_cookie(hdr);
     char cookie[96];
-    http_srv_no_content(req, session_cookie(cookie, sizeof cookie, NULL));
+    int sent = http_srv_no_content(req, session_cookie(cookie, sizeof cookie, NULL));
     /* A logout carries no body; one that does is not drained, so the socket
      * closes -- which for a logout is no loss at all. */
-    return http_srv_done(req, 0);
+    return sent == 0 ? http_srv_done(req, 0) : ESP_FAIL;
 }
 
 /* Implemented in master/main/net_ops_master.c, which owns the mcfg
@@ -166,6 +166,6 @@ esp_err_t h_password(httpd_req_t *req) {
 
     char cookie[96];
     ESP_LOGI(TAG, "web password changed%s", lrc == 0 ? "" : " (re-login required)");
-    http_srv_no_content(req, session_cookie(cookie, sizeof cookie, lrc == 0 ? token : NULL));
-    return http_srv_done(req, 1);
+    int sent = http_srv_no_content(req, session_cookie(cookie, sizeof cookie, lrc == 0 ? token : NULL));
+    return sent == 0 ? http_srv_done(req, 1) : ESP_FAIL;
 }

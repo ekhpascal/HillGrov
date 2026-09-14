@@ -23,6 +23,11 @@ typedef struct {
        fills these from mcfg_get()->flags -- not derivable in this pure
        component. */
     uint8_t     web_default, ap_default;
+    /* Task 12 carry: /api/cmd's session slots permanently withdrawn after an
+       orphaned dispatch (http_cmd.c's s_quarantined, via http_cmd_quarantined()).
+       Emitted as "http":{"cmd_quarantined":N} so the dashboard can flag a web
+       CLI endpoint that is losing capacity. */
+    uint8_t     cmd_quarantined;
 } snap_master_t;
 
 typedef int (*snap_write_fn)(void *ctx, const char *buf, size_t n);   /* 0 ok / -1 abort */

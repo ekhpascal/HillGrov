@@ -9,6 +9,7 @@
 #include "mcfg_store.h"
 #include "app_if_common.h"
 #include "node_mgr.h"
+#include "hg_json.h"
 
 static const char *TAG = "time_svc";
 
@@ -61,6 +62,15 @@ static void sntp_sync_cb(struct timeval *tv) {
 
 void time_svc_start(void) {
     mcfg_store_set_tz_check(tz_check);
+    /* Same checker, wired into hg_json's merge-time validate too: without
+     * this, a PUT /api/config?zone=0 body with a bad TIME.TZ sailed straight
+     * through hg_json_merge_mcfg (whose own hg_mcfg_validate call defaults to
+     * accepting any TZ) and only failed later at mcfg_commit(), which has no
+     * err_path out -- the operator got a bare 400 VALIDATION with no field
+     * named. Wiring it here makes the merge's own validate exactly as strict
+     * as the commit's, so the JSON path reports "TIME.TZ" like every other
+     * bad merge value does. */
+    hg_json_set_tz_check(tz_check);
     time_svc_apply_mcfg();
 
     esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);

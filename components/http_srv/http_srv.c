@@ -20,6 +20,7 @@ const cmd_core_t *http_srv_core(void) { return s_core; }
 static const char *status_line(int status) {
     switch (status) {
     case 200: return "200 OK";
+    case 202: return "202 Accepted";   /* Task 12: PUT /api/config's "queued" verdict */
     case 204: return "204 No Content";
     case 304: return "304 Not Modified";
     case 400: return "400 Bad Request";
@@ -65,7 +66,7 @@ static int send_all(httpd_req_t *req, const char *buf, size_t len) {
  *
  * cookie is a Set-Cookie VALUE (or NULL for no cookie); it is copied here, so
  * unlike httpd_resp_set_hdr the caller's buffer need not outlive the call. */
-void http_srv_no_content(httpd_req_t *req, const char *cookie) {
+int http_srv_no_content(httpd_req_t *req, const char *cookie) {
     char head[192];
     int n;
     if (cookie && *cookie)
@@ -75,9 +76,13 @@ void http_srv_no_content(httpd_req_t *req, const char *cookie) {
     if (n < 0 || (size_t)n >= sizeof head) {
         ESP_LOGE(TAG, "204 header overflow (%d B) -- answering 500", n);
         http_srv_error(req, 500, "INTERNAL", NULL);
-        return;
+        return -1;
     }
-    if (send_all(req, head, (size_t)n) != 0) ESP_LOGW(TAG, "204 send failed");
+    if (send_all(req, head, (size_t)n) != 0) {
+        ESP_LOGW(TAG, "204 send failed");
+        return -1;
+    }
+    return 0;
 }
 
 void http_srv_text(httpd_req_t *req, int status, const char *text) {
@@ -88,14 +93,19 @@ void http_srv_text(httpd_req_t *req, int status, const char *text) {
 
 /* The path is echoed back to the client, so it is attacker-controlled text
  * going into a JSON string. Rather than escape it, copy only the characters a
- * legitimate route can contain and fold everything else to '.', which cannot
- * break out of the string no matter what arrives. */
+ * legitimate route OR a hg_json field path (Task 12: "cfg.shelf[0].WATER.
+ * TARGET", "hw.shelf[1].CAL.foo readonly") can contain and fold everything
+ * else to '.', which cannot break out of the string no matter what arrives.
+ * '[' ']' are kept for the latter -- they cannot break out of a JSON string
+ * either, so widening the whitelist to include them is safe for the
+ * URI-echoing call sites too. */
 static void sanitise_path(const char *in, char *out, size_t cap) {
     size_t o = 0;
     for (; in && *in && o + 1 < cap; in++) {
         char c = *in;
         int keep = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-                   c == '/' || c == '.' || c == '-' || c == '_' || c == '?' || c == '=' || c == '&';
+                   c == '/' || c == '.' || c == '-' || c == '_' || c == '?' || c == '=' || c == '&' ||
+                   c == '[' || c == ']' || c == ' ';
         out[o++] = keep ? c : '.';
     }
     out[o] = '\0';
@@ -199,17 +209,17 @@ static const route_fn HANDLERS[RT_COUNT] = {
     [RT_PASSWORD]     = h_password,
     [RT_CMD]          = h_cmd,
     [RT_HELP]         = h_help,
-    [RT_STATE]        = h_not_impl,   /* Task 12 */
-    [RT_SCHEMA]       = h_not_impl,   /* Task 12 */
-    [RT_CONFIG_GET]   = h_not_impl,   /* Task 12 */
-    [RT_CONFIG_PUT]   = h_not_impl,   /* Task 12 */
-    [RT_ALARMS]       = h_not_impl,   /* Task 12 */
+    [RT_STATE]        = h_state,
+    [RT_SCHEMA]       = h_schema,
+    [RT_CONFIG_GET]   = h_config_get,
+    [RT_CONFIG_PUT]   = h_config_put,
+    [RT_ALARMS]       = h_alarms,
     [RT_FW_MASTER]    = h_not_impl,   /* Task 13 */
     [RT_FW_ZONE]      = h_not_impl,   /* Task 13 */
     [RT_FLEET_POST]   = h_not_impl,   /* Task 13 */
     [RT_FLEET_DELETE] = h_not_impl,   /* Task 13 */
-    [RT_WIFI_SCAN]    = h_not_impl,   /* Task 12 */
-    [RT_WIFI_SET]     = h_not_impl,   /* Task 12 */
+    [RT_WIFI_SCAN]    = h_wifi_scan,
+    [RT_WIFI_SET]     = h_wifi_set,
     [RT_INDEX]        = h_index,
     [RT_APP_JS]       = h_app_js,
     [RT_APP_CSS]      = h_app_css,
@@ -273,6 +283,8 @@ int http_srv_start(const cmd_core_t *core) {
     if (http_auth_init() != 0)
         ESP_LOGE(TAG, "web auth unavailable -- every login will fail");
     if (http_cmd_init() != 0) return -1;   /* no /api/cmd without its session claim */
+    if (http_api_init() != 0)
+        ESP_LOGE(TAG, "schema cache build failed -- /api/schema will answer 500");
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     /* Hardening, every line of it paid for on an earlier project:

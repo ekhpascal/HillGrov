@@ -47,6 +47,20 @@ static int lock_take(void) {
 
 static void lock_give(void) { if (s_lock) xSemaphoreGive(s_lock); }
 
+/* Task 12: GET /api/wifi/scan holds this across wifi_mgr_scan()'s ~2 s
+ * blocking radio scan so it cannot run concurrently with a net_ops apply
+ * (net_set_sta/net_set_ap/net_set_tz/master_web_set_password all take this
+ * same s_lock via lock_take() above) -- an apply reconfiguring the radio
+ * mid-scan, or a scan parking the radio an apply needs, would otherwise
+ * race. Not for use around a net_ops_t member call: those already take this
+ * lock internally, and it is not recursive. */
+int master_net_ops_try_lock(uint32_t ms) {
+    if (!s_lock) return -1;   /* pre-init: master_net_ops() has not run yet */
+    return xSemaphoreTake(s_lock, pdMS_TO_TICKS(ms)) == pdTRUE ? 0 : -1;
+}
+
+void master_net_ops_unlock(void) { lock_give(); }
+
 /* 0 ok / -1 invalid / -2 could not be stored. */
 static int commit_and_log(hg_mcfg_t *m, const char *what) {
     int rc = mcfg_commit(m);

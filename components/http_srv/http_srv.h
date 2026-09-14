@@ -41,9 +41,12 @@ int  http_srv_start(const cmd_core_t *core);
 int  http_auth_init(void);
 
 /* Cookie gate: 0 = not authenticated, and a 401 {"error":"UNAUTHORIZED"} has
- * already been sent (the handler must just return ESP_OK); 1 = go ahead.
- * route_entry calls this for every auth=1 row, so a handler only needs it
- * when it is reached some other way. */
+ * already been sent (the handler must still return through
+ * http_srv_done(req, drained), using whatever drained value applies to its
+ * own request -- never a bare ESP_OK, or an unread body on that request
+ * would be left for httpd to purge, see http_srv_done's own comment); 1 = go
+ * ahead. route_entry calls this for every auth=1 row, so a handler only
+ * needs it when it is reached some other way. */
 int  http_srv_auth_ok(httpd_req_t *req);
 
 /* application/json + status line + send; json may be NULL for an empty body. */
@@ -52,8 +55,12 @@ void http_srv_json(httpd_req_t *req, int status, const char *json);
 /* A bare 204: no body, and -- unlike anything httpd_resp_send can produce --
  * no Content-Length and no Content-Type either, because a 204 has no
  * representation to describe. cookie is an optional Set-Cookie value, copied
- * into the response here. */
-void http_srv_no_content(httpd_req_t *req, const char *cookie);
+ * into the response here. Returns 0 once the response is on the wire, -1 on a
+ * header-overflow (a 500 was sent instead) or a short/failed send -- either
+ * way the caller must NOT return http_srv_done(req, drained) in that case:
+ * the client cannot be trusted to have received a well-formed response, so
+ * the caller returns ESP_FAIL outright and lets httpd close the socket. */
+int http_srv_no_content(httpd_req_t *req, const char *cookie);
 
 /* text/plain + status line + send, for the CLI-shaped endpoints whose body is
  * the command reply verbatim rather than JSON. */

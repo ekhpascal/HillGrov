@@ -83,6 +83,10 @@ struct cmd_core {
     const char        *debug_key;        /* for cmd_common's DEBUG ENABLE row */
 };
 
+/* Returns 0 (OK) or -1 (ERR) only, same as every cmd_handler_fn -- -2 is never
+ * one of these two return values, it is cmd_task_execute's own orphan/timeout
+ * code (cmd_task.h), produced only by that wrapper, never by cmd_dispatch or
+ * a handler it calls. */
 int cmd_dispatch(const cmd_core_t *core, cmd_session_t *ses, const char *line, char *resp, int resp_len);
 int cmd_help(const cmd_core_t *core, cmd_session_t *ses, const char *const *tok, int ntok, char *resp, int len);
 int cmd_table_check(const cmd_entry_t *t, int n);   /* -1 ok, else index of first bad row */

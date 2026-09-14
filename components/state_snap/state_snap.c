@@ -88,6 +88,7 @@ static int ss_master(char *buf, size_t cap, size_t *off, const snap_master_t *m)
     if (raw(buf, cap, off, "\"fleet\":") || jstr(buf, cap, off, m->fleet_line ? m->fleet_line : "")) return -1;
     if (fmt(buf, cap, off, ",\"alarms\":{\"active\":%d,\"total\":%d},",
             m->alarms_active, m->alarms_total)) return -1;
+    if (fmt(buf, cap, off, "\"http\":{\"cmd_quarantined\":%u},", (unsigned)m->cmd_quarantined)) return -1;
     if (fmt(buf, cap, off, "\"defaults\":{\"web\":%s,\"ap\":%s}}",
             m->web_default ? "true" : "false", m->ap_default ? "true" : "false")) return -1;
     return 0;

@@ -49,9 +49,37 @@ esp_err_t h_password(httpd_req_t *req);
 /* ---- http_cmd.c ---- */
 int http_cmd_init(void);   /* the two HTTP cmd_session_t slots + their claim mutex */
 esp_err_t h_cmd(httpd_req_t *req);
-esp_err_t h_help(httpd_req_t *req);
+esp_err_t h_help(httpd_req_t *req);   /* its own cmd_session_t -- never claims a /api/cmd slot */
+uint8_t http_cmd_quarantined(void);   /* count of /api/cmd slots permanently withdrawn (state_snap) */
 
 /* ---- http_static.c ---- */
 esp_err_t h_index(httpd_req_t *req);
 esp_err_t h_app_js(httpd_req_t *req);
 esp_err_t h_app_css(httpd_req_t *req);
+
+/* ---- http_api.c / http_api_cfg.c ----
+ * The JSON API: state, schema, config (zone >= 1 through node_mgr's §4.4
+ * primitives, zone 0 = the master's own mcfg), alarms and Wi-Fi. Config GET
+ * and PUT are split into http_api_cfg.c to keep both files under the
+ * project's ~300-line guideline; everything else lives in http_api.c. */
+
+/* Builds the /api/schema cache once (the schema is constant for the life of
+ * the image). Call once from http_srv_start(), before the server can take a
+ * request. 0 ok, -1 if the schema did not fit its cache buffer (logged;
+ * h_schema then answers 500 rather than serve a truncated document). */
+int http_api_init(void);
+
+esp_err_t h_state(httpd_req_t *req);
+esp_err_t h_schema(httpd_req_t *req);
+esp_err_t h_config_get(httpd_req_t *req);
+esp_err_t h_config_put(httpd_req_t *req);
+esp_err_t h_alarms(httpd_req_t *req);
+esp_err_t h_wifi_scan(httpd_req_t *req);
+esp_err_t h_wifi_set(httpd_req_t *req);
+
+/* ---- http_upload.c ----
+ * Task 13 replaces this with the real master/zone firmware upload progress.
+ * Until then: always "no upload in flight". Both out-params are always
+ * written (never left unset); return value is currently unused by any
+ * caller. */
+int http_upload_progress(const char **kind, uint8_t *pct);

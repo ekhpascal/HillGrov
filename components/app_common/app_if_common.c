@@ -124,7 +124,10 @@ int hg_app_time_get_noted(char *buf, size_t n) {
  * without the formatting: a local SET TIME, or a noted external source that
  * has actually spoken (src_at != 0 is what that function treats as "spoken").
  * A polled source passed straight to hg_app_time_get_ext -- the zone's RING --
- * is not visible here, which is why zone_ring notes it as well. */
+ * is NOT visible here: it is polled per call, never noted, and no code path
+ * anywhere in the zone ever calls hg_app_time_note_source("RING", ...) --
+ * so a zone's hg_app_time_is_set() only ever reflects a local SET TIME, never
+ * a RING sync, no matter how long the ring has been feeding it a valid clock. */
 int hg_app_time_is_set(void) {
     return s_time_is_set || (s_note_src[0] != '\0' && s_note_at != 0);
 }

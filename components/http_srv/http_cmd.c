@@ -39,6 +39,16 @@ static cmd_slot_t        s_slot[HTTP_CMD_SESSIONS];
 static SemaphoreHandle_t s_lock;
 static uint8_t           s_quarantined;   /* slots permanently withdrawn; only ever grows */
 
+uint8_t http_cmd_quarantined(void) { return s_quarantined; }
+
+/* /api/help's own session -- cmd_help never calls cmd_dispatch (no forward,
+ * no busy/quarantine story to inherit), so it needs no resp buffer from the
+ * pool above and must not spend one of its two claimable slots just to read
+ * the role/unlock filtering off a session. A web session never holds the
+ * debug unlock either way. */
+static cmd_session_t s_help_ses = { .source = CMD_SRC_HTTP, .echo = 0, .notify_mask = 0, .unlock_until_ms = 0 };
+static char          s_help_resp[CMD_RESP_MAX];
+
 int http_cmd_init(void) {
     for (int i = 0; i < HTTP_CMD_SESSIONS; i++) {
         s_slot[i].ses.source          = CMD_SRC_HTTP;
@@ -129,16 +139,12 @@ esp_err_t h_help(httpd_req_t *req) {
 
     /* cmd_help runs entirely on the table -- no dispatch, no forwarding -- so
      * it is safe to call straight from the httpd task. It still wants a
-     * session for the role/unlock filtering, which is exactly why an HTTP
-     * session is used here: the HELP text an operator sees over the web must
-     * match what the web can actually run. */
-    cmd_slot_t *slot = claim();
-    if (!slot) {
-        http_srv_text(req, 503, "ERR BUSY\n");
-        return http_srv_done(req, 0);
-    }
-    cmd_help(core, &slot->ses, NULL, 0, slot->resp, CMD_RESP_MAX);
-    http_srv_text(req, 200, slot->resp);
-    release(slot);
+     * session for the role/unlock filtering (the HELP text an operator sees
+     * over the web must match what the web can actually run), but never a
+     * dispatch, so it gets its own dedicated session/buffer above rather than
+     * claiming one of /api/cmd's two quarantinable slots -- a busy or
+     * quarantined cmd pool must never make HELP unavailable too. */
+    cmd_help(core, &s_help_ses, NULL, 0, s_help_resp, sizeof s_help_resp);
+    http_srv_text(req, 200, s_help_resp);
     return http_srv_done(req, 0);
 }

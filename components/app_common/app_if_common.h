@@ -39,11 +39,16 @@ int      hg_app_time_get_ext(char *buf, size_t n, const char *src, uint32_t src_
 void     hg_app_time_note_source(const char *src, uint32_t at_uptime_s);
 int      hg_app_time_get_noted(char *buf, size_t n);
 /* 1 once anything has actually set this boot's wall clock -- a console SET
- * TIME, or a noted external source (the master's NTP, a zone's RING) -- i.e.
- * exactly when the GET TIME line would name a source other than NONE. 0 while
- * time(NULL) is still counting up from the epoch. Exposed so a caller that
- * needs the verdict rather than the display line (http_srv's session expiry
- * refuses to trust an unset clock) does not have to parse that line back. */
+ * TIME, or a noted external source (the master's NTP) -- i.e. exactly when
+ * the GET TIME line would name a source other than NONE. A zone's RING sync
+ * does NOT count: it is handed to hg_app_time_get_ext as a per-call POLLED
+ * parameter (app_if_zone.c), never recorded through hg_app_time_note_source,
+ * so this function has no way to see it -- a zone that has only ever been
+ * RING-synced, never SET locally, reads 0 here even though GET TIME shows
+ * RING. 0 while time(NULL) is still counting up from the epoch. Exposed so a
+ * caller that needs the verdict rather than the display line (http_srv's
+ * session expiry refuses to trust an unset clock) does not have to parse that
+ * line back. */
 int      hg_app_time_is_set(void);
 int      hg_app_time_set(int y, int mo, int d, int h, int mi, int s);
 int      hg_app_fw_info(char *buf, size_t n);
