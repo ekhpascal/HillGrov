@@ -159,10 +159,10 @@ dl dd { margin: 0; }
 
 /* ---- config editor (#/config/N) ---- */
 .cfg-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
-.cfg-tab { background: var(--card); color: var(--muted); border: 1px solid var(--border); padding: 4px 10px; min-height: 36px; border-radius: 8px; font-size: 13px; }
+.cfg-tab { background: var(--card); color: var(--muted); border: 1px solid var(--border); padding: 4px 10px; min-height: 44px; border-radius: 8px; font-size: 13px; }
 .cfg-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .cfg-idx-selector { display: flex; gap: 4px; margin: 4px 0 10px; }
-.cfg-idx-btn { min-width: 36px; min-height: 36px; border-radius: 8px; }
+.cfg-idx-btn { min-width: 44px; min-height: 44px; border-radius: 8px; }
 .cfg-idx-btn.active { background: var(--accent); color: #fff; }
 .cfg-hw-note { color: var(--muted); font-size: 13px; margin: 4px 0 10px; grid-column: 1 / -1; }
 .cfg-fields { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); margin: 6px 0; }

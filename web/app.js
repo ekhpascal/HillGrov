@@ -39,6 +39,7 @@ HG.state = {
   cfgSaving: false,
   cfgLoading: null,      /* zone id currently being fetched, or null */
   cfgLoadErr: "",
+  cfgLoadFailedId: null, /* zone id a load already failed for -- stops an infinite retry loop, see HG.ensureConfigLoaded */
 
   alarms: null,           /* last GET /api/alarms document */
 
@@ -374,9 +375,7 @@ HG.mock = {
           }
           self.lastPut = pbody;
           if (zone === 0) {
-            Object.keys(pbody).forEach(function (g) {
-              self.fixtures.config[0][g] = Object.assign({}, self.fixtures.config[0][g], pbody[g]);
-            });
+            HG.cfgMergeIntoDoc(0, self.fixtures.config[0], pbody);
             return { ok: true };
           }
           var badPath = self.mockValidateCfgPut(pbody);
@@ -385,6 +384,12 @@ HG.mock = {
             e3.body = { error: "INVALID_FIELD", path: badPath };
             throw e3;
           }
+          /* Apply for real (not just log) so a refetch 3s later reflects the
+           * change -- needed for the "value stays at the new value across
+           * the 3s window" check to actually mean something against the
+           * mock. */
+          var applyTarget = self.fixtures.config[zone] || (self.fixtures.config[zone] = JSON.parse(JSON.stringify(self.fixtures.config[1])));
+          HG.cfgMergeIntoDoc(zone, applyTarget, pbody);
           return { queued: true, warnings: "" };
         }
       }
@@ -605,11 +610,43 @@ function mgroupOriginal(doc, group, key) {
   return obj ? obj[key] : undefined;
 }
 
-function cfgFieldId(zoneId, group, idx, key) { return "cfgf-" + zoneId + "-" + group + "-" + idx + "-" + key; }
+/* Pure-numeric id -- CRITICAL: group/key are schema-controlled text (from
+ * /api/schema), so the id (and its <label for=>) must never embed them raw
+ * or even HG.esc()'d: an id/for pair is an unquoted-looking DOM identifier
+ * a reviewer could easily overlook re-escaping consistently everywhere it's
+ * threaded through, and a tampered schema response was confirmed live to
+ * break out of the id="..." attribute and inject markup. groupIdx/fieldIdx
+ * are this schema's own array indices -- always plain numbers regardless of
+ * what the group/field *names* contain. The real names still reach the DOM,
+ * safely, via the HG.esc()'d data-cfg-group/data-cfg-key attributes below. */
+function cfgFieldId(zoneId, groupIdx, idx, fieldIdx) { return "cfgf-" + zoneId + "-" + groupIdx + "-" + idx + "-" + fieldIdx; }
+
+/* Same tampered-schema threat as the id fix above, applied to min/max/maxlength:
+ * f.min/f.max are supposed to be numbers (hg_json_schema.c always emits them via
+ * cJSON_AddNumberToObject), but nothing on the client enforces that against a
+ * compromised /api/schema response, and both attributes are otherwise
+ * interpolated raw. Number() + a finite check turns anything non-numeric into
+ * a safe fallback instead of arbitrary attribute text. */
+function cfgNum(v, dflt) { var n = Number(v); return isFinite(n) ? n : dflt; }
 
 function cfgGroupScope(groups, name) {
   for (var i = 0; i < groups.length; i++) if (groups[i].name === name) return groups[i].scope;
   return 0;
+}
+
+/* Friendly text for the error codes GET /api/config?zone=N can answer with
+ * (see http_api_cfg.c's h_config_get): a bare "NO_CACHE"/"ZONE_UNKNOWN" is
+ * meaningless to an operator who just clicked a zone link. */
+var CFG_LOAD_ERR_TEXT = {
+  NO_CACHE: "Zone config not adopted yet — the zone must come online and sync at least once before it can be configured from the web UI.",
+  ZONE_UNKNOWN: "Unknown zone.",
+  ZONE_NOT_ONLINE: "Zone is offline.",
+  LOW_HEAP: "Master is low on memory — try again shortly.",
+  BAD_QUERY: "Invalid zone number."
+};
+function cfgLoadErrText(err) {
+  var code = err && err.message;
+  return (code && CFG_LOAD_ERR_TEXT[code]) || code || "Failed to load";
 }
 
 /* Parses a server error `path` into {group, idx, key} so a 400 can highlight
@@ -811,10 +848,14 @@ HG.views.system = function () {
   if (sys.wifiScanning) scanList = '<p class="loading">Scanning…</p>';
   else if (sys.wifiScanErr) scanList = '<p class="form-error">' + HG.esc(sys.wifiScanErr) + "</p>";
   else if (sys.wifiScan) {
+    /* auth is a raw wifi_auth_mode_t (wifi_mgr.h): 0 == WIFI_AUTH_OPEN, every
+     * other value is some flavour of secured -- the UI only needs the binary
+     * distinction, not the specific cipher. */
     scanList = sys.wifiScan.length
       ? '<ul class="scan-list">' + sys.wifiScan.map(function (n) {
           return '<li><button type="button" class="scan-item" data-action="wifi-pick" data-ssid="' +
-            HG.esc(n.ssid) + '">' + HG.esc(n.ssid) + '<span class="muted">' + n.rssi + " dBm</span></button></li>";
+            HG.esc(n.ssid) + '">' + HG.esc(n.ssid) + '<span class="muted">' +
+            (n.auth === 0 ? "open" : "secured") + " · " + n.rssi + " dBm</span></button></li>";
         }).join("") + "</ul>"
       : '<p class="empty">No networks found.</p>';
   }
@@ -869,16 +910,25 @@ HG.views.system = function () {
     "</section>";
 
   var nodes = (snap && snap.nodes) || [];
+  /* fleet_status() (node_mgr_fleet.c / fleet_seq.c): "IDLE" is the exact
+   * token when !s->active -- anything else ("<zone> PRECHECK|UPDATING|
+   * WAIT_HB") means a sequence is already running, so Update/Update-all
+   * would only race POST /api/fleet into a 409 FLEET_BUSY; Abort is the
+   * only action that makes sense while a sequence is active. */
+  var fleetIdle = !m || m.fleet === "IDLE";
   var fleetRows = nodes.map(function (n) {
     var name = n.name ? HG.esc(n.name) : ("Z" + n.id);
     return '<div class="fleet-row"><span>' + name +
-      '</span><button type="button" data-action="fleet-update" data-zone="' + n.id + '">Update</button></div>';
+      '</span><button type="button" data-action="fleet-update" data-zone="' + n.id + '"' +
+      (fleetIdle ? "" : " disabled") + ">Update</button></div>";
   }).join("");
   var fleetLine = m ? HG.esc(m.fleet) : "—";
   var fleetCard = '<section class="card"><h2>Fleet</h2>' +
     "<p>Status: " + fleetLine + "</p>" + fleetRows +
-    '<div class="cfg-actions"><button type="button" data-action="fleet-update-all">Update all</button>' +
-    '<button type="button" class="btn-ghost" data-action="fleet-abort">Abort</button></div>' +
+    '<div class="cfg-actions"><button type="button" data-action="fleet-update-all"' +
+    (fleetIdle ? "" : " disabled") + ">Update all</button>" +
+    '<button type="button" class="btn-ghost" data-action="fleet-abort"' +
+    (fleetIdle ? " disabled" : "") + ">Abort</button></div>" +
     (sys.fleetMsg ? '<p class="cfg-msg">' + HG.esc(sys.fleetMsg) + "</p>" : "") +
     "</section>";
 
@@ -908,8 +958,8 @@ HG.cfgFieldValue = function (zoneId, doc, group, idx, key) {
   return cfgFieldOriginal(doc, group, idx, key);
 };
 
-HG.views.cfgField = function (zoneId, group, idx, f, value, disabled) {
-  var id = cfgFieldId(zoneId, group, idx, f.key);
+HG.views.cfgField = function (zoneId, group, idx, f, value, disabled, groupIdx, fieldIdx) {
+  var id = cfgFieldId(zoneId, groupIdx, idx, fieldIdx);
   var bad = HG.state.cfgBad && HG.state.cfgBad.group === group &&
     (HG.state.cfgBad.idx === idx || HG.state.cfgBad.idx === -1) && HG.state.cfgBad.key === f.key;
   var badCls = bad ? " bad" : "";
@@ -934,11 +984,11 @@ HG.views.cfgField = function (zoneId, group, idx, f, value, disabled) {
       break;
     case "STR16": case "STR":
       var typ = (group === "WIFI" && (f.key === "STA_PASS" || f.key === "AP_PASS")) ? "password" : "text";
-      input = '<input type="' + typ + '" id="' + id + '" class="' + badCls.trim() + '" maxlength="' + f.max +
+      input = '<input type="' + typ + '" id="' + id + '" class="' + badCls.trim() + '" maxlength="' + cfgNum(f.max, 255) +
         '" value="' + HG.esc(value == null ? "" : value) + '"' + dis + common + ">";
       break;
     default: /* U8, U16, PIN */
-      input = '<input type="number" id="' + id + '" class="' + badCls.trim() + '" min="' + f.min + '" max="' + f.max +
+      input = '<input type="number" id="' + id + '" class="' + badCls.trim() + '" min="' + cfgNum(f.min, 0) + '" max="' + cfgNum(f.max, 65535) +
         '" value="' + HG.esc(value == null ? 0 : value) + '"' + dis + common + ">";
   }
   var err = bad ? '<p class="form-error">' + HG.esc(HG.state.cfgBad.msg) + "</p>" : "";
@@ -954,9 +1004,12 @@ HG.views.configMaster = function (schema) {
     return '<button type="button" class="cfg-tab' + (g.name === ui.group ? " active" : "") +
       '" data-action="cfg-tab" data-group="' + HG.esc(g.name) + '">' + HG.esc(g.name) + "</button>";
   }).join("") + "</div>";
-  var active = groups.filter(function (g) { return g.name === ui.group; })[0] || groups[0];
-  var fields = active.fields.map(function (f) {
-    return HG.views.cfgField(0, active.name, -1, f, HG.cfgFieldValue(0, doc, active.name, -1, f.key), false);
+  var activeIdx = 0, active = groups[0];
+  for (var gi0 = 0; gi0 < groups.length; gi0++) {
+    if (groups[gi0].name === ui.group) { active = groups[gi0]; activeIdx = gi0; break; }
+  }
+  var fields = active.fields.map(function (f, fi) {
+    return HG.views.cfgField(0, active.name, -1, f, HG.cfgFieldValue(0, doc, active.name, -1, f.key), false, activeIdx, fi);
   }).join("");
   var exportHref = "data:application/json," + encodeURIComponent(JSON.stringify(doc));
   var msg = HG.state.cfgMsg ? '<p class="cfg-msg">' + HG.esc(HG.state.cfgMsg) + "</p>" : "";
@@ -984,7 +1037,10 @@ HG.views.config = function (id) {
     return '<button type="button" class="cfg-tab' + (g.name === ui.group ? " active" : "") +
       '" data-action="cfg-tab" data-group="' + HG.esc(g.name) + '">' + HG.esc(g.name) + "</button>";
   }).join("") + "</div>";
-  var active = groups.filter(function (g) { return g.name === ui.group; })[0] || groups[0];
+  var activeIdx = 0, active = groups[0];
+  for (var gi1 = 0; gi1 < groups.length; gi1++) {
+    if (groups[gi1].name === ui.group) { active = groups[gi1]; activeIdx = gi1; break; }
+  }
   var scope = active.scope;
   var selector = "";
   if (scope === 1) selector = HG.views.cfgIdxSelector(4, ui.idx);
@@ -992,8 +1048,8 @@ HG.views.config = function (id) {
   var idx = scope === 0 ? -1 : ui.idx;
   var hwNote = isHwGroup(active.name)
     ? '<p class="cfg-hw-note">hardware plane — set at the zone console</p>' : "";
-  var fields = active.fields.map(function (f) {
-    return HG.views.cfgField(id, active.name, idx, f, HG.cfgFieldValue(id, doc, active.name, idx, f.key), isHwGroup(active.name));
+  var fields = active.fields.map(function (f, fi) {
+    return HG.views.cfgField(id, active.name, idx, f, HG.cfgFieldValue(id, doc, active.name, idx, f.key), isHwGroup(active.name), activeIdx, fi);
   }).join("");
   var exportHref = "data:application/json," + encodeURIComponent(JSON.stringify(doc));
   var msg = HG.state.cfgMsg ? '<p class="cfg-msg">' + HG.esc(HG.state.cfgMsg) + "</p>" : "";
@@ -1051,7 +1107,18 @@ function withFocusPreserved(fn) {
  * under the same 2s state poll as everything else without refetching on
  * every tick. Re-entering a *different* zone resets that zone's UI/dirty
  * state so a leftover .bad highlight or mid-shelf tab from zone A can never
- * bleed into zone B. */
+ * bleed into zone B.
+ *
+ * cfgLoadFailedId guards against a real bug found while adding the
+ * friendly-error-text minor (fix round 1): a failed fetch used to leave
+ * cfgDoc[id] unset, so the very next HG.render() (the 2s state poll, if
+ * nothing else) saw needDoc still true and started ANOTHER fetch -- which
+ * fails again, renders again, fetches again, forever, as fast as the
+ * network round-trip allows, for as long as the operator sits on a zone
+ * that's genuinely not adopted yet. Recording which id's load already
+ * failed turns that into "try once per zone visit" -- cleared only by the
+ * zone actually changing (the reset block above), not by a timer or retry
+ * button (neither exists yet). */
 HG.ensureConfigLoaded = function (id) {
   var ui = HG.state.cfgUi;
   if (ui.zone !== id) {
@@ -1059,8 +1126,11 @@ HG.ensureConfigLoaded = function (id) {
     HG.state.cfgDirty[id] = HG.state.cfgDirty[id] || {};
     HG.state.cfgBad = null;
     HG.state.cfgMsg = "";
+    HG.state.cfgLoadErr = "";
+    HG.state.cfgLoadFailedId = null;
   }
   if (HG.state.cfgLoading === id) return;
+  if (HG.state.cfgLoadFailedId === id) return;
   var needSchema = !HG.state.schema;
   var needDoc = !HG.state.cfgDoc[id];
   if (!needSchema && !needDoc) {
@@ -1084,7 +1154,8 @@ HG.ensureConfigLoaded = function (id) {
     HG.render();
   }, function (err) {
     HG.state.cfgLoading = null;
-    HG.state.cfgLoadErr = (err && err.message) || "Failed to load";
+    HG.state.cfgLoadFailedId = id;
+    HG.state.cfgLoadErr = cfgLoadErrText(err);
     HG.render();
   });
 };
@@ -1205,6 +1276,47 @@ HG.cfgFocusPath = function (id, path, errCode) {
  * synchronous 200, after 3s for a zone's async 202 -- the brief's "queued"
  * contract, giving the zone time to actually apply and report back before
  * the re-fetch would just show the pre-change values again). */
+/* Applies the exact body just PUT onto the cached document in place
+ * (IMPORTANT 3, fix round 1): without this, a saved field keeps showing its
+ * pre-edit value for the whole 3s window before the authoritative refetch
+ * lands, and re-typing that same pre-edit value in the meantime reads as
+ * "no changes" (HG.buildCfgMergeBody diffs against cfgDoc, not against
+ * what's on screen). Mirrors the exact shape HG.buildCfgMergeBody produces
+ * -- shelf/aux array entries may be `null` (padding for a skipped index)
+ * and must be skipped, not written; the later refetch remains the
+ * authoritative source of truth (this is a same-tick UI optimisation only,
+ * not a substitute for it -- e.g. it can't know about server-side
+ * side-effects or a rejected-after-the-fact write). */
+HG.cfgMergeIntoDoc = function (id, doc, body) {
+  if (!doc || !body) return;
+  if (id === 0) {
+    Object.keys(body).forEach(function (g) {
+      doc[g] = doc[g] || {};
+      var vals = body[g];
+      Object.keys(vals).forEach(function (k) { doc[g][k] = vals[k]; });
+    });
+    return;
+  }
+  var cfg = body.cfg;
+  if (!cfg || !doc.cfg) return;
+  if (cfg.ZONECFG) {
+    doc.cfg.ZONECFG = doc.cfg.ZONECFG || {};
+    Object.keys(cfg.ZONECFG).forEach(function (k) { doc.cfg.ZONECFG[k] = cfg.ZONECFG[k]; });
+  }
+  ["shelf", "aux"].forEach(function (arrName) {
+    var arr = cfg[arrName], dstArr = doc.cfg[arrName];
+    if (!arr || !dstArr) return;
+    arr.forEach(function (el, i) {
+      if (!el || !dstArr[i]) return;
+      Object.keys(el).forEach(function (g) {
+        dstArr[i][g] = dstArr[i][g] || {};
+        var vals = el[g];
+        Object.keys(vals).forEach(function (k) { dstArr[i][g][k] = vals[k]; });
+      });
+    });
+  });
+};
+
 HG.cfgApplyPut = function (id, body) {
   HG.state.cfgSaving = true;
   HG.state.cfgMsg = "";
@@ -1213,6 +1325,7 @@ HG.cfgApplyPut = function (id, body) {
   return HG.api.put("/api/config?zone=" + id, body).then(function (resp) {
     HG.state.cfgSaving = false;
     HG.state.cfgDirty[id] = {};
+    HG.cfgMergeIntoDoc(id, HG.state.cfgDoc[id], body);
     var refetch = function () {
       var q = id === 0 ? "/api/config?zone=0&secrets=0" : "/api/config?zone=" + id;
       HG.api.get(q).then(function (doc2) { HG.state.cfgDoc[id] = doc2; HG.render(); }, noop);
