@@ -40,6 +40,7 @@ HG.state = {
   cfgLoading: null,      /* zone id currently being fetched, or null */
   cfgLoadErr: "",
   cfgLoadFailedId: null, /* zone id a load already failed for -- stops an infinite retry loop, see HG.ensureConfigLoaded */
+  cfgSelfHealAttempted: null, /* zone id an automatic "it came online" retry was already tried for, since it was last seen NOT ready */
 
   alarms: null,           /* last GET /api/alarms document */
 
@@ -1028,7 +1029,11 @@ HG.views.config = function (id) {
   if (id === 0) return HG.views.configMaster(schema);
   var doc = HG.state.cfgDoc[id];
   if (!doc) {
-    var err = HG.state.cfgLoadErr ? '<p class="form-error">' + HG.esc(HG.state.cfgLoadErr) + "</p>" : '<p class="loading">Loading…</p>';
+    /* Retry (fix round 2 (b)): clears the failed-load guard and re-fetches
+     * without needing to leave and re-enter the page. */
+    var err = HG.state.cfgLoadErr
+      ? '<p class="form-error">' + HG.esc(HG.state.cfgLoadErr) + '</p><button type="button" data-action="cfg-retry" data-zone="' + id + '">Retry</button>'
+      : '<p class="loading">Loading…</p>';
     return '<a class="back-link" href="#/dashboard">&larr; Dashboard</a><h1>Config — Zone ' + id + "</h1>" + err;
   }
   var ui = HG.state.cfgUi;
@@ -1101,6 +1106,18 @@ function withFocusPreserved(fn) {
   }
 }
 
+/* Is zone `id` currently reported healthy enough for its config to be worth
+ * re-fetching -- read straight from the already-polling /api/state snapshot,
+ * no extra request needed. Used only by the self-heal retry below. */
+function cfgZoneReady(id) {
+  var snap = HG.state.snap;
+  if (!snap || !snap.nodes) return false;
+  for (var i = 0; i < snap.nodes.length; i++) {
+    if (snap.nodes[i].id === id) return snap.nodes[i].health === "ONLINE" && snap.nodes[i].cfg_sync === "OK";
+  }
+  return false;
+}
+
 /* Fetches schema (once, cached) + the zone/master document for #/config/N,
  * called from HG.render on every route parse -- cheap once both are cached
  * (two object-existence checks), which is what lets the config route sit
@@ -1116,9 +1133,22 @@ function withFocusPreserved(fn) {
  * fails again, renders again, fetches again, forever, as fast as the
  * network round-trip allows, for as long as the operator sits on a zone
  * that's genuinely not adopted yet. Recording which id's load already
- * failed turns that into "try once per zone visit" -- cleared only by the
- * zone actually changing (the reset block above), not by a timer or retry
- * button (neither exists yet). */
+ * failed turns that into "try once per zone visit" -- cleared by the zone
+ * actually changing (the reset block above), by HG.render() noticing the
+ * route left #/config/N entirely (fix round 2 (a) -- so leaving for the
+ * dashboard and coming back to the SAME zone retries once, not never), or
+ * by the "Retry" button (fix round 2 (b), HG.actions.cfgRetry).
+ *
+ * Fix round 2 (c): while a load is in its failed state, also self-heal
+ * automatically the moment the already-polling /api/state snapshot shows
+ * this zone transition to ONLINE + cfg_sync OK -- an operator who leaves
+ * the tab open while the zone comes back shouldn't have to leave and
+ * re-enter, or hit Retry, just to see that. cfgSelfHealAttempted keeps
+ * this to exactly one automatic retry per "became ready" transition (reset
+ * only when the zone is next observed NOT ready), which is what keeps the
+ * storm guard intact even if that one retry itself fails again (e.g. a
+ * concurrent LOW_HEAP) -- it does not degrade back into a tight loop just
+ * because the poll keeps reporting the same already-tried "ready" state. */
 HG.ensureConfigLoaded = function (id) {
   var ui = HG.state.cfgUi;
   if (ui.zone !== id) {
@@ -1128,9 +1158,19 @@ HG.ensureConfigLoaded = function (id) {
     HG.state.cfgMsg = "";
     HG.state.cfgLoadErr = "";
     HG.state.cfgLoadFailedId = null;
+    HG.state.cfgSelfHealAttempted = null;
   }
   if (HG.state.cfgLoading === id) return;
-  if (HG.state.cfgLoadFailedId === id) return;
+  if (HG.state.cfgLoadFailedId === id) {
+    var ready = id > 0 && cfgZoneReady(id);
+    if (ready && HG.state.cfgSelfHealAttempted !== id) {
+      HG.state.cfgSelfHealAttempted = id;
+      HG.state.cfgLoadFailedId = null;
+    } else {
+      if (!ready) HG.state.cfgSelfHealAttempted = null; /* allow one more attempt next time it becomes ready */
+      return;
+    }
+  }
   var needSchema = !HG.state.schema;
   var needDoc = !HG.state.cfgDoc[id];
   if (!needSchema && !needDoc) {
@@ -1184,6 +1224,15 @@ HG.render = function () {
   withFocusPreserved(function () {
     var r = HG.router.parse();
     var enteringAlarms = r.name === "alarms" && HG.state.route.name !== "alarms";
+    /* Fix round 2 (a): leaving #/config/N entirely (not just switching to a
+     * different zone -- that's already handled inside HG.ensureConfigLoaded
+     * itself) clears the failed-load guard, so navigating away and back to
+     * the SAME zone retries once instead of the error persisting forever
+     * for the rest of the session. */
+    if (HG.state.route.name === "config" && r.name !== "config") {
+      HG.state.cfgLoadFailedId = null;
+      HG.state.cfgSelfHealAttempted = null;
+    }
     HG.state.route = r;
     if (r.name === "config") HG.ensureConfigLoaded(r.id);
     else if (r.name === "system") HG.ensureSysLoaded();
@@ -1457,6 +1506,15 @@ HG.actions = {
     HG.state.cfgUi.idx = idx;
     HG.render();
   },
+  /* Fix round 2 (b): the load-error view's own "Retry" button. Clears the
+   * failed-load guard first -- HG.ensureConfigLoaded's own guard would
+   * otherwise just see cfgLoadFailedId still equal to this zone and no-op. */
+  cfgRetry: function (zone) {
+    HG.state.cfgLoadFailedId = null;
+    HG.state.cfgSelfHealAttempted = null;
+    HG.ensureConfigLoaded(zone);
+    HG.render();
+  },
   /* Writes straight into HG.state.cfgDirty rather than re-rendering: a
    * config field's displayed value is read back from cfgDirty on the next
    * render (see HG.cfgFieldValue), which is what lets it survive the 2s
@@ -1710,6 +1768,8 @@ HG.bindEvents = function () {
     if (tab) { HG.actions.cfgTab(tab.dataset.group); return; }
     var idxBtn = t.closest && t.closest('[data-action="cfg-idx"]');
     if (idxBtn) { HG.actions.cfgIdx(Number(idxBtn.dataset.idx)); return; }
+    var retryBtn = t.closest && t.closest('[data-action="cfg-retry"]');
+    if (retryBtn) { HG.actions.cfgRetry(Number(retryBtn.dataset.zone)); return; }
     var scan = t.closest && t.closest('[data-action="wifi-scan"]');
     if (scan) { HG.actions.wifiScan(); return; }
     var pick = t.closest && t.closest('[data-action="wifi-pick"]');
