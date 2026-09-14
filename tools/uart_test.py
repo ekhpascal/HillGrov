@@ -9,6 +9,7 @@ the number of failed checks.
 
 Usage:
     C:\\Python311\\python tools/uart_test.py COM5 --role ZONE --allow-reboot
+    C:\\Python311\\python tools/uart_test.py --http 192.168.7.7 --password hillgrow1 --role MASTER
     C:\\Python311\\python tools/uart_test.py --selftest   # offline, no hardware/pyserial
 """
 import argparse
@@ -16,6 +17,9 @@ import json
 import re
 import sys
 import time
+import urllib.error
+import urllib.request
+from http.cookiejar import CookieJar
 
 LOG_RE = re.compile(r'^[IWEDV] \(\d+\)')
 # Adjacent two-word nouns only ("SET FW ROLLBACK"); extend when a split-shape
@@ -35,11 +39,17 @@ class Reply:
 
 class Node:
     """Drives one board over an injected transport (write_line/read_line).
-    Real hardware: SerialTransport via open_node(); --selftest: FakeTransport."""
-    def __init__(self, transport):
+    Real hardware: SerialTransport via open_node(); HTTP: HttpTransport via
+    open_http_node(); --selftest: FakeTransport. is_http lets prologue()/
+    run_smoke() adapt to the console-only rows HTTP sessions can't touch
+    (they're CMDF_SESSION rows -- cmd_dispatch.c answers ERR NOT_LOCAL for a
+    CMD_SRC_HTTP session, see http_cmd.c) without the caller having to know
+    the transport's concrete type."""
+    def __init__(self, transport, is_http=False):
         self.transport = transport
         self._pending = None
         self.role = None
+        self.is_http = is_http
 
     def adopt(self, transport):
         """Swap in a fresh transport (post-reboot reconnect) so callers keep
@@ -93,10 +103,24 @@ class Node:
             return Reply(True, text=text, lines=cont, notify=notify)
         return Reply(False, notify=notify, timeout=True)
 
-    def prologue(self):
-        self.send("SET ECHO OFF")
-        self.send("SET LOG WARN")
-        self.send("SET NOTIFY ALL OFF")
+    def prologue(self, results=None):
+        """SET ECHO/SET LOG/SET NOTIFY are session rows (CMDF_SESSION):
+        cmd_dispatch answers ERR NOT_LOCAL for any CMD_SRC_HTTP session, so
+        over HTTP there is no console state for them to configure. Rather
+        than silently skip them, send each once and assert the NOT_LOCAL
+        contract holds -- if results is given, one check per row is recorded
+        instead of a bare assert, so a broken contract shows up as a normal
+        FAIL rather than an uncaught exception mid-run."""
+        if self.is_http:
+            for line in ("SET ECHO OFF", "SET LOG WARN", "SET NOTIFY ALL OFF"):
+                r = self.send(line)
+                ok = (not r.ok) and (not r.timeout) and r.err == "NOT_LOCAL"
+                if results is not None:
+                    check(results, f"PROLOGUE(http): {line} -> ERR NOT_LOCAL", ok, r.err or r.text)
+        else:
+            self.send("SET ECHO OFF")
+            self.send("SET LOG WARN")
+            self.send("SET NOTIFY ALL OFF")
         r = self.send("GET ID")
         parts = r.text.split()
         self.role = parts[1] if r.ok and len(parts) > 1 else None
@@ -130,6 +154,62 @@ class SerialTransport:
 def open_node(port, baud=115200):
     return Node(SerialTransport(port, baud))
 
+class HttpTransport:
+    """HTTP transport for the same Node/Reply parser: POST /api/cmd's reply
+    is the CLI's own reply text verbatim (http_cmd.c's h_cmd), so splitting
+    it into lines and handing them back one at a time from read_line() needs
+    no HTTP-specific parsing anywhere else in this file -- Node.send()'s
+    OK/ERR/continuation logic is identical to the serial path. Logs in once
+    at construction (POST /api/login); the cookie jar then carries hg_sess
+    for the life of the run. The bench AP link is lossy (every SP4 task
+    report documents repeated full Wi-Fi drops), so every request retries a
+    bounded number of times on a transport-level failure -- never on an HTTP
+    error response, which is a real answer, not a dropped packet."""
+    def __init__(self, ip, password, timeout=8.0, retries=6, retry_delay=2.0):
+        self.base = f"http://{ip}"
+        self.timeout = timeout
+        self.retries = retries
+        self.retry_delay = retry_delay
+        self.cj = CookieJar()
+        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cj))
+        self._lines = []
+        self._login(password)
+
+    def _request(self, path, data, headers):
+        last_exc = None
+        for attempt in range(self.retries):
+            req = urllib.request.Request(self.base + path, data=data, headers=headers, method="POST")
+            try:
+                with self.opener.open(req, timeout=self.timeout) as resp:
+                    return resp.status, resp.read()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read()   # a real HTTP answer -- never retried
+            except (urllib.error.URLError, OSError) as e:
+                last_exc = e
+                if attempt + 1 < self.retries:
+                    time.sleep(self.retry_delay)
+        raise RuntimeError(f"POST {path} failed after {self.retries} attempts: {last_exc}")
+
+    def _login(self, password):
+        body = json.dumps({"password": password}).encode("utf-8")
+        status, resp_body = self._request("/api/login", body, {"Content-Type": "application/json"})
+        if status != 204:
+            raise RuntimeError(f"HTTP login failed: {status} {resp_body!r}")
+
+    def write_line(self, line):
+        status, body = self._request("/api/cmd", line.encode("utf-8", "replace"),
+                                      {"Content-Type": "text/plain"})
+        self._lines = body.decode("utf-8", "replace").splitlines()
+
+    def read_line(self, deadline):
+        return self._lines.pop(0) if self._lines else None
+
+    def close(self):
+        pass
+
+def open_http_node(ip, password, timeout=8.0):
+    return Node(HttpTransport(ip, password, timeout=timeout), is_http=True)
+
 def parse_help_rows(text):
     """Extract 'SET NOUN[ NOUN2]' / 'GET NOUN[ NOUN2]' prefixes from a block
     of cmd_help.c '+ ...' usage lines, one prefix per matched row."""
@@ -146,6 +226,13 @@ def parse_help_rows(text):
 
 def check(results, name, ok, detail=""):
     results.append({"name": name, "ok": bool(ok), "detail": str(detail)})
+
+def skip(results, name, detail):
+    """A check that never fails and prints as SKIP rather than PASS/FAIL --
+    used for suites that need a real console (session rows) and cannot run
+    over HTTP at all, so their absence is visible rather than silently
+    dropped from the report."""
+    results.append({"name": name, "ok": True, "detail": str(detail), "skip": True})
 
 def suite_id_version(node, role_arg, results):
     r = node.send("GET ID")
@@ -213,14 +300,20 @@ def suite_session(node, results):
     check(results, "SESSION: NOTIFY mask shape", mask_ok, r.text)
 
 def run_smoke(node, args, results):
-    node.prologue()
+    node.prologue(results)
     role = node.role
     suite_id_version(node, args.role, results)
     suite_help(node, results)
     suite_errors(node, role, results)
     suite_config(node, role, results)
     suite_persist(node, role, args, results)
-    suite_session(node, results)
+    if node.is_http:
+        # LOG level and NOTIFY filters are console-only (CMDF_SESSION rows,
+        # ERR NOT_LOCAL over HTTP -- see prologue()); nothing here would
+        # exercise anything but that same refusal a second time.
+        skip(results, "SESSION: LOG DEBUG / NOTIFY mask", "skip(http): console-only, NOT_LOCAL over HTTP")
+    else:
+        suite_session(node, results)
 
 # ---- selftest: offline parser core check, no hardware/pyserial needed -----
 
@@ -308,35 +401,80 @@ def selftest():
     expect("g: reconnect adopted", p_node.transport is not old_transport
            and not p_node.transport.closed)
 
+    # (h) prologue() over HTTP: session rows (SET ECHO/LOG/NOTIFY) asserted
+    # NOT_LOCAL rather than sent as if they configured real console state.
+    n = Node(FakeTransport(["ERR NOT_LOCAL", "ERR NOT_LOCAL", "ERR NOT_LOCAL",
+                            "OK ID MASTER c0:5d:89:00:00:01 0 master"]), is_http=True)
+    hresults = []
+    n.prologue(hresults)
+    expect("h: three NOT_LOCAL checks recorded", len(hresults) == 3)
+    expect("h: all three passed", all(r["ok"] for r in hresults))
+    expect("h: role parsed after the session-row checks", n.role == "MASTER")
+    # a session row that does NOT answer NOT_LOCAL must fail loudly, not pass
+    n2 = Node(FakeTransport(["OK", "ERR NOT_LOCAL", "ERR NOT_LOCAL", "OK ID MASTER x 0 master"]), is_http=True)
+    hresults2 = []
+    n2.prologue(hresults2)
+    expect("h: a wrongly-accepted session row is reported FAIL, not swallowed", not hresults2[0]["ok"])
+
+    # (i) skip(): marks a result SKIP without counting as a failure
+    sresults = []
+    skip(sresults, "SESSION: test", "skip(http): console-only")
+    expect("i: skip ok=True", sresults[0]["ok"] is True)
+    expect("i: skip flagged", sresults[0].get("skip") is True)
+    expect("i: skip detail kept", sresults[0]["detail"] == "skip(http): console-only")
+
     if fails:
         print("SELFTEST FAIL:", ", ".join(fails))
         return 1
-    print("SELFTEST OK (7 assertion groups)")
+    print("SELFTEST OK (9 assertion groups)")
     return 0
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("port", nargs="?", help="serial port, e.g. COM5 (omit with --selftest)")
+    ap.add_argument("port", nargs="?", help="serial port, e.g. COM5 (omit with --selftest or --http)")
     ap.add_argument("--baud", type=int, default=115200)
+    ap.add_argument("--http", metavar="IP", help="drive /api/cmd over HTTP instead of a serial port")
+    ap.add_argument("--password", help="web UI password (required with --http)")
     ap.add_argument("--role", choices=["MASTER", "ZONE"], help="asserted against GET ID, not a mode switch")
     ap.add_argument("--suite", default="smoke", choices=["smoke"])
     ap.add_argument("--allow-reboot", action="store_true", help="run PERSIST's REBOOT CONFIRM step")
     ap.add_argument("--json", metavar="FILE", help="dump results as JSON to FILE")
-    ap.add_argument("--selftest", action="store_true", help="offline parser self-check; no port needed")
+    ap.add_argument("--selftest", action="store_true", help="offline parser self-check; no port/network needed")
     args = ap.parse_args()
 
     if args.selftest:
         sys.exit(selftest())
-    if not args.port:
-        ap.error("port is required unless --selftest")
 
-    node = open_node(args.port, args.baud)
     results = []
-    run_smoke(node, args, results)
+    if args.http:
+        if not args.password:
+            ap.error("--password is required with --http")
+        # The bench AP link drops the PC's whole Wi-Fi association outright
+        # every few minutes (every SP4 task report on this rig documents
+        # it) -- an OS-level disconnect HttpTransport's own per-request
+        # retries cannot paper over. Report that cleanly (one FAIL, proper
+        # exit code) rather than a raw traceback, so a flaky run is just
+        # another failing check instead of a crash.
+        try:
+            node = open_http_node(args.http, args.password)
+        except Exception as e:
+            check(results, "SETUP: HTTP login", False, f"{type(e).__name__}: {e}")
+            node = None
+        if node is not None:
+            try:
+                run_smoke(node, args, results)
+            except Exception as e:
+                check(results, f"RUN: suite raised {type(e).__name__}", False, str(e))
+    else:
+        if not args.port:
+            ap.error("port is required unless --selftest or --http")
+        node = open_node(args.port, args.baud)
+        run_smoke(node, args, results)
 
     failures = [r for r in results if not r["ok"]]
     for r in results:
-        print("PASS" if r["ok"] else "FAIL", r["name"], "--", r["detail"])
+        label = "SKIP" if r.get("skip") else ("PASS" if r["ok"] else "FAIL")
+        print(label, r["name"], "--", r["detail"])
     print(f"{len(results) - len(failures)}/{len(results)} passed")
 
     if args.json:
