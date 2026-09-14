@@ -36,13 +36,19 @@ HG.consoleState = function (id) {
  * mid-type has to thread its value through here instead of relying on the
  * DOM to remember it. Every such input carries `data-draft` and is rendered
  * with `value="${HG.esc(HG.drafts[key] || '')}"`; the delegated `input`
- * listener below writes back on every keystroke. console-input is keyed per
- * zone (HG.consoleDraftKey) so switching zones doesn't leak one zone's
- * half-typed command into another's input. */
+ * listener below writes back on every keystroke. console-input AND
+ * mac-input are keyed per zone (both forms are re-rendered under the same
+ * DOM id for every zone) so switching zones doesn't leak one zone's
+ * half-typed command/MAC into another zone's input -- an unnoticed MAC
+ * draft surviving a zone switch could otherwise get submitted against the
+ * wrong zone. */
 HG.drafts = {};
 HG.consoleDraftKey = function (id) { return "console-input:" + id; };
+HG.macDraftKey = function (id) { return "mac-input:" + id; };
 HG.draftKey = function (el) {
-  return el.id === "console-input" ? HG.consoleDraftKey(HG.state.route.id) : el.id;
+  if (el.id === "console-input") return HG.consoleDraftKey(HG.state.route.id);
+  if (el.id === "mac-input") return HG.macDraftKey(HG.state.route.id);
+  return el.id;
 };
 
 /* ---------- ApiError ---------- */
@@ -402,11 +408,16 @@ HG.views.shelfTable = function (shelves) {
 };
 
 HG.views.replaceBoardForm = function (id) {
+  /* .form-error MUST be a descendant of <form>: HG.actions.replaceBoard finds
+   * it via form.querySelector(".form-error"), which only searches inside the
+   * form it was called on. */
   return '<section class="card"><h2>Replace board</h2>' +
     '<form data-action="replace-board" class="inline-form">' +
-    '<input id="mac-input" data-draft value="' + HG.esc(HG.drafts["mac-input"] || "") +
+    '<input id="mac-input" data-draft value="' + HG.esc(HG.drafts[HG.macDraftKey(id)] || "") +
     '" placeholder="aa:bb:cc:dd:ee:ff" required>' +
-    '<button type="submit">Set</button></form><p class="form-error"></p></section>';
+    '<button type="submit">Set</button>' +
+    '<p class="form-error"></p>' +
+    "</form></section>";
 };
 
 HG.views.console = function (id) {
@@ -508,6 +519,11 @@ HG.actions = {
   logout: function () {
     HG.api.post("/api/logout", null, "text").then(noop, noop).then(function () {
       HG.state.auth = false;
+      /* No typed password (or any other draft) should linger in the DOM
+       * past a deliberate logout -- a failed *login attempt* keeping its
+       * typed password is fine (the operator is about to retry), but this
+       * is a different person potentially about to sit down at the console. */
+      HG.drafts = {};
       location.hash = "#/login";
       HG.render();
     });
@@ -560,7 +576,7 @@ HG.actions = {
     out.textContent = "…";
     HG.api.post("/api/cmd", "SET NODE " + id + " MAC " + mac, "text").then(function (reply) {
       out.textContent = reply;
-      HG.drafts["mac-input"] = "";
+      HG.drafts[HG.macDraftKey(id)] = "";
       macInput.value = "";
     }, function (err) {
       out.textContent = (err && err.message) || "Failed";

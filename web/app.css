@@ -111,6 +111,7 @@ dl dd { margin: 0; }
 .inline-form { display: flex; gap: 6px; flex-wrap: wrap; }
 .inline-form input { flex: 1; min-width: 160px; }
 .form-error { color: var(--offline-text); font-size: 13px; margin: 4px 0 0; min-height: 1em; }
+.inline-form .form-error { flex-basis: 100%; }
 
 .back-link { display: inline-block; margin: 10px 0; text-decoration: none; }
 
