@@ -101,3 +101,32 @@ Master COM17 + two zones (COM24/COM25) wired 19→18. Every one of these passed 
 8. Relayed NOTIFYs are emitted as the originating node (fix wave) — the web parser assumes one id per line. `httpd` `max_open_sockets` default 7 vs the §6.4 budget of 4; `SET WIFI AP` should be able to change the repo-published AP credentials before the HTTP API lands.
 
 **Bench technique that paid off:** `SET RING TRACE ON` on the master (per-frame src/dst/type/ttl rows) plus `SET LOG DEBUG` on both zones, captured concurrently with three pyserial threads; diagnose from *both* ends of the ring (COM24 proved the consume-by-id bug and the len-0 bug; COM25 proved the drop-self bug by the *absence* of type-0x12 rows). Never `python -c` with quotes on Windows for pyserial helpers — write .py files.
+
+## 2026-09-14 — SP4 web UI: what the reviews and the bench found that green suites did not
+
+Master on the SP3 rig + the PC on the master's AP; every task reviewed, most with one or two fix rounds. The rules, in the order the bugs appeared:
+
+**IDF 6 always advertises 802.11w on the softAP.** `pmf_cfg.capable/required` are ignored; a Windows 11 / Intel client disassociated every ~5 s after an unanswered SA Query, so the web UI was unreachable from the only client the product has. `esp_wifi_disable_pmf_config(WIFI_IF_AP)` before `esp_wifi_start()`. **Rule:** bring a real phone/PC client to the bench before declaring an AP usable.
+
+**SNTP setup before `esp_netif_init()` crash-loops** (`tcpip_callback` asserts "Invalid mbox"). **Rule:** any lwIP-app init (SNTP, mDNS) goes after the netif/Wi-Fi start; comment the ordering at the call site.
+
+**IDF resolves every discovered component's requirements, reachable or not.** A master-only component with `PRIV_REQUIRES espressif__cjson` broke the zone build until the zone declared the registry dependency too (nothing links into zone.bin — gc-sections drops it). **Rule:** a registry dependency added to any shared-directory component needs an `idf_component.yml` in every app.
+
+**A stalled send loop can PANIC the master.** `fw_srv`'s `send_all` fed the task watchdog only per 4 KB chunk; partial 5 s sends exceeded the 8 s TWDT mid-fleet-update. Feed on progress (gated on `esp_task_wdt_status`) and bound the whole transfer (120 s). **Rule:** every network write loop needs both a per-progress feed and a total deadline.
+
+**httpd purges an unread body when the handler returns `ESP_OK`.** A `Content-Length` lie plus a one-byte trickle pinned the single httpd task indefinitely (and stalled `/fw/zone.bin` mid-fleet). Answer, then return `ESP_FAIL`; drain only bounded bodies, with a wall-clock budget. **Rule:** on esp_http_server the return code is a socket decision, not a status.
+
+**A lockout minted on the frozen clock became permanent when NTP arrived.** Sessions used uptime until the clock was set; `lock_until` from one base compared against the other. **Rule:** whenever a deadline can be minted on two clock bases, drop deadlines further ahead than the maximum legitimate span.
+
+**A timed-out command worker kept writing into a recycled buffer.** `cmd_task_execute`'s orphan path and a caller wait equal to the forward budget (3500 ms) → torn or cross-user replies. Distinct orphan return code, quarantine the slot, wait longer than the forward budget. **Rule:** a blocking call that can orphan its worker must tell the caller so, and the caller must not reuse the buffer.
+
+**Schema text in `id`/`for` attributes is XSS.** A tampered `/api/schema` executed script in an operator's session. Field ids are index-derived; server strings never reach an attribute unescaped or un-whitelisted. **Rule:** escape into text nodes, whitelist into attributes, never interpolate server text into an id.
+
+**Poll-driven re-renders wipe typed input.** Only the console had draft preservation; the login password and the MAC field lost keystrokes every 2 s. One drafts map keyed per input (and per zone) restores values on render; the poll stops on the login page. **Rule:** any timer-driven full re-render needs a value-preservation contract for every text input.
+
+**Native form validation silently blocked the server-error path**, and `#app{display:contents}` had been hiding a broken desktop grid since the shell landed. **Rule:** drive every UI flow through to its real success (or its real 400) on the bench — "request dispatched" hides form bugs.
+
+**No host seam for `http_srv.c`** let a missing `case 202` (queued saves answered 500) and a path sanitiser folding `[]` reach the bench. Carried as test debt: a fake-httpd seam for status lines and JSON error bodies.
+
+**The 100 KB heap bar was set before httpd, mDNS, cJSON, SNTP and APSTA existed.** Measured 87 KB fresh, 75 KB after OTA + upload + fleet; bar moved to ≥ 64 KB with the 40 KB `LOW_HEAP` guard as the floor.
+
