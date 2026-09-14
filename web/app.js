@@ -20,7 +20,34 @@ HG.state = {
   route: { name: "dashboard" },
   lastRoute: null,      /* hash to return to after a login forced by a 401 */
   loginError: "",
-  console: {}            /* zoneId -> { log, history, histIdx, forward } -- drafts live in HG.drafts */
+  console: {},           /* zoneId -> { log, history, histIdx, forward } -- drafts live in HG.drafts */
+
+  /* ---- config editor (#/config/N, N=0 is the master's own mcfg) ----
+   * schema is fetched once and cached; cfgDoc/cfgDirty are keyed by zone id
+   * so switching zones never leaks one zone's edits into another's document.
+   * cfgDirty[id] maps "GROUP|idx|KEY" (idx -1 for zone/master-scoped fields)
+   * to the field's *typed* edited value (number/bool/string matching the
+   * field's JSON wire type) -- reading from this map instead of the DOM is
+   * what lets an edited field survive the 2s state poll's rerender without
+   * needing a per-field HG.drafts entry. */
+  schema: null,
+  cfgDoc: {},
+  cfgDirty: {},
+  cfgUi: { zone: null, group: null, idx: 0 },
+  cfgBad: null,          /* { group, idx, key, msg } for the field a 400 named */
+  cfgMsg: "",
+  cfgSaving: false,
+  cfgLoading: null,      /* zone id currently being fetched, or null */
+  cfgLoadErr: "",
+
+  alarms: null,           /* last GET /api/alarms document */
+
+  sys: {                  /* #/system page transient UI state */
+    wifiScanning: false, wifiScan: null, wifiScanErr: "",
+    fwMasterUploading: false, fwMasterPct: 0, fwMasterMsg: "", fwMasterOk: false,
+    fwZoneUploading: false, fwZonePct: 0, fwZoneMsg: "", fwZoneOk: false,
+    fleetMsg: "", rebootMsg: ""
+  }
 };
 
 HG.consoleState = function (id) {
@@ -62,6 +89,55 @@ function ApiError(status, message) {
 ApiError.prototype = Object.create(Error.prototype);
 ApiError.prototype.constructor = ApiError;
 HG.ApiError = ApiError;
+
+/* One representative zone document (matches hg_json_export_cfg's exact shape:
+ * gen/hw{HW,shelf[]}/cfg{ZONECFG,shelf[],aux[]}) -- used for every mock zone
+ * so the config editor's "10 groups, 4 shelves, 2 aux" shape is exercised
+ * without hand-writing the same nested structure four times over. */
+function mockZoneDoc(gen, name) {
+  var shelf = [];
+  for (var i = 0; i < 4; i++) {
+    shelf.push({
+      SHELF: { CROP: i === 0 ? "Basil" : "", ENABLED: i < 2 ? true : false, PROFILE: 0 },
+      LIGHT: { ON: "06:00", OFF: "22:00", WHITE: 80, RED: 40, RAMP_MIN: 10, DLI: 0 },
+      WATER: { MODE: "AUTO", TARGET: 61, HYST: 5, SETTLE_MIN: 10, DOSE_S: 20,
+               INTERVAL_MIN: 120, MAX_DOSES: 6, DIFF_MAX: 15, WIN_START: "00:00", WIN_END: "00:00" },
+      FAN: { MODE: "CYCLE", ON_MIN: 10, PERIOD_MIN: 60 },
+      VIB: { MODE: "OFF", INTENSITY: 60, PULSE_S: 5, INTERVAL_MIN: 60, START: "08:00", END: "20:00" }
+    });
+  }
+  var hwShelf = [];
+  for (var j = 0; j < 4; j++) {
+    hwShelf.push({
+      HWSHELF: { LED_W: j, LED_R: j + 4, PUMP: j + 8, FAN: 255, SOIL_A: j, SOIL_B: j + 1, VIB: 255,
+                 LED_MAX_W: 100, LED_MAX_R: 100, PUMP_MAX_RUN_S: 30, PUMP_MAX_DAILY_S: 600 },
+      CAL: { DRY_A: 2800, DRY_B: 2800, WET_A: 1200, WET_B: 1200, MIN_OK: 300, MAX_OK: 3000 }
+    });
+  }
+  return {
+    gen: gen,
+    hw: { HW: { SHELVES: 4, PCA_ADDR: 64, PCF_ADDR: 32, SOIL_BACKEND: "INTERNAL", PCF_ACTLOW: 65535, PCA_HZ: 1000 },
+          shelf: hwShelf },
+    cfg: {
+      ZONECFG: { NAME: name || "", LINKLOSS_S: 30 },
+      shelf: shelf,
+      aux: [{ AUX: { MODE: "OFF", PULSE_S: 5, INTERVAL_MIN: 60, START: "08:00", END: "20:00" } },
+            { AUX: { MODE: "OFF", PULSE_S: 5, INTERVAL_MIN: 60, START: "08:00", END: "20:00" } }]
+    }
+  };
+}
+
+function mockParseQuery(path) {
+  var q = {};
+  var qi = path.indexOf("?");
+  if (qi === -1) return q;
+  path.slice(qi + 1).split("&").forEach(function (kv) {
+    var eq = kv.indexOf("=");
+    if (eq === -1) return;
+    q[decodeURIComponent(kv.slice(0, eq))] = decodeURIComponent(kv.slice(eq + 1));
+  });
+  return q;
+}
 
 /* ---------- HG.mock: fixtures + fetch-shaped handler, active on ?mock=1 ---------- */
 HG.mock = {
@@ -105,9 +181,149 @@ HG.mock = {
       ],
       ring: { state: "OK", size: 2, online: 6, blame: "" }
     },
-    schema: { groups: ["ZONECFG", "SHELF", "LIGHT", "WATER", "FAN", "VIB", "AUX", "HW", "HWSHELF", "CAL"], mgroups: ["WIFI", "TIME", "SYS"], hw_readonly: true },
-    alarms: { active: [{ key: "Z2_OFFLINE", text: "Zone 2 offline", since_s: 900 }], events: [{ at_s: 900, text: "Zone 2 offline" }] },
-    config: { 0: { WIFI: { STA_SSID: "HomeWiFi", STA_PASS: "", AP_SSID: "HillGrow", AP_PASS: "hillgrow1" }, TIME: { TZ: "CET-1CEST,M3.5.0,M10.5.0/3", NTP: "pool.ntp.org" }, SYS: { HOSTNAME: "hillgrow" } } }
+    /* Exact shape of hg_json_schema()'s output -- see components/hg_json/hg_json_schema.c. */
+    schema: {
+      groups: [
+        { name: "ZONECFG", scope: 0, fields: [
+          { key: "NAME", type: "STR16", min: 0, max: 15 },
+          { key: "LINKLOSS_S", type: "U16", min: 10, max: 600 } ] },
+        { name: "SHELF", scope: 1, fields: [
+          { key: "CROP", type: "STR16", min: 0, max: 15 },
+          { key: "ENABLED", type: "BOOL", min: 0, max: 1 },
+          { key: "PROFILE", type: "U8", min: 0, max: 16 } ] },
+        { name: "LIGHT", scope: 1, fields: [
+          { key: "ON", type: "HHMM", min: 0, max: 1439 },
+          { key: "OFF", type: "HHMM", min: 0, max: 1439 },
+          { key: "WHITE", type: "U8", min: 0, max: 100 },
+          { key: "RED", type: "U8", min: 0, max: 100 },
+          { key: "RAMP_MIN", type: "U8", min: 0, max: 120 },
+          { key: "DLI", type: "U16", min: 0, max: 1000 } ] },
+        { name: "WATER", scope: 1, fields: [
+          { key: "MODE", type: "ENUM", min: 0, max: 1, enums: ["OFF", "AUTO"] },
+          { key: "TARGET", type: "U8", min: 0, max: 100 },
+          { key: "HYST", type: "U8", min: 1, max: 30 },
+          { key: "SETTLE_MIN", type: "U8", min: 1, max: 60 },
+          { key: "DOSE_S", type: "U16", min: 1, max: 300 },
+          { key: "INTERVAL_MIN", type: "U16", min: 10, max: 1440 },
+          { key: "MAX_DOSES", type: "U8", min: 0, max: 24 },
+          { key: "DIFF_MAX", type: "U8", min: 5, max: 50 },
+          { key: "WIN_START", type: "HHMM", min: 0, max: 1439 },
+          { key: "WIN_END", type: "HHMM", min: 0, max: 1439 } ] },
+        { name: "FAN", scope: 1, fields: [
+          { key: "MODE", type: "ENUM", min: 0, max: 3, enums: ["OFF", "ON", "LIGHT", "CYCLE"] },
+          { key: "ON_MIN", type: "U8", min: 0, max: 60 },
+          { key: "PERIOD_MIN", type: "U16", min: 0, max: 1440 } ] },
+        { name: "VIB", scope: 1, fields: [
+          { key: "MODE", type: "ENUM", min: 0, max: 1, enums: ["OFF", "PULSE"] },
+          { key: "INTENSITY", type: "U8", min: 20, max: 100 },
+          { key: "PULSE_S", type: "U8", min: 1, max: 30 },
+          { key: "INTERVAL_MIN", type: "U16", min: 5, max: 1440 },
+          { key: "START", type: "HHMM", min: 0, max: 1439 },
+          { key: "END", type: "HHMM", min: 0, max: 1439 } ] },
+        { name: "AUX", scope: 2, fields: [
+          { key: "MODE", type: "ENUM", min: 0, max: 1, enums: ["OFF", "PULSE"] },
+          { key: "PULSE_S", type: "U8", min: 1, max: 30 },
+          { key: "INTERVAL_MIN", type: "U16", min: 5, max: 1440 },
+          { key: "START", type: "HHMM", min: 0, max: 1439 },
+          { key: "END", type: "HHMM", min: 0, max: 1439 } ] },
+        { name: "HW", scope: 0, fields: [
+          { key: "SHELVES", type: "U8", min: 1, max: 4 },
+          { key: "PCA_ADDR", type: "U8", min: 0, max: 127 },
+          { key: "PCF_ADDR", type: "U8", min: 0, max: 127 },
+          { key: "SOIL_BACKEND", type: "ENUM", min: 0, max: 1, enums: ["INTERNAL", "ADS1115"] },
+          { key: "PCF_ACTLOW", type: "U16", min: 0, max: 65535 },
+          { key: "PCA_HZ", type: "U16", min: 200, max: 1500 } ] },
+        { name: "HWSHELF", scope: 1, fields: [
+          { key: "LED_W", type: "PIN", min: 0, max: 15 },
+          { key: "LED_R", type: "PIN", min: 0, max: 15 },
+          { key: "PUMP", type: "PIN", min: 0, max: 15 },
+          { key: "FAN", type: "PIN", min: 0, max: 15 },
+          { key: "SOIL_A", type: "PIN", min: 0, max: 7 },
+          { key: "SOIL_B", type: "PIN", min: 0, max: 7 },
+          { key: "VIB", type: "PIN", min: 0, max: 15 },
+          { key: "LED_MAX_W", type: "U8", min: 0, max: 100 },
+          { key: "LED_MAX_R", type: "U8", min: 0, max: 100 },
+          { key: "PUMP_MAX_RUN_S", type: "U16", min: 1, max: 300 },
+          { key: "PUMP_MAX_DAILY_S", type: "U16", min: 1, max: 3600 } ] },
+        { name: "CAL", scope: 1, fields: [
+          { key: "DRY_A", type: "U16", min: 0, max: 3300 },
+          { key: "DRY_B", type: "U16", min: 0, max: 3300 },
+          { key: "WET_A", type: "U16", min: 0, max: 3300 },
+          { key: "WET_B", type: "U16", min: 0, max: 3300 },
+          { key: "MIN_OK", type: "U16", min: 0, max: 3300 },
+          { key: "MAX_OK", type: "U16", min: 0, max: 3300 } ] }
+      ],
+      mgroups: [
+        { name: "WIFI", fields: [
+          { key: "STA_SSID", type: "STR", max: 32, secret: false },
+          { key: "STA_PASS", type: "STR", max: 64, secret: true },
+          { key: "AP_SSID", type: "STR", max: 32, secret: false },
+          { key: "AP_PASS", type: "STR", max: 64, secret: true } ] },
+        { name: "TIME", fields: [
+          { key: "TZ", type: "STR", max: 47, secret: false },
+          { key: "NTP", type: "STR", max: 47, secret: false } ] },
+        { name: "SYS", fields: [
+          { key: "HOSTNAME", type: "STR", max: 23, secret: false } ] }
+      ],
+      hw_readonly: true
+    },
+    alarms: {
+      active: [{ key: "Z2_OFFLINE", text: "Zone 2 offline", since_s: 900 }],
+      events: [{ at_s: 900, text: "Zone 2 offline" }, { at_s: 4000, text: "Master rebooted" }]
+    },
+    scan: [
+      { ssid: "HomeWiFi", rssi: -52, auth: 3 },
+      { ssid: "Neighbour5G", rssi: -81, auth: 3 },
+      { ssid: "OpenGuest", rssi: -70, auth: 0 }
+    ],
+    config: {
+      0: { WIFI: { STA_SSID: "HomeWiFi", STA_PASS: "", AP_SSID: "HillGrow", AP_PASS: "" },
+           TIME: { TZ: "CET-1CEST,M3.5.0,M10.5.0/3", NTP: "pool.ntp.org" },
+           SYS: { HOSTNAME: "hillgrow" } },
+      1: mockZoneDoc(13, "Basil"),
+      2: mockZoneDoc(34, "")
+    }
+  },
+  /* Mirrors hg_field_write's OUT_OF_RANGE check for the numeric types (the
+   * shape the bench's "enter 101 on WATER TARGET" check exercises) closely
+   * enough to drive the mock 400/path-highlight check without reimplementing
+   * the whole of hg_cfg_validate. */
+  mockCheckField: function (gname, key, v) {
+    var g = null, gs = this.fixtures.schema.groups;
+    for (var i = 0; i < gs.length; i++) if (gs[i].name === gname) { g = gs[i]; break; }
+    if (!g) return null;
+    var f = null;
+    for (var j = 0; j < g.fields.length; j++) if (g.fields[j].key === key) { f = g.fields[j]; break; }
+    if (!f) return null;
+    if ((f.type === "U8" || f.type === "U16" || f.type === "PIN") && (v < f.min || v > f.max)) return f;
+    return null;
+  },
+  mockValidateCfgPut: function (body) {
+    var self = this;
+    function scanObj(gname, prefix, obj) {
+      for (var key in obj) {
+        if (self.mockCheckField(gname, key, obj[key])) return "cfg." + prefix + gname + "." + key;
+      }
+      return null;
+    }
+    if (!body.cfg) return null;
+    if (body.cfg.ZONECFG) { var p0 = scanObj("ZONECFG", "", body.cfg.ZONECFG); if (p0) return p0; }
+    var i, gname, p;
+    if (body.cfg.shelf) {
+      for (i = 0; i < body.cfg.shelf.length; i++) {
+        var el = body.cfg.shelf[i];
+        if (!el) continue;
+        for (gname in el) { p = scanObj(gname, "shelf[" + i + "].", el[gname]); if (p) return p; }
+      }
+    }
+    if (body.cfg.aux) {
+      for (i = 0; i < body.cfg.aux.length; i++) {
+        var ael = body.cfg.aux[i];
+        if (!ael) continue;
+        for (gname in ael) { p = scanObj(gname, "aux[" + i + "].", ael[gname]); if (p) return p; }
+      }
+    }
+    return null;
   },
   handle: function (path, opts) {
     var method = (opts && opts.method) || "GET";
@@ -126,7 +342,54 @@ HG.mock = {
       if (route === "/api/state") return JSON.parse(JSON.stringify(self.fixtures.state));
       if (route === "/api/schema") return JSON.parse(JSON.stringify(self.fixtures.schema));
       if (route === "/api/alarms") return JSON.parse(JSON.stringify(self.fixtures.alarms));
-      if (route === "/api/config") return JSON.parse(JSON.stringify(self.fixtures.config[0]));
+      if (route === "/api/wifi/scan" && method === "GET") return JSON.parse(JSON.stringify(self.fixtures.scan));
+      if (route === "/api/wifi" && method === "POST") {
+        var wb = {};
+        try { wb = JSON.parse(opts.body); } catch (e) { /* ignore */ }
+        if (!wb.sta && !wb.ap) throw new ApiError(400, "INVALID");
+        return { ok: true };
+      }
+      if (route === "/api/password" && method === "POST") {
+        var pb = {};
+        try { pb = JSON.parse(opts.body); } catch (e) { /* ignore */ }
+        if (pb.old !== "hillgrow1") { var e1 = new ApiError(403, "BAD_PASSWORD"); throw e1; }
+        return null;
+      }
+      if (route === "/api/config") {
+        var q = mockParseQuery(path);
+        var zone = q.zone !== undefined ? Number(q.zone) : 0;
+        if (method === "GET") {
+          var src = self.fixtures.config[zone] || self.fixtures.config[zone === 0 ? 0 : 1];
+          var doc = JSON.parse(JSON.stringify(src));
+          if (zone === 0 && q.secrets === "0") { doc.WIFI.STA_PASS = ""; doc.WIFI.AP_PASS = ""; }
+          return doc;
+        }
+        if (method === "PUT") {
+          var pbody;
+          try { pbody = JSON.parse(opts.body); } catch (e) { var e2 = new ApiError(400, "BAD_JSON"); throw e2; }
+          /* Logged (not just captured) so the mock check can grep console
+           * output for the exact minimal merge body a Save produced. */
+          if (typeof console !== "undefined" && console.log) {
+            console.log("MOCK PUT /api/config?zone=" + zone, JSON.stringify(pbody));
+          }
+          self.lastPut = pbody;
+          if (zone === 0) {
+            Object.keys(pbody).forEach(function (g) {
+              self.fixtures.config[0][g] = Object.assign({}, self.fixtures.config[0][g], pbody[g]);
+            });
+            return { ok: true };
+          }
+          var badPath = self.mockValidateCfgPut(pbody);
+          if (badPath) {
+            var e3 = new ApiError(400, "INVALID_FIELD");
+            e3.body = { error: "INVALID_FIELD", path: badPath };
+            throw e3;
+          }
+          return { queued: true, warnings: "" };
+        }
+      }
+      if (route === "/api/fleet" && method === "POST") return { queued: true };
+      if (route === "/api/fleet" && method === "DELETE") return { ok: true };
       if (route === "/api/cmd" && method === "POST") return self.cmdReply(String(opts.body || ""));
       throw new ApiError(404, "NOT_FOUND");
     });
@@ -250,6 +513,37 @@ HG.poll = (function () {
   return { start: function () { schedule(0); }, tick: tick };
 })();
 
+/* ---------- HG.alarmsPoll: 5s /api/alarms poll, gated to #/alarms only ----------
+ * Mirrors HG.poll's own shape (document.hidden check, in-flight guard) rather
+ * than an unconditional setInterval -- the brief's "don't create a second
+ * unguarded loop" -- but gates on the route too, so it costs nothing (beyond
+ * one idle 5s timer) while the operator is anywhere else. kick() forces an
+ * immediate fetch on first navigating to #/alarms instead of waiting up to
+ * 5s for the next tick. */
+HG.alarmsPoll = (function () {
+  var timer = null, inFlight = false;
+  function schedule(ms) {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(tick, ms);
+  }
+  function tick() {
+    if (inFlight) return;
+    if (document.hidden || HG.state.route.name !== "alarms" || HG.state.auth !== true) {
+      schedule(5000);
+      return;
+    }
+    inFlight = true;
+    HG.api.get("/api/alarms").then(function (a) {
+      HG.state.alarms = a;
+    }, function () { /* leave the last-known alarms list showing */ }).then(function () {
+      inFlight = false;
+      HG.rerender();
+      schedule(5000);
+    });
+  }
+  return { start: function () { schedule(0); }, kick: function () { schedule(0); } };
+})();
+
 /* ---------- helpers ---------- */
 HG.rewriteForZone = function (line, zoneId) {
   var parts = line.split(/\s+/).filter(function (p) { return p.length; });
@@ -286,6 +580,54 @@ function shelfTotals(shelves) {
     light: any ? Math.round(lightSum / lightN) + "%" : "—",
     pump: any ? pumpSum + "s" : "—"
   };
+}
+
+/* ---------- config editor helpers ----------
+ * A zone document's shape (hg_json_export_cfg): {gen, hw:{HW,shelf:[{HWSHELF,CAL}x4]},
+ * cfg:{ZONECFG,shelf:[{SHELF,LIGHT,WATER,FAN,VIB}x4],aux:[{AUX}x2]}}. HW/HWSHELF/CAL
+ * live under "hw" (read-only); everything else, including AUX, lives under "cfg". */
+function isHwGroup(name) { return name === "HW" || name === "HWSHELF" || name === "CAL"; }
+
+function cfgFieldOriginal(doc, group, idx, key) {
+  if (!doc) return undefined;
+  var obj;
+  if (group === "ZONECFG") obj = doc.cfg && doc.cfg.ZONECFG;
+  else if (group === "HW") obj = doc.hw && doc.hw.HW;
+  else if (group === "HWSHELF") obj = doc.hw && doc.hw.shelf && doc.hw.shelf[idx] && doc.hw.shelf[idx].HWSHELF;
+  else if (group === "CAL") obj = doc.hw && doc.hw.shelf && doc.hw.shelf[idx] && doc.hw.shelf[idx].CAL;
+  else if (group === "AUX") obj = doc.cfg && doc.cfg.aux && doc.cfg.aux[idx] && doc.cfg.aux[idx].AUX;
+  else obj = doc.cfg && doc.cfg.shelf && doc.cfg.shelf[idx] && doc.cfg.shelf[idx][group]; /* SHELF/LIGHT/WATER/FAN/VIB */
+  return obj ? obj[key] : undefined;
+}
+
+function mgroupOriginal(doc, group, key) {
+  var obj = doc && doc[group];
+  return obj ? obj[key] : undefined;
+}
+
+function cfgFieldId(zoneId, group, idx, key) { return "cfgf-" + zoneId + "-" + group + "-" + idx + "-" + key; }
+
+function cfgGroupScope(groups, name) {
+  for (var i = 0; i < groups.length; i++) if (groups[i].name === name) return groups[i].scope;
+  return 0;
+}
+
+/* Parses a server error `path` into {group, idx, key} so a 400 can highlight
+ * the field it names. Two real shapes reach here (see hg_json.h): the merge's
+ * own -2 path, e.g. "cfg.shelf[0].WATER.TARGET" (uppercase, matches the
+ * schema's own group/field names), and hg_cfg_validate's -3 path, e.g.
+ * "shelf[1].light.off" (lower-case, no "cfg." prefix) -- normalised the same
+ * way so either highlights correctly. A zone-0 path is just "WIFI.AP_PASS". */
+function cfgParseBadPath(path, errCode) {
+  var m = /\[(\d+)\]/.exec(path);
+  var idx = m ? Number(m[1]) : -1;
+  var clean = String(path).replace(/^cfg\./i, "").replace(/^hw\./i, "");
+  var segs = clean.split(".");
+  if (segs.length && /^(shelf|aux)\[\d+\]$/i.test(segs[0])) segs.shift();
+  var key = segs.pop();
+  var group = segs.pop();
+  return { group: group ? group.toUpperCase() : null, idx: idx, key: key ? key.toUpperCase() : null,
+           msg: errCode || "Invalid value" };
 }
 
 /* ---------- views ---------- */
@@ -392,7 +734,9 @@ HG.views.zone = function (id) {
   }).join("") + "</dl>";
   var shelves = (n.shelves && n.shelves.length) ? HG.views.shelfTable(n.shelves) : '<p class="empty">No shelf telemetry.</p>';
   return '<a class="back-link" href="#/dashboard">&larr; Dashboard</a>' +
-    "<h1>" + name + "</h1>" + dl +
+    "<h1>" + name + "</h1>" +
+    '<a class="back-link" href="#/config/' + id + '">Configure this zone &rarr;</a>' +
+    dl +
     "<h2>Shelves</h2>" + shelves +
     HG.views.replaceBoardForm(id) +
     HG.views.console(id);
@@ -436,15 +780,232 @@ HG.views.console = function (id) {
 };
 
 HG.views.alarms = function () {
-  var snap = HG.state.snap;
-  var summary = snap ? ("Active: " + snap.master.alarms.active + " · Total: " + snap.master.alarms.total) : "";
-  return "<h1>Alarms</h1><p>" + summary + '</p><p class="empty">Full alarm log lands in part 2.</p>';
+  var a = HG.state.alarms;
+  if (!a) return "<h1>Alarms</h1>" + '<p class="loading">Loading…</p>';
+  var active = a.active.length
+    ? '<ul class="alarm-list">' + a.active.map(function (x) {
+        return '<li class="alarm-active"><b>' + HG.esc(x.key) + "</b>" + HG.esc(x.text) +
+          '<span class="muted">' + x.since_s + "s ago</span></li>";
+      }).join("") + "</ul>"
+    : '<p class="empty">No active alarms.</p>';
+  var events = a.events.length
+    ? '<ul class="event-list">' + a.events.map(function (x) {
+        return "<li>" + '<span class="muted">' + x.at_s + "s ago</span> " + HG.esc(x.text) + "</li>";
+      }).join("") + "</ul>"
+    : '<p class="empty">No events.</p>';
+  return "<h1>Alarms</h1><h2>Active</h2>" + active + "<h2>History</h2>" + events;
 };
+
 HG.views.system = function () {
-  return '<h1>System</h1><p class="empty">Wi-Fi, time, password and firmware tools land in part 2.</p>';
+  var snap = HG.state.snap;
+  var m = snap && snap.master;
+  var sys = HG.state.sys;
+
+  var staStatus = m
+    ? (m.wifi.sta.up
+        ? HG.esc(m.wifi.sta.ip) + " · " + HG.esc(m.wifi.sta.ssid) + " · " + m.wifi.sta.rssi + " dBm"
+        : "STA down: " + HG.esc(m.wifi.sta.reason || "—"))
+    : "—";
+  var apStatus = m ? (HG.esc(m.wifi.ap.ssid) + " · " + m.wifi.ap.clients + " client(s) · " + HG.esc(m.wifi.ap.ip)) : "—";
+  var scanList = "";
+  if (sys.wifiScanning) scanList = '<p class="loading">Scanning…</p>';
+  else if (sys.wifiScanErr) scanList = '<p class="form-error">' + HG.esc(sys.wifiScanErr) + "</p>";
+  else if (sys.wifiScan) {
+    scanList = sys.wifiScan.length
+      ? '<ul class="scan-list">' + sys.wifiScan.map(function (n) {
+          return '<li><button type="button" class="scan-item" data-action="wifi-pick" data-ssid="' +
+            HG.esc(n.ssid) + '">' + HG.esc(n.ssid) + '<span class="muted">' + n.rssi + " dBm</span></button></li>";
+        }).join("") + "</ul>"
+      : '<p class="empty">No networks found.</p>';
+  }
+  var wifiCard = '<section class="card"><h2>Wi-Fi</h2>' +
+    "<dl><dt>STA</dt><dd>" + staStatus + "</dd><dt>AP</dt><dd>" + apStatus + "</dd></dl>" +
+    '<button type="button" data-action="wifi-scan"' + (sys.wifiScanning ? " disabled" : "") + ">Scan</button>" +
+    scanList +
+    '<form data-action="wifi-join" class="inline-form">' +
+    '<input id="sys-sta-ssid" data-draft placeholder="SSID" value="' + HG.esc(HG.drafts["sys-sta-ssid"] || "") + '">' +
+    '<input id="sys-sta-pass" type="password" data-draft placeholder="Password" value="' +
+    HG.esc(HG.drafts["sys-sta-pass"] || "") + '">' +
+    '<button type="submit">Join</button><p class="form-error"></p></form>' +
+    '<form data-action="wifi-ap" class="inline-form">' +
+    '<input id="sys-ap-ssid" data-draft placeholder="AP SSID" value="' + HG.esc(HG.drafts["sys-ap-ssid"] || "") + '">' +
+    '<input id="sys-ap-pass" type="password" data-draft placeholder="AP password (8+ chars)" value="' +
+    HG.esc(HG.drafts["sys-ap-pass"] || "") + '">' +
+    '<button type="submit">Set AP</button><p class="form-error"></p></form>' +
+    "</section>";
+
+  var timeCard = '<section class="card"><h2>Time</h2>' +
+    "<dl><dt>Now</dt><dd>" + (m ? HG.esc(m.time) : "—") + "</dd><dt>Source</dt><dd>" +
+    (m ? HG.esc(m.time_src) : "—") + "</dd></dl>" +
+    '<form data-action="tz-set" class="inline-form">' +
+    '<input id="sys-tz-input" data-draft placeholder="CET-1CEST,M3.5.0,M10.5.0/3" value="' +
+    HG.esc(HG.drafts["sys-tz-input"] || "") + '">' +
+    '<button type="submit">Set TZ</button><p class="form-error"></p></form></section>';
+
+  var pwCard = '<section class="card"><h2>Web password</h2>' +
+    '<form data-action="pw-change" class="inline-form">' +
+    '<input id="sys-pw-old" type="password" data-draft placeholder="Current password" value="' +
+    HG.esc(HG.drafts["sys-pw-old"] || "") + '">' +
+    '<input id="sys-pw-new" type="password" data-draft placeholder="New password" value="' +
+    HG.esc(HG.drafts["sys-pw-new"] || "") + '">' +
+    '<button type="submit">Change</button><p class="form-error"></p></form></section>';
+
+  var fwMasterBar = sys.fwMasterUploading
+    ? '<div class="progress"><div class="progress-bar" style="width:' + sys.fwMasterPct + '%"></div></div>' : "";
+  var fwMasterMsg = sys.fwMasterMsg
+    ? '<p class="' + (sys.fwMasterOk ? "cfg-msg" : "form-error") + '">' + HG.esc(sys.fwMasterMsg) + "</p>" : "";
+  var rebootBtn = sys.fwMasterOk ? '<button type="button" data-action="reboot-now">Reboot now</button>' : "";
+  var fwZoneBar = sys.fwZoneUploading
+    ? '<div class="progress"><div class="progress-bar" style="width:' + sys.fwZonePct + '%"></div></div>' : "";
+  var fwZoneMsg = sys.fwZoneMsg
+    ? '<p class="' + (sys.fwZoneOk ? "cfg-msg" : "form-error") + '">' + HG.esc(sys.fwZoneMsg) + "</p>" : "";
+  var fwCard = '<section class="card"><h2>Firmware</h2>' +
+    '<label class="btn-ghost">Upload master image<input type="file" id="sys-fw-master-input" accept=".bin" hidden' +
+    (sys.fwMasterUploading ? " disabled" : "") + "></label>" +
+    fwMasterBar + fwMasterMsg + rebootBtn +
+    '<label class="btn-ghost">Upload zone image<input type="file" id="sys-fw-zone-input" accept=".bin" hidden' +
+    (sys.fwZoneUploading ? " disabled" : "") + "></label>" +
+    fwZoneBar + fwZoneMsg +
+    "</section>";
+
+  var nodes = (snap && snap.nodes) || [];
+  var fleetRows = nodes.map(function (n) {
+    var name = n.name ? HG.esc(n.name) : ("Z" + n.id);
+    return '<div class="fleet-row"><span>' + name +
+      '</span><button type="button" data-action="fleet-update" data-zone="' + n.id + '">Update</button></div>';
+  }).join("");
+  var fleetLine = m ? HG.esc(m.fleet) : "—";
+  var fleetCard = '<section class="card"><h2>Fleet</h2>' +
+    "<p>Status: " + fleetLine + "</p>" + fleetRows +
+    '<div class="cfg-actions"><button type="button" data-action="fleet-update-all">Update all</button>' +
+    '<button type="button" class="btn-ghost" data-action="fleet-abort">Abort</button></div>' +
+    (sys.fleetMsg ? '<p class="cfg-msg">' + HG.esc(sys.fleetMsg) + "</p>" : "") +
+    "</section>";
+
+  var rebootCard = '<section class="card"><h2>Reboot</h2>' +
+    '<button type="button" class="btn-ghost" data-action="reboot-master">Reboot master</button>' +
+    (sys.rebootMsg ? '<p class="cfg-msg">' + HG.esc(sys.rebootMsg) + "</p>" : "") +
+    "</section>";
+
+  return "<h1>System</h1>" +
+    '<p><a href="#/config/0">Master config (Wi-Fi/time/hostname raw fields) &rarr;</a></p>' +
+    wifiCard + timeCard + pwCard + fwCard + fleetCard + rebootCard;
 };
+
+HG.views.cfgIdxSelector = function (count, cur) {
+  var btns = "";
+  for (var i = 0; i < count; i++) {
+    btns += '<button type="button" class="cfg-idx-btn' + (i === cur ? " active" : "") +
+      '" data-action="cfg-idx" data-idx="' + i + '">' + i + "</button>";
+  }
+  return '<div class="cfg-idx-selector">' + btns + "</div>";
+};
+
+HG.cfgFieldValue = function (zoneId, doc, group, idx, key) {
+  var dirty = HG.state.cfgDirty[zoneId] || {};
+  var dk = group + "|" + idx + "|" + key;
+  if (Object.prototype.hasOwnProperty.call(dirty, dk)) return dirty[dk];
+  return cfgFieldOriginal(doc, group, idx, key);
+};
+
+HG.views.cfgField = function (zoneId, group, idx, f, value, disabled) {
+  var id = cfgFieldId(zoneId, group, idx, f.key);
+  var bad = HG.state.cfgBad && HG.state.cfgBad.group === group &&
+    (HG.state.cfgBad.idx === idx || HG.state.cfgBad.idx === -1) && HG.state.cfgBad.key === f.key;
+  var badCls = bad ? " bad" : "";
+  var common = ' data-cfg-group="' + HG.esc(group) + '" data-cfg-idx="' + idx +
+    '" data-cfg-key="' + HG.esc(f.key) + '" data-cfg-type="' + HG.esc(f.type) + '"';
+  var dis = disabled ? " disabled" : "";
+  var input;
+  switch (f.type) {
+    case "BOOL":
+      input = '<input type="checkbox" id="' + id + '" class="' + badCls.trim() + '"' +
+        (value ? " checked" : "") + dis + common + ">";
+      break;
+    case "HHMM":
+      input = '<input type="time" id="' + id + '" class="' + badCls.trim() + '" value="' +
+        HG.esc(value || "00:00") + '"' + dis + common + ">";
+      break;
+    case "ENUM":
+      var opts = (f.enums || []).map(function (name) {
+        return '<option value="' + HG.esc(name) + '"' + (name === value ? " selected" : "") + ">" + HG.esc(name) + "</option>";
+      }).join("");
+      input = '<select id="' + id + '" class="' + badCls.trim() + '"' + dis + common + ">" + opts + "</select>";
+      break;
+    case "STR16": case "STR":
+      var typ = (group === "WIFI" && (f.key === "STA_PASS" || f.key === "AP_PASS")) ? "password" : "text";
+      input = '<input type="' + typ + '" id="' + id + '" class="' + badCls.trim() + '" maxlength="' + f.max +
+        '" value="' + HG.esc(value == null ? "" : value) + '"' + dis + common + ">";
+      break;
+    default: /* U8, U16, PIN */
+      input = '<input type="number" id="' + id + '" class="' + badCls.trim() + '" min="' + f.min + '" max="' + f.max +
+        '" value="' + HG.esc(value == null ? 0 : value) + '"' + dis + common + ">";
+  }
+  var err = bad ? '<p class="form-error">' + HG.esc(HG.state.cfgBad.msg) + "</p>" : "";
+  return '<div class="cfg-field"><label for="' + id + '">' + HG.esc(f.key) + "</label>" + input + err + "</div>";
+};
+
+HG.views.configMaster = function (schema) {
+  var doc = HG.state.cfgDoc[0];
+  if (!doc) return "<h1>Config — Master</h1>" + '<p class="loading">Loading…</p>';
+  var ui = HG.state.cfgUi;
+  var groups = schema.mgroups;
+  var tabs = '<div class="cfg-tabs">' + groups.map(function (g) {
+    return '<button type="button" class="cfg-tab' + (g.name === ui.group ? " active" : "") +
+      '" data-action="cfg-tab" data-group="' + HG.esc(g.name) + '">' + HG.esc(g.name) + "</button>";
+  }).join("") + "</div>";
+  var active = groups.filter(function (g) { return g.name === ui.group; })[0] || groups[0];
+  var fields = active.fields.map(function (f) {
+    return HG.views.cfgField(0, active.name, -1, f, HG.cfgFieldValue(0, doc, active.name, -1, f.key), false);
+  }).join("");
+  var exportHref = "data:application/json," + encodeURIComponent(JSON.stringify(doc));
+  var msg = HG.state.cfgMsg ? '<p class="cfg-msg">' + HG.esc(HG.state.cfgMsg) + "</p>" : "";
+  return "<h1>Config — Master</h1>" + tabs +
+    '<form class="cfg-form" data-action="cfg-form" novalidate><div class="cfg-fields">' + fields + "</div>" +
+    '<div class="cfg-actions"><button type="submit"' + (HG.state.cfgSaving ? " disabled" : "") + ">" +
+    (HG.state.cfgSaving ? "Saving…" : "Save") + "</button>" +
+    '<a class="btn-ghost" download="hillgrow-master.json" href="' + exportHref + '">Export</a>' +
+    '<label class="btn-ghost cfg-import-label">Import<input type="file" id="cfg-import-input" ' +
+    'accept="application/json" hidden></label></div>' + msg + "</form>";
+};
+
 HG.views.config = function (id) {
-  return "<h1>Config — Zone " + id + '</h1><p class="empty">Schema-driven editor lands in part 2.</p>';
+  var schema = HG.state.schema;
+  if (!schema) return "<h1>Config</h1>" + '<p class="loading">Loading…</p>';
+  if (id === 0) return HG.views.configMaster(schema);
+  var doc = HG.state.cfgDoc[id];
+  if (!doc) {
+    var err = HG.state.cfgLoadErr ? '<p class="form-error">' + HG.esc(HG.state.cfgLoadErr) + "</p>" : '<p class="loading">Loading…</p>';
+    return '<a class="back-link" href="#/dashboard">&larr; Dashboard</a><h1>Config — Zone ' + id + "</h1>" + err;
+  }
+  var ui = HG.state.cfgUi;
+  var groups = schema.groups;
+  var tabs = '<div class="cfg-tabs">' + groups.map(function (g) {
+    return '<button type="button" class="cfg-tab' + (g.name === ui.group ? " active" : "") +
+      '" data-action="cfg-tab" data-group="' + HG.esc(g.name) + '">' + HG.esc(g.name) + "</button>";
+  }).join("") + "</div>";
+  var active = groups.filter(function (g) { return g.name === ui.group; })[0] || groups[0];
+  var scope = active.scope;
+  var selector = "";
+  if (scope === 1) selector = HG.views.cfgIdxSelector(4, ui.idx);
+  else if (scope === 2) selector = HG.views.cfgIdxSelector(2, ui.idx);
+  var idx = scope === 0 ? -1 : ui.idx;
+  var hwNote = isHwGroup(active.name)
+    ? '<p class="cfg-hw-note">hardware plane — set at the zone console</p>' : "";
+  var fields = active.fields.map(function (f) {
+    return HG.views.cfgField(id, active.name, idx, f, HG.cfgFieldValue(id, doc, active.name, idx, f.key), isHwGroup(active.name));
+  }).join("");
+  var exportHref = "data:application/json," + encodeURIComponent(JSON.stringify(doc));
+  var msg = HG.state.cfgMsg ? '<p class="cfg-msg">' + HG.esc(HG.state.cfgMsg) + "</p>" : "";
+  return '<a class="back-link" href="#/dashboard">&larr; Dashboard</a>' +
+    "<h1>Config — Zone " + id + " (gen " + doc.gen + ")</h1>" +
+    tabs + selector +
+    '<form class="cfg-form" data-action="cfg-form" novalidate><div class="cfg-fields">' + hwNote + fields + "</div>" +
+    '<div class="cfg-actions"><button type="submit"' + (HG.state.cfgSaving ? " disabled" : "") + ">" +
+    (HG.state.cfgSaving ? "Saving…" : "Save") + "</button>" +
+    '<a class="btn-ghost" download="hillgrow-zone' + id + '.json" href="' + exportHref + '">Export</a>' +
+    '<label class="btn-ghost cfg-import-label">Import<input type="file" id="cfg-import-input" ' +
+    'accept="application/json" hidden></label></div>' + msg + "</form>";
 };
 
 /* ---------- router ---------- */
@@ -484,16 +1045,198 @@ function withFocusPreserved(fn) {
   }
 }
 
+/* Fetches schema (once, cached) + the zone/master document for #/config/N,
+ * called from HG.render on every route parse -- cheap once both are cached
+ * (two object-existence checks), which is what lets the config route sit
+ * under the same 2s state poll as everything else without refetching on
+ * every tick. Re-entering a *different* zone resets that zone's UI/dirty
+ * state so a leftover .bad highlight or mid-shelf tab from zone A can never
+ * bleed into zone B. */
+HG.ensureConfigLoaded = function (id) {
+  var ui = HG.state.cfgUi;
+  if (ui.zone !== id) {
+    HG.state.cfgUi = { zone: id, group: null, idx: 0 };
+    HG.state.cfgDirty[id] = HG.state.cfgDirty[id] || {};
+    HG.state.cfgBad = null;
+    HG.state.cfgMsg = "";
+  }
+  if (HG.state.cfgLoading === id) return;
+  var needSchema = !HG.state.schema;
+  var needDoc = !HG.state.cfgDoc[id];
+  if (!needSchema && !needDoc) {
+    if (!HG.state.cfgUi.group) {
+      var groups = id === 0 ? HG.state.schema.mgroups : HG.state.schema.groups;
+      HG.state.cfgUi.group = groups[0].name;
+    }
+    return;
+  }
+  HG.state.cfgLoadErr = "";
+  HG.state.cfgLoading = id;
+  var p = needSchema ? HG.api.get("/api/schema").then(function (s) { HG.state.schema = s; }) : Promise.resolve();
+  p.then(function () {
+    var q = id === 0 ? "/api/config?zone=0&secrets=0" : "/api/config?zone=" + id;
+    return HG.api.get(q);
+  }).then(function (doc) {
+    HG.state.cfgDoc[id] = doc;
+    HG.state.cfgLoading = null;
+    var groups = id === 0 ? HG.state.schema.mgroups : HG.state.schema.groups;
+    if (!HG.state.cfgUi.group) HG.state.cfgUi.group = groups[0].name;
+    HG.render();
+  }, function (err) {
+    HG.state.cfgLoading = null;
+    HG.state.cfgLoadErr = (err && err.message) || "Failed to load";
+    HG.render();
+  });
+};
+
+/* Reuses the same zone-0 document the config editor caches (fetched
+ * ?secrets=0) purely to pre-fill the Time card's TZ field on first visit --
+ * no schema fetch needed here, System doesn't render a schema-driven form. */
+HG.ensureSysLoaded = function () {
+  /* cfgDoc[0] may already be cached from a previous #/config/0 visit -- the
+   * TZ prefill must still happen in that case, not only on a fresh fetch. */
+  if (HG.state.cfgDoc[0]) {
+    if (HG.drafts["sys-tz-input"] == null) HG.drafts["sys-tz-input"] = HG.state.cfgDoc[0].TIME.TZ;
+    return;
+  }
+  if (HG.state.cfgLoading === 0) return;
+  HG.state.cfgLoading = 0;
+  HG.api.get("/api/config?zone=0&secrets=0").then(function (doc) {
+    HG.state.cfgDoc[0] = doc;
+    HG.state.cfgLoading = null;
+    if (HG.drafts["sys-tz-input"] == null) HG.drafts["sys-tz-input"] = doc.TIME.TZ;
+    HG.render();
+  }, function () { HG.state.cfgLoading = null; });
+};
+
 HG.render = function () {
   withFocusPreserved(function () {
     var r = HG.router.parse();
+    var enteringAlarms = r.name === "alarms" && HG.state.route.name !== "alarms";
     HG.state.route = r;
+    if (r.name === "config") HG.ensureConfigLoaded(r.id);
+    else if (r.name === "system") HG.ensureSysLoaded();
+    else if (enteringAlarms) HG.alarmsPoll.kick();
     document.body.classList.toggle("is-login", r.name === "login");
     var html = r.name === "login" ? HG.views.login() : HG.views.shell(r);
     document.getElementById("app").innerHTML = html;
   });
 };
 HG.rerender = HG.render;
+
+/* ---------- config editor: merge-body building + save/import pipeline ---------- */
+
+/* Builds the MINIMAL PUT body: only fields present in `dirty` whose typed
+ * value actually differs from the document's own current value. zone 0's
+ * password fields need no special-casing to honour "blank = unchanged" --
+ * cfgDoc[0] is always fetched with ?secrets=0, so an untouched password
+ * field's original value is always "", and leaving the input blank makes
+ * dirty's value equal that same "" and therefore fall out via the plain
+ * equality check below. */
+HG.buildCfgMergeBody = function (id, schema, doc, dirty) {
+  if (id === 0) {
+    var out = {};
+    Object.keys(dirty).forEach(function (k) {
+      var parts = k.split("|");
+      var group = parts[0], key = parts[2];
+      var val = dirty[k];
+      if (val === mgroupOriginal(doc, group, key)) return;
+      out[group] = out[group] || {};
+      out[group][key] = val;
+    });
+    return out;
+  }
+  var zonecfg = null, shelfMap = {}, auxMap = {}, shelfMax = -1, auxMax = -1;
+  Object.keys(dirty).forEach(function (k) {
+    var parts = k.split("|");
+    var group = parts[0], idx = Number(parts[1]), key = parts[2];
+    var val = dirty[k];
+    if (val === cfgFieldOriginal(doc, group, idx, key)) return;
+    if (group === "ZONECFG") { zonecfg = zonecfg || {}; zonecfg[key] = val; return; }
+    var scope = cfgGroupScope(schema.groups, group);
+    if (scope === 1) {
+      shelfMap[idx] = shelfMap[idx] || {};
+      shelfMap[idx][group] = shelfMap[idx][group] || {};
+      shelfMap[idx][group][key] = val;
+      if (idx > shelfMax) shelfMax = idx;
+    } else if (scope === 2) {
+      auxMap[idx] = auxMap[idx] || {};
+      auxMap[idx].AUX = auxMap[idx].AUX || {};
+      auxMap[idx].AUX[key] = val;
+      if (idx > auxMax) auxMax = idx;
+    }
+  });
+  var cfg = {};
+  if (zonecfg) cfg.ZONECFG = zonecfg;
+  if (shelfMax >= 0) {
+    var sarr = [];
+    for (var i = 0; i <= shelfMax; i++) sarr.push(shelfMap[i] || null);
+    cfg.shelf = sarr;
+  }
+  if (auxMax >= 0) {
+    var aarr = [];
+    for (var j = 0; j <= auxMax; j++) aarr.push(auxMap[j] || null);
+    cfg.aux = aarr;
+  }
+  return { cfg: cfg };
+};
+
+/* Points the editor at the group/idx a 400's `path` named (switching tabs if
+ * necessary) BEFORE the next render, so the offending field is actually on
+ * screen to receive its .bad class -- a field on an inactive tab can't be
+ * highlighted, it doesn't exist in the DOM yet. */
+HG.cfgFocusPath = function (id, path, errCode) {
+  var bad = cfgParseBadPath(path, errCode);
+  HG.state.cfgBad = bad;
+  if (!bad.group) return;
+  var schema = HG.state.schema;
+  var groups = id === 0 ? schema.mgroups : schema.groups;
+  for (var i = 0; i < groups.length; i++) {
+    if (groups[i].name === bad.group) {
+      HG.state.cfgUi.group = bad.group;
+      if (bad.idx >= 0) HG.state.cfgUi.idx = bad.idx;
+      return;
+    }
+  }
+};
+
+/* Shared PUT pipeline for both Save and Import: applies `body`, clears dirty
+ * state on success, and re-fetches the document (immediately for zone 0's
+ * synchronous 200, after 3s for a zone's async 202 -- the brief's "queued"
+ * contract, giving the zone time to actually apply and report back before
+ * the re-fetch would just show the pre-change values again). */
+HG.cfgApplyPut = function (id, body) {
+  HG.state.cfgSaving = true;
+  HG.state.cfgMsg = "";
+  HG.state.cfgBad = null;
+  HG.render();
+  return HG.api.put("/api/config?zone=" + id, body).then(function (resp) {
+    HG.state.cfgSaving = false;
+    HG.state.cfgDirty[id] = {};
+    var refetch = function () {
+      var q = id === 0 ? "/api/config?zone=0&secrets=0" : "/api/config?zone=" + id;
+      HG.api.get(q).then(function (doc2) { HG.state.cfgDoc[id] = doc2; HG.render(); }, noop);
+    };
+    if (id === 0) {
+      HG.state.cfgMsg = "Saved.";
+      refetch();
+    } else {
+      HG.state.cfgMsg = "Queued, pushing to zone" + (resp && resp.warnings ? " (" + resp.warnings + ")" : "");
+      setTimeout(refetch, 3000);
+    }
+    HG.render();
+  }, function (err) {
+    HG.state.cfgSaving = false;
+    if (err.status === 400 && err.body && err.body.path) {
+      HG.cfgFocusPath(id, err.body.path, err.body.error);
+    } else if (err.status === 409) {
+      HG.state.cfgMsg = "Zone busy, retry";
+    } else {
+      HG.state.cfgMsg = (err && err.message) || "Save failed";
+    }
+    HG.render();
+  });
+};
 
 /* ---------- actions ---------- */
 HG.actions = {
@@ -581,6 +1324,251 @@ HG.actions = {
     }, function (err) {
       out.textContent = (err && err.message) || "Failed";
     });
+  },
+
+  /* ---- config editor ---- */
+  cfgTab: function (group) {
+    var schema = HG.state.schema, id = HG.state.route.id;
+    var groups = id === 0 ? schema.mgroups : schema.groups;
+    HG.state.cfgUi.group = group;
+    for (var i = 0; i < groups.length; i++) {
+      if (groups[i].name === group && typeof groups[i].scope === "number") {
+        var max = groups[i].scope === 2 ? 1 : groups[i].scope === 1 ? 3 : 0;
+        if (HG.state.cfgUi.idx > max) HG.state.cfgUi.idx = 0;
+      }
+    }
+    HG.state.cfgBad = null;
+    HG.render();
+  },
+  cfgIdx: function (idx) {
+    HG.state.cfgUi.idx = idx;
+    HG.render();
+  },
+  /* Writes straight into HG.state.cfgDirty rather than re-rendering: a
+   * config field's displayed value is read back from cfgDirty on the next
+   * render (see HG.cfgFieldValue), which is what lets it survive the 2s
+   * state poll's rerender without a per-field HG.drafts entry -- but it
+   * means this handler must NOT call HG.render() itself, or every keystroke
+   * would force a full #app rebuild. */
+  cfgFieldInput: function (el) {
+    var group = el.dataset.cfgGroup, idx = Number(el.dataset.cfgIdx), key = el.dataset.cfgKey, type = el.dataset.cfgType;
+    var val;
+    if (type === "BOOL") val = el.checked;
+    else if (type === "U8" || type === "U16" || type === "PIN") val = Number(el.value);
+    else val = el.value;
+    var zone = HG.state.route.id;
+    HG.state.cfgDirty[zone] = HG.state.cfgDirty[zone] || {};
+    HG.state.cfgDirty[zone][group + "|" + idx + "|" + key] = val;
+  },
+  cfgSave: function () {
+    var id = HG.state.route.id;
+    var doc = HG.state.cfgDoc[id];
+    var schema = HG.state.schema;
+    if (!doc || !schema) return;
+    var dirty = HG.state.cfgDirty[id] || {};
+    var body = HG.buildCfgMergeBody(id, schema, doc, dirty);
+    var empty = id === 0 ? Object.keys(body).length === 0 : Object.keys(body.cfg).length === 0;
+    if (empty) { HG.state.cfgMsg = "No changes to save"; HG.render(); return; }
+    HG.cfgApplyPut(id, body);
+  },
+  /* Import re-uses the exact shape GET returned (a zone's {hw,cfg,gen} or the
+   * master's {WIFI,TIME,SYS}) as the PUT body directly -- for a zone, "hw" is
+   * accepted and turned into read-only warnings rather than rejected, so the
+   * round trip of an exported zone document needs no filtering at all. Only
+   * zone 0 needs one: an export taken with ?secrets=0 carries "" for both
+   * passwords, and PUTting "" for AP_PASS would fail hg_mcfg_validate's
+   * 8-63-char rule (an *unconfigured* STA_PASS is fine empty; AP_PASS never
+   * is) -- so an empty password key is dropped, matching "blank = unchanged". */
+  cfgImportFile: function (file) {
+    var id = HG.state.route.id;
+    var reader = new FileReader();
+    reader.onload = function () {
+      var parsed;
+      try { parsed = JSON.parse(String(reader.result)); } catch (e) {
+        HG.state.cfgMsg = "Invalid JSON file";
+        HG.render();
+        return;
+      }
+      var body = parsed;
+      if (id === 0 && parsed && parsed.WIFI) {
+        body = Object.assign({}, parsed);
+        body.WIFI = Object.assign({}, parsed.WIFI);
+        if (body.WIFI.STA_PASS === "") delete body.WIFI.STA_PASS;
+        if (body.WIFI.AP_PASS === "") delete body.WIFI.AP_PASS;
+      }
+      HG.cfgApplyPut(id, body);
+    };
+    reader.readAsText(file);
+  },
+
+  /* ---- system: wifi ---- */
+  wifiScan: function () {
+    HG.state.sys.wifiScanning = true;
+    HG.state.sys.wifiScanErr = "";
+    HG.render();
+    HG.api.get("/api/wifi/scan").then(function (list) {
+      HG.state.sys.wifiScanning = false;
+      HG.state.sys.wifiScan = list;
+      HG.render();
+    }, function (err) {
+      HG.state.sys.wifiScanning = false;
+      HG.state.sys.wifiScanErr = (err && err.message) || "Scan failed";
+      HG.render();
+    });
+  },
+  wifiPick: function (ssid) {
+    HG.drafts["sys-sta-ssid"] = ssid;
+    HG.render();
+  },
+  wifiJoin: function (form) {
+    var ssid = form.querySelector("#sys-sta-ssid").value.trim();
+    var pass = form.querySelector("#sys-sta-pass").value;
+    var out = form.querySelector(".form-error");
+    if (!ssid) { out.textContent = "Enter an SSID"; return; }
+    out.textContent = "…";
+    HG.api.post("/api/wifi", { sta: { ssid: ssid, pass: pass } }, "json").then(function () {
+      out.textContent = "Saved — joining…";
+    }, function (err) {
+      out.textContent = (err && err.message) || "Failed";
+    });
+  },
+  apSet: function (form) {
+    var ssid = form.querySelector("#sys-ap-ssid").value.trim();
+    var pass = form.querySelector("#sys-ap-pass").value;
+    var out = form.querySelector(".form-error");
+    if (!ssid || pass.length < 8) { out.textContent = "AP SSID required, password 8+ chars"; return; }
+    out.textContent = "…";
+    HG.api.post("/api/wifi", { ap: { ssid: ssid, pass: pass } }, "json").then(function () {
+      out.textContent = "Saved.";
+    }, function (err) {
+      out.textContent = (err && err.message) || "Failed";
+    });
+  },
+
+  /* ---- system: time ---- */
+  tzSet: function (form) {
+    var tz = form.querySelector("#sys-tz-input").value.trim();
+    var out = form.querySelector(".form-error");
+    if (!tz || /\s/.test(tz)) { out.textContent = "Enter a POSIX TZ with no spaces"; return; }
+    out.textContent = "…";
+    HG.api.post("/api/cmd", "SET TZ " + tz, "text").then(function (reply) {
+      out.textContent = reply || "OK";
+      if (HG.state.cfgDoc[0]) HG.state.cfgDoc[0].TIME.TZ = tz;
+    }, function (err) {
+      out.textContent = (err && err.message) || "Failed";
+    });
+  },
+
+  /* ---- system: password ---- */
+  pwChange: function (form) {
+    var oldPw = form.querySelector("#sys-pw-old").value;
+    var newPw = form.querySelector("#sys-pw-new").value;
+    var out = form.querySelector(".form-error");
+    out.textContent = "…";
+    HG.api.post("/api/password", { old: oldPw, new: newPw }, "json").then(function () {
+      out.textContent = "Password changed.";
+      HG.drafts["sys-pw-old"] = "";
+      HG.drafts["sys-pw-new"] = "";
+      form.querySelector("#sys-pw-old").value = "";
+      form.querySelector("#sys-pw-new").value = "";
+    }, function (err) {
+      var msg = "Failed";
+      if (err.status === 403) msg = "Old password is wrong";
+      else if (err.status === 400) msg = "New password invalid";
+      out.textContent = msg;
+    });
+  },
+
+  /* ---- system: firmware upload (XHR for upload.onprogress; HG.api wraps
+   * fetch(), which has no upload-progress event) ---- */
+  fwUpload: function (kind, file) {
+    var st = HG.state.sys;
+    var prefix = kind === "master" ? "fwMaster" : "fwZone";
+    st[prefix + "Uploading"] = true;
+    st[prefix + "Pct"] = 0;
+    st[prefix + "Msg"] = "";
+    st[prefix + "Ok"] = false;
+    HG.render();
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/fw/" + kind, true);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = function (e) {
+      if (e.lengthComputable) {
+        st[prefix + "Pct"] = Math.round(e.loaded * 100 / e.total);
+        HG.render();
+      }
+    };
+    xhr.onload = function () {
+      st[prefix + "Uploading"] = false;
+      var ok = xhr.status >= 200 && xhr.status < 300;
+      var body = null;
+      /* 4xx/5xx from the upload routes may arrive with NO body (the server
+       * drains-then-closes on a refused/failed upload) -- JSON.parse("")
+       * throws, which is exactly why this is wrapped rather than assumed. */
+      try { body = JSON.parse(xhr.responseText); } catch (e) { /* no body */ }
+      if (ok) {
+        st[prefix + "Ok"] = true;
+        st[prefix + "Msg"] = kind === "master"
+          ? "Uploaded" + (body && body.version ? " v" + body.version : "") + " to " + ((body && body.slot) || "?") + "."
+          : "Uploaded (" + ((body && body.len) || "?") + " bytes).";
+      } else {
+        st[prefix + "Msg"] = (body && body.error) || ("HTTP " + xhr.status);
+      }
+      HG.render();
+    };
+    xhr.onerror = function () {
+      st[prefix + "Uploading"] = false;
+      st[prefix + "Msg"] = "Upload failed (network error)";
+      HG.render();
+    };
+    xhr.send(file);
+  },
+
+  /* ---- system: reboot ---- */
+  rebootMaster: function (msgField) {
+    /* Optimistic: REBOOT CONFIRM makes the master reboot immediately, which
+     * routinely cuts the TCP connection before this fetch's response is
+     * read back (bench-confirmed: the reboot lands and GET VERSION shows
+     * the new slot PENDING even when the request's own .then() never fires)
+     * -- so "Rebooting..." has to be shown up front rather than waiting on
+     * a response that may never arrive. */
+    HG.state.sys[msgField] = "Rebooting…";
+    HG.render();
+    HG.api.post("/api/cmd", "REBOOT CONFIRM", "text").then(noop, function (err) {
+      /* A genuine rejection (e.g. a 401 before the reboot could even be
+       * dispatched) still overrides the optimistic message. */
+      HG.state.sys[msgField] = (err && err.message) || "Reboot failed";
+      HG.render();
+    });
+  },
+
+  /* ---- system: fleet ---- */
+  fleetUpdate: function (zone) {
+    HG.api.post("/api/fleet", { zone: zone }, "json").then(function () {
+      HG.state.sys.fleetMsg = "Update queued for zone " + zone + ".";
+      HG.render();
+    }, function (err) {
+      HG.state.sys.fleetMsg = (err && err.message) || "Failed";
+      HG.render();
+    });
+  },
+  fleetUpdateAll: function () {
+    HG.api.post("/api/fleet", { all: true }, "json").then(function () {
+      HG.state.sys.fleetMsg = "Fleet update queued.";
+      HG.render();
+    }, function (err) {
+      HG.state.sys.fleetMsg = (err && err.message) || "Failed";
+      HG.render();
+    });
+  },
+  fleetAbort: function () {
+    HG.api.del("/api/fleet").then(function () {
+      HG.state.sys.fleetMsg = "Fleet update aborted.";
+      HG.render();
+    }, function (err) {
+      HG.state.sys.fleetMsg = (err && err.message) || "Failed";
+      HG.render();
+    });
   }
 };
 function noop() {}
@@ -595,22 +1583,63 @@ HG.bindEvents = function () {
     if (action === "login") HG.actions.login(f);
     else if (action === "console") HG.actions.consoleSend(f);
     else if (action === "replace-board") HG.actions.replaceBoard(f);
+    else if (action === "cfg-form") HG.actions.cfgSave();
+    else if (action === "wifi-join") HG.actions.wifiJoin(f);
+    else if (action === "wifi-ap") HG.actions.apSet(f);
+    else if (action === "tz-set") HG.actions.tzSet(f);
+    else if (action === "pw-change") HG.actions.pwChange(f);
   });
   document.addEventListener("click", function (e) {
-    var b = e.target.closest && e.target.closest('[data-action="logout"]');
-    if (b) { e.preventDefault(); HG.actions.logout(); }
+    var t = e.target;
+    var b = t.closest && t.closest('[data-action="logout"]');
+    if (b) { e.preventDefault(); HG.actions.logout(); return; }
+    var tab = t.closest && t.closest('[data-action="cfg-tab"]');
+    if (tab) { HG.actions.cfgTab(tab.dataset.group); return; }
+    var idxBtn = t.closest && t.closest('[data-action="cfg-idx"]');
+    if (idxBtn) { HG.actions.cfgIdx(Number(idxBtn.dataset.idx)); return; }
+    var scan = t.closest && t.closest('[data-action="wifi-scan"]');
+    if (scan) { HG.actions.wifiScan(); return; }
+    var pick = t.closest && t.closest('[data-action="wifi-pick"]');
+    if (pick) { HG.actions.wifiPick(pick.dataset.ssid); return; }
+    var rebootNow = t.closest && t.closest('[data-action="reboot-now"]');
+    if (rebootNow) { HG.actions.rebootMaster("fwMasterMsg"); return; }
+    var rebootMaster = t.closest && t.closest('[data-action="reboot-master"]');
+    if (rebootMaster) { HG.actions.rebootMaster("rebootMsg"); return; }
+    var fUpd = t.closest && t.closest('[data-action="fleet-update"]');
+    if (fUpd) { HG.actions.fleetUpdate(Number(fUpd.dataset.zone)); return; }
+    var fAll = t.closest && t.closest('[data-action="fleet-update-all"]');
+    if (fAll) { HG.actions.fleetUpdateAll(); return; }
+    var fAbort = t.closest && t.closest('[data-action="fleet-abort"]');
+    if (fAbort) { HG.actions.fleetAbort(); return; }
   });
   document.addEventListener("keydown", function (e) {
     if (e.target && e.target.id === "console-input") HG.actions.consoleKey(e);
   });
   document.addEventListener("input", function (e) {
-    if (!e.target || !e.target.hasAttribute || !e.target.hasAttribute("data-draft")) return;
-    HG.drafts[HG.draftKey(e.target)] = e.target.value;
+    var t = e.target;
+    if (!t || !t.hasAttribute) return;
+    if (t.hasAttribute("data-cfg-group")) { HG.actions.cfgFieldInput(t); return; }
+    if (t.hasAttribute("data-draft")) HG.drafts[HG.draftKey(t)] = t.value;
   });
   document.addEventListener("change", function (e) {
-    if (e.target && e.target.id === "forward-zone") {
-      var id = HG.state.route.id;
-      HG.consoleState(id).forward = e.target.checked;
+    var t = e.target;
+    if (!t) return;
+    if (t.hasAttribute && t.hasAttribute("data-cfg-group")) { HG.actions.cfgFieldInput(t); return; }
+    if (t.id === "forward-zone") {
+      HG.consoleState(HG.state.route.id).forward = t.checked;
+      return;
+    }
+    if (t.id === "cfg-import-input") {
+      if (t.files && t.files[0]) HG.actions.cfgImportFile(t.files[0]);
+      return;
+    }
+    if (t.id === "sys-fw-master-input") {
+      if (t.files && t.files[0]) HG.actions.fwUpload("master", t.files[0]);
+      return;
+    }
+    if (t.id === "sys-fw-zone-input") {
+      if (t.files && t.files[0]) HG.actions.fwUpload("zone", t.files[0]);
+      return;
     }
   });
   window.addEventListener("hashchange", HG.render);
@@ -621,6 +1650,7 @@ document.addEventListener("DOMContentLoaded", function () {
   HG.bindEvents();
   HG.render();
   HG.poll.start();
+  HG.alarmsPoll.start();
 });
 
 })();

@@ -25,6 +25,16 @@ body {
   background: var(--bg); color: var(--text);
   font: 15px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif;
 }
+/* #/app (index.html's #app div, the one node HG.render() replaces) sits
+ * between body and .hdr/.nav/#main -- without this, it is body's only real
+ * DIRECT child, so it alone becomes body's grid item (auto-placed into just
+ * the first "200px" track) and .hdr/.nav/#main's own grid-row/grid-column
+ * placement below never takes effect at all, since CSS Grid item placement
+ * only applies to a grid container's direct children. display:contents
+ * removes #app from the box tree so its children are laid out as if they
+ * were body's direct children, which is what the >=900px sidebar rule
+ * further down actually assumes. */
+#app { display: contents; }
 a { color: var(--link); }
 h1, h2 { margin: 10px 0 6px; }
 h1 { font-size: 20px; }
@@ -51,8 +61,12 @@ input, select, button, textarea {
   background: var(--card); color: var(--text); padding: 6px 10px;
 }
 button { background: var(--accent); color: #fff; border: none; cursor: pointer; min-width: 44px; }
-button.btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+.btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
 label { display: block; font-size: 13px; color: var(--muted); margin: 6px 0 2px; }
+a.btn-ghost, label.btn-ghost {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 44px;
+  padding: 6px 14px; border-radius: 8px; text-decoration: none; cursor: pointer; margin: 4px 4px 4px 0;
+}
 
 .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin: 10px 0; }
 .card h2 { margin-top: 0; }
@@ -142,3 +156,31 @@ dl dd { margin: 0; }
   .nav a { justify-content: flex-start; padding: 0 18px; }
   #main { grid-row: 2; grid-column: 2; max-width: 900px; padding: 12px 24px 32px; }
 }
+
+/* ---- config editor (#/config/N) ---- */
+.cfg-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+.cfg-tab { background: var(--card); color: var(--muted); border: 1px solid var(--border); padding: 4px 10px; min-height: 36px; border-radius: 8px; font-size: 13px; }
+.cfg-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.cfg-idx-selector { display: flex; gap: 4px; margin: 4px 0 10px; }
+.cfg-idx-btn { min-width: 36px; min-height: 36px; border-radius: 8px; }
+.cfg-idx-btn.active { background: var(--accent); color: #fff; }
+.cfg-hw-note { color: var(--muted); font-size: 13px; margin: 4px 0 10px; grid-column: 1 / -1; }
+.cfg-fields { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); margin: 6px 0; }
+.cfg-field label { margin: 0 0 2px; }
+.cfg-field input, .cfg-field select { width: 100%; }
+input.bad, select.bad { border-color: var(--offline); }
+.cfg-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 4px; align-items: center; }
+.cfg-msg { color: var(--ok-text); font-size: 13px; }
+
+/* ---- alarms (#/alarms) ---- */
+.alarm-list, .event-list { list-style: none; padding: 0; margin: 4px 0; }
+.alarm-list li, .event-list li { padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.alarm-active b { color: var(--offline-text); margin-right: 6px; }
+.muted { color: var(--muted); font-size: 12px; margin-left: 6px; }
+
+/* ---- system (#/system) ---- */
+.scan-list { list-style: none; padding: 0; margin: 6px 0; }
+.scan-item { display: flex; justify-content: space-between; width: 100%; background: var(--bg); margin: 2px 0; }
+.progress { background: var(--bg); border-radius: 8px; height: 10px; overflow: hidden; margin: 6px 0; }
+.progress-bar { background: var(--accent); height: 100%; }
+.fleet-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
