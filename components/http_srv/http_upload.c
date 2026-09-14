@@ -3,6 +3,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_task_wdt.h"
+#include "esp_timer.h"
 #include "esp_system.h"
 #include "esp_log.h"
 #include "node_mgr.h"
@@ -56,6 +57,22 @@ static void busy_release(void) {
     portEXIT_CRITICAL(&s_busy_mux);
 }
 
+int http_upload_busy(void) {
+    portENTER_CRITICAL(&s_busy_mux);
+    int b = s_busy;
+    portEXIT_CRITICAL(&s_busy_mux);
+    return b;
+}
+
+/* esp_task_wdt_reset() logs an ESP_LOGE("task not found") for a task that is
+ * not subscribed -- once per call -- so every reset on this path is gated on
+ * the subscription actually being in place (fix round 1, same shape as
+ * fw_srv.c's wdt_kick). esp_task_wdt_status() is silent when the answer is
+ * "no". This also makes the loops below correct if esp_task_wdt_add() failed. */
+static void wdt_kick(void) {
+    if (esp_task_wdt_status(NULL) == ESP_OK) esp_task_wdt_reset();
+}
+
 /* ---- progress (see http_upload.h for why this is lock-free) ---- */
 static const char *volatile s_kind = "";
 static volatile uint32_t    s_pct;
@@ -84,7 +101,13 @@ static int identity_ok(const uint8_t *b, const char *want) {
 
 static int type_is_octet_stream(httpd_req_t *req) {
     char ct[48];
-    if (httpd_req_get_hdr_value_str(req, "Content-Type", ct, sizeof ct) != ESP_OK) return 0;
+    /* TRUNC means the value was longer than this buffer -- a legal header with
+     * a long parameter list, e.g. a browser adding a boundary=... it should
+     * not. The 24-byte type prefix is fully present either way, which is all
+     * this compares, so a truncated read is accepted rather than refused
+     * (fix round 1). */
+    esp_err_t rc = httpd_req_get_hdr_value_str(req, "Content-Type", ct, sizeof ct);
+    if (rc != ESP_OK && rc != ESP_ERR_HTTPD_RESULT_TRUNC) return 0;
     static const char want[] = "application/octet-stream";
     size_t n = sizeof want - 1;
     if (strncasecmp(ct, want, n) != 0) return 0;
@@ -104,14 +127,28 @@ static int type_is_octet_stream(httpd_req_t *req) {
  * mistake -- the wrong image in the wrong endpoint -- is exactly the case that
  * has to explain itself, the body is drained first and the answer sent into a
  * quiet socket. That is affordable ONLY here: by this point the size guard has
- * already bounded content_len by the target partition, and the drain gives up
- * after 3 consecutive timeouts (~15 s) rather than following a trickle. */
+ * already bounded content_len by the target partition.
+ *
+ * TWO bounds, because either alone is escapable (fix round 1): the silence
+ * rule gives up after 3 consecutive timeouts (~15 s), and a wall-clock budget
+ * caps the whole drain at 10 s regardless. The silence counter resets on every
+ * byte received, so without the budget a client that trickles one byte every
+ * few seconds -- feeding the watchdog through this very loop -- would hold the
+ * single httpd task, and therefore the entire web UI, for as long as it liked.
+ * Courtesy to a misbehaving client is not worth the server. */
 #define DRAIN_MAX_TIMEOUTS 3
+#define DRAIN_BUDGET_US    (10 * 1000 * 1000LL)
 
 static int drain_body(httpd_req_t *req, uint8_t *buf, size_t cap, size_t got) {
     int timeouts = 0;
+    int64_t deadline = esp_timer_get_time() + DRAIN_BUDGET_US;
     while (got < req->content_len) {
-        esp_task_wdt_reset();
+        wdt_kick();
+        if (esp_timer_get_time() > deadline) {
+            ESP_LOGW(TAG, "drain budget spent with %u B still unread -- closing",
+                     (unsigned)(req->content_len - got));
+            return 0;
+        }
         size_t want = req->content_len - got;
         if (want > cap) want = cap;
         int n = httpd_req_recv(req, (char *)buf, want);
@@ -131,7 +168,11 @@ static int drain_body(httpd_req_t *req, uint8_t *buf, size_t cap, size_t got) {
  * refusal with a body still on the wire closes the socket instead of letting
  * httpd purge megabytes on the single httpd task. */
 static esp_err_t fw_upload(httpd_req_t *req, const char *kind, const char *want_name,
-                           size_t max_len, const upload_sink_t *sink) {
+                           const upload_sink_t *sink) {
+    /* Framing first, and before anything is claimed or any target static is
+     * touched (fix round 1): a chunked or wrong-type request is malformed
+     * whatever the target's state is, and must answer 400 even during a
+     * trial window that would otherwise report 409. */
     if (httpd_req_get_hdr_value_len(req, "Transfer-Encoding") > 0) {
         http_srv_error(req, 400, "CHUNKED_UNSUPPORTED", NULL);
         return http_srv_done(req, 0);
@@ -145,12 +186,11 @@ static esp_err_t fw_upload(httpd_req_t *req, const char *kind, const char *want_
         return http_srv_done(req, 0);
     }
 
-    char fleet[40] = "";
-    node_mgr_fw_status(fleet, sizeof fleet);
-    if (strcmp(fleet, "IDLE") != 0) {
-        http_srv_error(req, 409, "FLEET_ACTIVE", NULL);
-        return http_srv_done(req, 0);
-    }
+    /* Claim BEFORE reading the fleet status, never after: node_mgr reads
+     * http_upload_busy() inside the same lock it starts a sequence under, so
+     * claim-then-read here and read-then-start there means a simultaneous
+     * pair always has exactly one loser -- whichever ordering it lands in,
+     * one of the two sees the other's flag. */
     if (!busy_claim()) {
         http_srv_error(req, 409, "UPLOAD_ACTIVE", NULL);
         return http_srv_done(req, 0);
@@ -159,7 +199,15 @@ static esp_err_t fw_upload(httpd_req_t *req, const char *kind, const char *want_
 
     const char *code = NULL;
     int status = 0;
-    if (esp_get_free_heap_size() < LOW_HEAP_B) { status = 503; code = "LOW_HEAP"; }
+    char fleet[40] = "";
+    node_mgr_fw_status(fleet, sizeof fleet);
+    int rdy = strcmp(fleet, "IDLE") == 0 ? sink->ready() : 1;
+    size_t max_len = rdy == 0 ? sink->max() : 0;
+
+    if (rdy == 1)                              { status = 409; code = "FLEET_ACTIVE"; }
+    else if (rdy == -2)                        { status = 409; code = "TRIAL_PENDING"; }
+    else if (rdy != 0)                         { status = 500; code = "NO_SLOT"; }
+    else if (esp_get_free_heap_size() < LOW_HEAP_B) { status = 503; code = "LOW_HEAP"; }
     else if (max_len == 0)                     { status = 500; code = "INTERNAL"; }
     else if (req->content_len > max_len)       { status = 413; code = "TOO_LARGE"; }
     if (code) {
@@ -179,14 +227,18 @@ static esp_err_t fw_upload(httpd_req_t *req, const char *kind, const char *want_
 
     ESP_LOGW(TAG, "%s upload starting: %u B", kind, (unsigned)req->content_len);
     progress(kind, 0);
-    esp_task_wdt_add(NULL);   /* the httpd task is not TWDT-subscribed by default */
+    /* The httpd task is not TWDT-subscribed by default. If this fails, every
+     * wdt_kick() below is a silent no-op and the loop simply runs unwatched
+     * rather than logging an error per 4 KB block. */
+    int wdt_ok = (esp_task_wdt_add(NULL) == ESP_OK);
+    if (!wdt_ok) ESP_LOGW(TAG, "esp_task_wdt_add failed -- %s upload runs unwatched", kind);
 
     static uint8_t buf[UPLOAD_BUF];
     size_t got = 0, fill = 0;
     int timeouts = 0, blocks = 0, started = 0, sock_ok = 1;
 
     while (got < req->content_len) {
-        esp_task_wdt_reset();
+        wdt_kick();
         size_t want = req->content_len - got;
         if (want > UPLOAD_BUF - fill) want = UPLOAD_BUF - fill;
 
@@ -245,7 +297,7 @@ static esp_err_t fw_upload(httpd_req_t *req, const char *kind, const char *want_
      * which exists to catch a stuck flash/recv loop, not a slow client -- is
      * dropped first. fw_srv.c's send_all() carries the same lesson the hard
      * way: a slow-but-healthy send panicked the board on the bench. */
-    esp_task_wdt_delete(NULL);
+    if (wdt_ok) esp_task_wdt_delete(NULL);
     progress("", 0);
     busy_release();
 
@@ -255,14 +307,9 @@ static esp_err_t fw_upload(httpd_req_t *req, const char *kind, const char *want_
 }
 
 esp_err_t h_fw_master(httpd_req_t *req) {
-    int rc = http_upload_master_ready();   /* -1 no slot, -2 the running image is still on trial */
-    if (rc != 0) {
-        http_srv_error(req, rc == -2 ? 409 : 500, rc == -2 ? "TRIAL_PENDING" : "NO_SLOT", NULL);
-        return http_srv_done(req, 0);
-    }
-    return fw_upload(req, "master", "hillgrow_master", http_upload_master_max(), http_upload_master_sink());
+    return fw_upload(req, "master", "hillgrow_master", http_upload_master_sink());
 }
 
 esp_err_t h_fw_zone(httpd_req_t *req) {
-    return fw_upload(req, "zone", "hillgrow_zone", http_upload_zone_max(), http_upload_zone_sink());
+    return fw_upload(req, "zone", "hillgrow_zone", http_upload_zone_sink());
 }

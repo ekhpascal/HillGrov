@@ -82,15 +82,11 @@ static void master_cancel(void) {
     s_ota = 0;
 }
 
-static const upload_sink_t MASTER_SINK = {
-    .begin = master_begin, .write = master_write, .finish = master_finish, .cancel = master_cancel
-};
+static size_t master_max(void) { return s_ota_part ? s_ota_part->size : 0; }
 
-const upload_sink_t *http_upload_master_sink(void) { return &MASTER_SINK; }
-
-size_t http_upload_master_max(void) { return s_ota_part ? s_ota_part->size : 0; }
-
-int http_upload_master_ready(void) {
+/* Runs under the upload's exclusivity claim (fix round 1), which is what
+ * makes writing s_ota_part here safe. */
+static int master_ready(void) {
     s_ota_part = esp_ota_get_next_update_partition(NULL);
     if (!s_ota_part) {
         ESP_LOGE(TAG, "no inactive OTA slot to write");
@@ -109,3 +105,10 @@ int http_upload_master_ready(void) {
     }
     return 0;
 }
+
+static const upload_sink_t MASTER_SINK = {
+    .ready = master_ready, .max = master_max, .begin = master_begin,
+    .write = master_write, .finish = master_finish, .cancel = master_cancel
+};
+
+const upload_sink_t *http_upload_master_sink(void) { return &MASTER_SINK; }

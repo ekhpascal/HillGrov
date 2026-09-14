@@ -27,10 +27,15 @@ esp_err_t h_fleet_post(httpd_req_t *req) {
     const cJSON *all  = cJSON_GetObjectItemCaseSensitive(root, "all");
     const cJSON *zone = cJSON_GetObjectItemCaseSensitive(root, "zone");
 
+    /* cJSON stores every number as a double AND a truncated int, so
+     * {"zone":2.7} would otherwise start a sequence on zone 2 (fix round 1):
+     * require the two to agree, i.e. an integral value. */
+    int zone_ok = cJSON_IsNumber(zone) && zone->valuedouble == (double)zone->valueint;
+
     int rc;
     if (cJSON_IsTrue(all)) {
         rc = node_mgr_fw_all();
-    } else if (cJSON_IsNumber(zone) && zone->valueint >= 1 && zone->valueint <= HG_MAX_ZONES) {
+    } else if (zone_ok && zone->valueint >= 1 && zone->valueint <= HG_MAX_ZONES) {
         rc = node_mgr_fw_zone((uint8_t)zone->valueint);
     } else {
         cJSON_Delete(root);

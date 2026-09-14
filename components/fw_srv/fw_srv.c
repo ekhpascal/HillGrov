@@ -3,6 +3,7 @@
 #include "esp_partition.h"
 #include "esp_http_server.h"
 #include "esp_task_wdt.h"
+#include "esp_timer.h"
 #include "esp_log.h"
 #include "hg_blob.h"   /* hg_crc32 */
 #include "fw_srv.h"
@@ -12,6 +13,8 @@ static const char *TAG = "fw_srv";
 #define FW_HDR_LEN   16u
 #define FW_HDR_MAGIC 0x57464748u   /* 'HGFW' LE -- hg_cfg_types.h's HG_MAGIC_* convention */
 #define FW_CHUNK     4096u
+/* 120 s: a healthy 1.5 MB pull over the master's AP takes ~12 s. */
+#define XFER_BUDGET_US (120LL * 1000 * 1000)
 
 static const esp_partition_t *s_part;
 static uint32_t                s_img_len;
@@ -82,9 +85,20 @@ static int validate_image(const esp_partition_t *part, uint32_t *len_out) {
  * the stream against the Content-Length already promised to the client.
  * Returns 0 once all len bytes are sent, -1 on any ret <= 0 (error or the
  * peer/httpd closing the socket). */
-static int send_all(httpd_req_t *r, const char *buf, size_t len) {
+static int send_all(httpd_req_t *r, const char *buf, size_t len, int64_t deadline_us) {
     size_t sent = 0;
     while (sent < len) {
+        /* Fix round 1: feeding the dog on progress (below) removed the only
+         * bound on how long a slow-READING client can hold the one httpd task
+         * -- and this route is the UNAUTHENTICATED one (a zone in rescue has
+         * no cookie). The caller's whole-transfer deadline is that bound:
+         * ~10x a healthy 1.5 MB pull, after which the response is abandoned,
+         * the socket closed by the ESP_FAIL path, and rescue retries. */
+        if (esp_timer_get_time() > deadline_us) {
+            ESP_LOGW(TAG, "zone.bin transfer budget spent with %u B to go -- closing",
+                     (unsigned)(len - sent));
+            return -1;
+        }
         int n = httpd_send(r, buf + sent, len - sent);
         if (n <= 0) return -1;
         sent += (size_t)n;
@@ -151,11 +165,17 @@ static esp_err_t zone_bin_get(httpd_req_t *req) {
         return ESP_OK;
     }
 
+    /* Whole-transfer budget, shared by the header send and every body chunk:
+     * ~10x what a healthy 1.5 MB pull over the AP takes (fix round 1). It is
+     * the one bound on a slow-reading client of this unauthenticated route
+     * now that the watchdog is fed on progress. */
+    int64_t deadline = esp_timer_get_time() + XFER_BUDGET_US;
+
     char head[128];
     int hn = snprintf(head, sizeof head,
                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %lu\r\n\r\n",
                        (unsigned long)s_img_len);
-    if (hn < 0 || (size_t)hn >= sizeof head || send_all(req, head, (size_t)hn) != 0) return ESP_FAIL;
+    if (hn < 0 || (size_t)hn >= sizeof head || send_all(req, head, (size_t)hn, deadline) != 0) return ESP_FAIL;
 
     /* The httpd worker task isn't TWDT-subscribed by default -- add/delete
      * around the loop, reset every chunk (SP1 rescue-upload pattern,
@@ -167,7 +187,7 @@ static esp_err_t zone_bin_get(httpd_req_t *req) {
         esp_task_wdt_reset();
         uint32_t n = rem < FW_CHUNK ? rem : FW_CHUNK;
         if (esp_partition_read(s_part, off, s_buf, n) != ESP_OK ||
-            send_all(req, (const char *)s_buf, n) != 0) {
+            send_all(req, (const char *)s_buf, n, deadline) != 0) {
             rc = ESP_FAIL;   /* ret<=0 from send_all: httpd already closed the socket -- correct for a truncated response */
             break;
         }

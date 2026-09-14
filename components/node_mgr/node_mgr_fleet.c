@@ -28,6 +28,19 @@
 static fleet_t           s_fleet;
 static SemaphoreHandle_t s_fleet_mux;
 
+/* SP4 Task 13 fix round 1: "is a browser firmware upload in flight?", set by
+ * http_srv_start() to http_upload_busy(). Read INSIDE flock() in both
+ * starters below, which is what makes it interlock with the upload handler's
+ * own fleet check: the upload claims its flag before it reads the fleet
+ * status (which takes this same lock), so whichever of the two gets here
+ * first, the other sees it and backs off. A plain pointer store, written once
+ * at boot before either caller can run. */
+static int (*s_fw_gate)(void);
+
+void node_mgr_set_fw_gate(int (*busy)(void)) { s_fw_gate = busy; }
+
+static int upload_in_flight(void) { return s_fw_gate && s_fw_gate(); }
+
 static void flock(void)   { if (s_fleet_mux) xSemaphoreTake(s_fleet_mux, portMAX_DELAY); }
 static void funlock(void) { if (s_fleet_mux) xSemaphoreGive(s_fleet_mux); }
 
@@ -139,7 +152,7 @@ int node_mgr_fw_zone(uint8_t zone) {
     if (zone < 1 || zone > HG_MAX_ZONES) return -1;
     uint8_t zones[1] = { zone };
     flock();
-    int rc = fleet_start(&s_fleet, zones, 1);
+    int rc = upload_in_flight() ? -2 : fleet_start(&s_fleet, zones, 1);
     funlock();
     return rc;
 }
@@ -155,7 +168,7 @@ int node_mgr_fw_all(void) {
     nmgr_unlock();
     if (n == 0) return -1;
     flock();
-    int rc = fleet_start(&s_fleet, zones, n);
+    int rc = upload_in_flight() ? -2 : fleet_start(&s_fleet, zones, n);
     funlock();
     return rc;
 }

@@ -49,7 +49,9 @@ static const esp_partition_t *part(void) {
     return s_part;
 }
 
-size_t http_upload_zone_max(void) {
+static int zone_ready(void) { return part() ? 0 : -1; }
+
+static size_t zone_max(void) {
     const esp_partition_t *p = part();
     return p ? p->size - FW_HDR_LEN : 0;
 }
@@ -153,7 +155,8 @@ static void zone_cancel(void) {
 }
 
 static const upload_sink_t ZONE_SINK = {
-    .begin = zone_begin, .write = zone_write, .finish = zone_finish, .cancel = zone_cancel
+    .ready = zone_ready, .max = zone_max, .begin = zone_begin,
+    .write = zone_write, .finish = zone_finish, .cancel = zone_cancel
 };
 
 const upload_sink_t *http_upload_zone_sink(void) { return &ZONE_SINK; }
