@@ -1242,7 +1242,61 @@ HG.render = function () {
     document.getElementById("app").innerHTML = html;
   });
 };
-HG.rerender = HG.render;
+
+/* True while the operator is actively editing a field inside #/config/N or
+ * #/system -- the two routes whose form re-renders HG.rerender is allowed to
+ * skip entirely on a poll tick (see HG.rerender below for why). Any other
+ * route (dashboard, zone, alarms, login) is unaffected: their own editable
+ * fields (console-input, mac-input, all plain <input type=text>) already
+ * have their caret restored correctly by withFocusPreserved's own
+ * selectionStart/setSelectionRange path, and their pages show live
+ * telemetry that must keep updating every tick regardless of focus. */
+function pollSkipsRebuild() {
+  var name = HG.state.route.name;
+  if (name !== "config" && name !== "system") return false;
+  var el = document.activeElement;
+  var app = document.getElementById("app");
+  if (!el || !app || !app.contains(el)) return false;
+  var tag = el.tagName;
+  return tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA";
+}
+
+/* Poll-driven rerender path -- HG.poll.tick() and HG.alarmsPoll.tick() call
+ * this, never HG.render() directly, specifically so this gate applies to
+ * every poll-triggered rebuild without touching any of the many
+ * action-driven call sites that call HG.render() directly (navigation, Save,
+ * tab switch, login, etc. -- all of which must keep rebuilding unconditionally,
+ * per the brief).
+ *
+ * THE BUG (root cause): withFocusPreserved (above) can restore focus AND
+ * text selection across a full #app innerHTML rebuild, but <input
+ * type=number> -- the U8/U16/PIN config fields (e.g. WATER TARGET) -- does
+ * NOT support selectionStart/selectionEnd/setSelectionRange at all (Chrome
+ * throws reading them; withFocusPreserved's own try/catch swallows that and
+ * leaves start/end null). So every rebuild silently resets that field's
+ * caret to position 0. A fast desktop typist never notices -- the next
+ * keystroke re-focuses/re-selects faster than a human perceives the jump --
+ * but on a real phone, typing is slow enough that the 2s poll's rebuild
+ * lands mid-word: each new digit is inserted at position 0 instead of after
+ * the previous one, so the value can never be correctly edited. The field's
+ * *value* was never at risk (HG.cfgDirty / HG.drafts already survive a
+ * rebuild) -- only the caret was.
+ *
+ * THE FIX: #/config/N and #/system show no live telemetry inside their own
+ * forms (unlike the dashboard/zone pages), so there is nothing on either
+ * page that a poll tick needs to update while a field is focused -- the
+ * simplest robust fix is to not rebuild #app for that tick at all. The
+ * header's online/offline dot is still updated directly (a one-element
+ * class swap, no rebuild) since HG.state.online can flip on any tick
+ * regardless of what's focused. */
+HG.rerender = function () {
+  if (pollSkipsRebuild()) {
+    var dot = document.querySelector(".hdr .dot");
+    if (dot) dot.className = "dot " + (HG.state.online ? "online" : "offline");
+    return;
+  }
+  HG.render();
+};
 
 /* ---------- config editor: merge-body building + save/import pipeline ---------- */
 
