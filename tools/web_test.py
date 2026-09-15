@@ -228,9 +228,32 @@ def config_problems(doc, zone):
     return p
 
 def parse_heap_min(text):
-    """cmd_common.c h_status: '  Heap min : %u' (bytes)."""
+    """master/main/app_if_master.c's GET STATUS append: '  Heap min : %u' (bytes)."""
     m = re.search(r"Heap min\s*:\s*(\d+)", text)
     return int(m.group(1)) if m else None
+
+# fleet_seq.c's own constant: FA_DONE's uptime leg accepts hb_uptime < this
+# many seconds as "just rebooted", the same-version-redeploy case (fw triple
+# unchanged) the fix round in fleet_seq.c's own comment describes.
+FLEET_UPTIME_RESET_S = 60
+
+def fleet_update_succeeded(node_before, node_after):
+    """True iff `node_after` shows the same success signal fleet_tick()'s
+    FZS_WAIT_HB branch requires for FA_DONE (fleet_seq.c): the reported fw
+    triple changed, or uptime_s reset below FLEET_UPTIME_RESET_S (a
+    same-version redeploy -- the common case on this bench, since the image
+    uploaded is usually the same version already running -- never changes
+    fw, only resets uptime). fleet_status() renders "IDLE" for BOTH a
+    completed sequence AND one that failed and gave up immediately
+    (advance() clears `active` on both FA_DONE and FA_FAILED) -- "fleet ==
+    IDLE" alone can never distinguish the two, which is exactly the bug a
+    bench-driven review of this file found in the first cut of this suite."""
+    if not node_before or not node_after:
+        return False
+    fw_changed = node_after.get("fw") != node_before.get("fw")
+    uptime_after = node_after.get("uptime_s")
+    uptime_reset = isinstance(uptime_after, (int, float)) and uptime_after < FLEET_UPTIME_RESET_S
+    return bool(fw_changed or uptime_reset)
 
 # ---- suites -----------------------------------------------------------------
 
@@ -265,11 +288,13 @@ def suite_config(api, results, zone=2):
                          retries=3, retry_delay=1.5)
 
     def node_gen():
-        s, d, _ = get_json(api, "/api/state", timeout=5.0, retries=2)
+        # Same retry budget as every other /api/state read in this suite
+        # (fix round: was retries=2, an outlier) -- a starved baseline read
+        # must not silently degrade the sync check below, it must fail it.
+        s, d, _ = get_json(api, "/api/state", timeout=5.0, retries=3, retry_delay=1.5)
         if s != 200 or d is None:
             return None
-        node = next((n for n in d.get("nodes", []) if n.get("id") == zone), None)
-        return node
+        return next((n for n in d.get("nodes", []) if n.get("id") == zone), None)
 
     def make_synced(gen_before):
         # cfg_sync == "OK" alone is not enough: it is already "OK" from
@@ -279,33 +304,59 @@ def suite_config(api, results, zone=2):
         # false-positive race found on the bench (this run). The node's own
         # "gen" (node_mgr's cfg generation counter, task-12-report.md's own
         # bench transcript shows it incrementing per push) must also have
-        # advanced past the pre-PUT value before "OK" means anything.
+        # advanced past the pre-PUT value before "OK" means anything. This
+        # is only ever called with a real gen_before (see the hard-fail
+        # guards around both call sites below) -- a None baseline must never
+        # reach here, since that silently degrades back to the same race.
         def synced():
             node = node_gen()
             if not node:
                 return False
-            if gen_before is not None and node.get("gen") == gen_before:
+            if node.get("gen") == gen_before:
                 return False
             return node.get("cfg_sync") == "OK"
         return synced
 
+    hw_soil_before = ((doc.get("hw") or {}).get("HW") or {}).get("SOIL_MIN_OK_MV") if doc else None
+
     node0 = node_gen()
-    gen_before = node0.get("gen") if node0 else None
+    if node0 is None:
+        # Fix round (IMPORTANT 2): a failed baseline read used to leave
+        # gen_before == None, which make_synced() then treated as "skip the
+        # gen check" -- i.e. exactly the cfg_sync=="OK" race the whole gen
+        # tracker exists to close. Fail the step outright instead.
+        check(results, f"CONFIG: node {zone} baseline gen read (for the sync-race guard)", False,
+              "could not read /api/state before the PUT -- gen-tracking sync check cannot run")
 
     status, _, body = put_target(55)
     check(results, "CONFIG: PUT WATER TARGET 55 -> 202", status == 202, (status, body[:200]))
-    check(results, f"CONFIG: node {zone} gen advances + cfg_sync == OK within 10s",
-          poll_until(make_synced(gen_before), 10.0, 1.0), "")
+    if node0 is None:
+        check(results, f"CONFIG: node {zone} gen advances + cfg_sync == OK within 10s", False,
+              "no baseline gen -- cannot distinguish a fresh push from steady-state cfg_sync==OK")
+    else:
+        check(results, f"CONFIG: node {zone} gen advances + cfg_sync == OK within 10s",
+              poll_until(make_synced(node0.get("gen")), 10.0, 1.0), "")
 
     status, text = cmd(api, f"GET ZONE {zone} WATER 1", retries=3, retry_delay=1.5)
     check(results, "CONFIG: GET ZONE WATER 1 shows Target : 55",
           status == 200 and "Target : 55" in text, text[:200])
 
     node1 = node_gen()
-    gen_mid = node1.get("gen") if node1 else None
+    if node1 is None:
+        check(results, f"CONFIG: node {zone} baseline gen read for the restore step", False,
+              "could not read /api/state before the restore PUT")
+
     status, _, body = put_target(61)
     check(results, "CONFIG: restore TARGET 61 -> 202", status == 202, (status, body[:200]))
-    poll_until(make_synced(gen_mid), 10.0, 1.0)
+    if node1 is None:
+        check(results, f"CONFIG: node {zone} gen advances + cfg_sync == OK within 10s (restore)", False,
+              "no baseline gen -- cannot distinguish a fresh push from steady-state cfg_sync==OK")
+    else:
+        # Minor (fix round): this poll's result was previously discarded --
+        # the restore step relied entirely on the CLI confirmation below.
+        check(results, f"CONFIG: node {zone} gen advances + cfg_sync == OK within 10s (restore)",
+              poll_until(make_synced(node1.get("gen")), 10.0, 1.0), "")
+
     status, text = cmd(api, f"GET ZONE {zone} WATER 1", retries=3, retry_delay=1.5)
     check(results, "CONFIG: restore confirmed Target : 61",
           status == 200 and "Target : 61" in text, text[:200])
@@ -318,6 +369,14 @@ def suite_config(api, results, zone=2):
                                    retries=3, retry_delay=1.5)
     warn_ok = bool(doc2 and doc2.get("warnings"))
     check(results, "CONFIG: PUT hw key -> 202 with a warning", status == 202 and warn_ok, (status, body[:200]))
+
+    # Minor (fix round): the 202 + warning only proves the server *said* the
+    # key was read-only -- read it back and confirm nothing actually merged.
+    status3, doc3, body3 = get_json(api, f"/api/config?zone={zone}", retries=3, retry_delay=1.5)
+    hw_soil_after = ((doc3.get("hw") or {}).get("HW") or {}).get("SOIL_MIN_OK_MV") if doc3 else None
+    check(results, "CONFIG: hw key unchanged after the PUT (hw plane is read-only)",
+          status3 == 200 and hw_soil_after == hw_soil_before,
+          {"before": hw_soil_before, "after": hw_soil_after})
 
 def suite_uploads(api, results, master_bin, zone_bin, fleet_zone):
     """Every major step is its own try/except: on this rig a connection can
@@ -419,8 +478,9 @@ def suite_uploads(api, results, master_bin, zone_bin, fleet_zone):
             doc = json.loads(body) if body else None
         except ValueError:
             doc = None
-        ok = status == 200 and bool(doc and doc.get("ok") and "len" in doc)
-        check(results, "UPLOADS: zone image -> /api/fw/zone -> 200 ok/len", ok, (status, body[:200]))
+        ok = status == 200 and bool(doc and doc.get("ok") and doc.get("len") == len(zone_bytes))
+        check(results, "UPLOADS: zone image -> /api/fw/zone -> 200 ok/len == upload size",
+              ok, (status, body[:200], "uploaded", len(zone_bytes)))
 
         status, text = cmd(api, "GET FW ZONE", retries=4, retry_delay=2.0)
         # GET FW ZONE reports the fleet sequencer's own state (IDLE/<z> PHASE),
@@ -431,19 +491,57 @@ def suite_uploads(api, results, master_bin, zone_bin, fleet_zone):
     if zone_bytes is not None:
         step("zone image upload", do_zone_upload)
 
+    def find_node(d, zone):
+        return next((n for n in (d or {}).get("nodes", []) if n.get("id") == zone), None)
+
     def do_fleet():
+        # fleet_status() (fleet_seq.c) only ever renders "IDLE" or
+        # "<zone> PRECHECK|UPDATING|WAIT_HB" -- the word DONE never appears
+        # there, and advance() clears "active" (-> back to IDLE) on BOTH
+        # FA_DONE and FA_FAILED. So "fleet == IDLE" alone cannot tell a
+        # completed update from one that failed and gave up in ~1 s (e.g.
+        # against an offline zone) -- a review of the bench found exactly
+        # that: a --fleet against an offline zone "passed" this check.
+        # The fix: snapshot the target node's fw/uptime_s before the POST,
+        # and once the sequencer goes idle, require the SAME signal
+        # fleet_tick()'s FA_DONE branch itself requires (fw changed, or
+        # uptime_s reset below FLEET_UPTIME_RESET_S) -- see
+        # fleet_update_succeeded().
+        s0, d0, _ = get_json(api, "/api/state", timeout=5.0, retries=4, retry_delay=2.0)
+        node_before = find_node(d0, fleet_zone) if s0 == 200 else None
+        check(results, f"UPLOADS: fleet baseline read for zone {fleet_zone}", node_before is not None,
+              (s0, d0 if d0 is not None else "no body"))
+
         status, doc, body = post_json(api, "/api/fleet", {"zone": fleet_zone}, retries=4, retry_delay=2.0)
         check(results, f"UPLOADS: POST /api/fleet zone {fleet_zone} -> 202", status == 202, (status, body[:200]))
 
-        def fleet_done():
+        seen_tokens = set()
+
+        def fleet_idle():
             s, d, _ = get_json(api, "/api/state", timeout=5.0, retries=2)
             if s != 200 or d is None:
                 return False
             line = (d.get("master") or {}).get("fleet", "")
-            return line == "IDLE" or "DONE" in line
+            for tok in ("PRECHECK", "UPDATING", "WAIT_HB"):
+                if tok in line:
+                    seen_tokens.add(tok)
+            return line == "IDLE"
 
-        done = poll_until(fleet_done, 60.0, 2.0)
-        check(results, "UPLOADS: state.fleet reaches DONE/IDLE within 60s", done, "")
+        went_idle = poll_until(fleet_idle, 60.0, 2.0)
+
+        node_after = None
+        if went_idle:
+            s1, d1, _ = get_json(api, "/api/state", timeout=5.0, retries=4, retry_delay=2.0)
+            node_after = find_node(d1, fleet_zone) if s1 == 200 else None
+
+        succeeded = fleet_update_succeeded(node_before, node_after)
+        check(results, "UPLOADS: fleet update reaches IDLE with fw changed or uptime reset (<=60s)",
+              succeeded,
+              {"went_idle": went_idle, "phase_tokens_seen": sorted(seen_tokens),
+               "fw_before": (node_before or {}).get("fw"), "fw_after": (node_after or {}).get("fw"),
+               "uptime_before": (node_before or {}).get("uptime_s"),
+               "uptime_after": (node_after or {}).get("uptime_s"),
+               "fleet_uptime_reset_s": FLEET_UPTIME_RESET_S})
 
     if fleet_zone:
         step("fleet update", do_fleet)
@@ -544,8 +642,21 @@ def suite_soak(ip, password, seconds, results, timeout=10.0):
     t_start = time.monotonic()
     for t in threads:
         t.start()
-    for t in threads:
-        t.join(seconds + 60)
+    interrupted = False
+    try:
+        for t in threads:
+            t.join(seconds + 60)
+    except KeyboardInterrupt:
+        # Minor (fix round): stop_evt existed but nothing ever set it before
+        # this point, so it was dead -- a Ctrl+C during a 30-minute soak
+        # produced a bare traceback and no report at all. Now it actually
+        # tells both worker threads to stop, and a short bounded re-join
+        # lets them flush their counters into `out` before the (partial)
+        # report below runs -- a partial soak is still worth reporting.
+        interrupted = True
+        stop_evt.set()
+        for t in threads:
+            t.join(10)
     elapsed = time.monotonic() - t_start
     stop_evt.set()
 
@@ -568,7 +679,8 @@ def suite_soak(ip, password, seconds, results, timeout=10.0):
         check(results, "SOAK: heap-min >= 64 KB before and after",
               heap_before >= 64 * 1024 and heap_after >= 64 * 1024, (heap_before, heap_after))
 
-    print(f"SOAK summary: {elapsed:.1f}s elapsed, 2 pollers, {total} requests "
+    note = " -- INTERRUPTED, partial run" if interrupted else ""
+    print(f"SOAK summary{note}: {elapsed:.1f}s elapsed (requested {seconds}s), 2 pollers, {total} requests "
           f"({total_ok} ok / {total_non200} non-200 / {total_errors} transport errors, "
           f"{err_pct:.2f}% error rate); heap_min before={heap_before} after={heap_after} drift={drift}")
 
@@ -708,10 +820,31 @@ def selftest():
     expect("g: a real 401 is returned as-is, never retried",
            status2 == 401 and api2.opener.calls == 1 and b"UNAUTHORIZED" in body2)
 
+    # (h) fleet_update_succeeded: fleet_status() renders "IDLE" for BOTH a
+    # completed sequence and one that failed and gave up (fix round,
+    # CRITICAL 1) -- this must tell them apart from the node's own
+    # fw/uptime_s, not from "fleet == IDLE" alone.
+    same_ver_before = {"fw": "0.1.0", "uptime_s": 5821}
+    failed_after = {"fw": "0.1.0", "uptime_s": 5824}       # offline zone: rejected in ~1s, uptime barely moved
+    expect("h: IDLE-after-FAILED (fw/uptime unchanged) -> not succeeded",
+           fleet_update_succeeded(same_ver_before, failed_after) is False)
+    reset_after = {"fw": "0.1.0", "uptime_s": 6}            # same-version redeploy: rebooted, uptime reset
+    expect("h: IDLE with uptime reset below FLEET_UPTIME_RESET_S -> succeeded",
+           fleet_update_succeeded(same_ver_before, reset_after) is True)
+    changed_after = {"fw": "0.1.1", "uptime_s": 5821}       # fw actually changed, uptime not even reset yet
+    expect("h: fw changed (even with uptime unchanged) -> succeeded",
+           fleet_update_succeeded(same_ver_before, changed_after) is True)
+    boundary_after = {"fw": "0.1.0", "uptime_s": FLEET_UPTIME_RESET_S}   # not < the threshold: fails
+    expect("h: uptime_s == FLEET_UPTIME_RESET_S (not strictly below) -> not succeeded",
+           fleet_update_succeeded(same_ver_before, boundary_after) is False)
+    expect("h: missing before/after node -> not succeeded",
+           fleet_update_succeeded(None, reset_after) is False
+           and fleet_update_succeeded(same_ver_before, None) is False)
+
     if fails:
         print("SELFTEST FAIL:", ", ".join(fails))
         return 1
-    print("SELFTEST OK (7 assertion groups)")
+    print("SELFTEST OK (8 assertion groups)")
     return 0
 
 # ---- main ---------------------------------------------------------------
