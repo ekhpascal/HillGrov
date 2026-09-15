@@ -182,6 +182,56 @@ static void test_cookie_prefix_collision_rejected(void) {
     TEST_ASSERT_EQUAL_INT(-1, web_auth_check(&st, hdr, 1));
 }
 
+/* Soak-found bug: web_auth_login picked the eviction slot as "min expires_s,
+ * tie -> lowest index". When the master's clock is unset every session is
+ * created with the frozen expiry (AUTH_FROZEN, see http_auth.c), so on a
+ * full table every slot ties and slot 0 -- the session *just* created -- is
+ * always evicted. Two concurrent browsers on a frozen clock would evict each
+ * other down to a single survivor. The fix is a RAM-only monotonic seq: the
+ * least-recently-created live slot is evicted, not slot 0. */
+static void test_four_concurrent_frozen_sessions_all_survive(void) {
+    wa_state_t st; web_auth_init(&st, fake_sha256, fake_rand);
+    hg_mcfg_t m; hg_mcfg_defaults(&m);
+    char cookies[6][2 * WA_TOKEN_LEN + 1];
+    /* Mirrors http_auth.c's AUTH_FROZEN: chosen so expires_s = now_s +
+     * WA_TTL_S lands exactly on 0xFFFFFFFF with no overflow. Passing the raw
+     * 0xFFFFFFFF sentinel itself as now_s would wrap expires_s past zero and
+     * make every session look pre-expired -- unrelated to the eviction bug
+     * under test here. */
+    uint32_t frozen = 0xFFFFFFFFu - WA_TTL_S;
+
+    for (int i = 0; i < 4; i++)
+        TEST_ASSERT_EQUAL_INT(0, web_auth_login(&st, &m, "hillgrow1", frozen, cookies[i]));
+
+    char hdr[64];
+    for (int i = 0; i < 4; i++) {
+        hexcookie(hdr, sizeof hdr, cookies[i]);
+        TEST_ASSERT_EQUAL_INT(0, web_auth_check(&st, hdr, frozen));
+    }
+
+    /* table is full and every slot ties on expires_s (all frozen) -- S5 must
+     * evict the truly oldest slot (S1), not slot 0 by coincidence. */
+    TEST_ASSERT_EQUAL_INT(0, web_auth_login(&st, &m, "hillgrow1", frozen, cookies[4]));
+    hexcookie(hdr, sizeof hdr, cookies[0]);
+    TEST_ASSERT_EQUAL_INT(-1, web_auth_check(&st, hdr, frozen));       /* S1 evicted */
+    for (int i = 1; i < 5; i++) {
+        hexcookie(hdr, sizeof hdr, cookies[i]);
+        TEST_ASSERT_EQUAL_INT(0, web_auth_check(&st, hdr, frozen));    /* S2..S5 alive */
+    }
+
+    /* S6: must evict S2 (now the oldest). Critically S5 -- created just
+     * before S6, on the same frozen expires_s as everything else -- must
+     * still be alive. This is the exact assertion the old min-expires/
+     * lowest-index code fails: it would evict S5's slot index instead. */
+    TEST_ASSERT_EQUAL_INT(0, web_auth_login(&st, &m, "hillgrow1", frozen, cookies[5]));
+    hexcookie(hdr, sizeof hdr, cookies[1]);
+    TEST_ASSERT_EQUAL_INT(-1, web_auth_check(&st, hdr, frozen));       /* S2 evicted */
+    for (int i = 2; i < 6; i++) {
+        hexcookie(hdr, sizeof hdr, cookies[i]);
+        TEST_ASSERT_EQUAL_INT(0, web_auth_check(&st, hdr, frozen));    /* S3..S6 alive, S5 included */
+    }
+}
+
 static void test_pack_unpack(void) {
     wa_state_t st; web_auth_init(&st, fake_sha256, fake_rand);
     hg_mcfg_t m; hg_mcfg_defaults(&m);
@@ -243,6 +293,7 @@ int main(void) {
     RUN_TEST(test_fails_saturates_after_many_wrong_attempts);
     RUN_TEST(test_set_password_replaces_default);
     RUN_TEST(test_expiry_and_eviction);
+    RUN_TEST(test_four_concurrent_frozen_sessions_all_survive);
     RUN_TEST(test_cookie_parse);
     RUN_TEST(test_cookie_last_hex_digit_mismatch_rejected);
     RUN_TEST(test_cookie_prefix_collision_rejected);

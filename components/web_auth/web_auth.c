@@ -106,6 +106,7 @@ void web_auth_init(wa_state_t *st, wa_sha256_fn sha, wa_rand_fn rnd) {
     memset(st, 0, sizeof *st);
     st->sha = sha;
     st->rnd = rnd;
+    st->next_seq = 1;
 }
 
 int web_auth_set_password(wa_state_t *st, hg_mcfg_t *m, const char *pw) {
@@ -138,17 +139,30 @@ int web_auth_login(wa_state_t *st, const hg_mcfg_t *m, const char *pw, uint32_t 
     }
     st->fails = 0;
 
-    /* Free slots have expires_s == 0 (the invariant web_auth_logout/_init/_unpack
-     * maintain), so "oldest = min expires_s" also naturally prefers a free slot
-     * over evicting a live one. */
-    int idx = 0;
-    uint32_t best = st->s[0].expires_s;
-    for (int i = 1; i < WA_SESSIONS; i++)
-        if (st->s[i].expires_s < best) { best = st->s[i].expires_s; idx = i; }
+    /* Prefer a free or already-expired slot -- never evict a live session
+     * while one of those exists. Only when every slot holds a live session
+     * do we fall back to true creation-order LRU (smallest seq): min-expires
+     * (the old rule) ties every slot together whenever every session shares
+     * one frozen expiry (clock unset), which always picked slot 0 -- the
+     * session that had *just* been created. */
+    int idx = -1;
+    for (int i = 0; i < WA_SESSIONS; i++) {
+        if (!st->s[i].used || st->s[i].expires_s == 0 || now_s >= st->s[i].expires_s) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0) {
+        idx = 0;
+        uint32_t oldest = st->s[0].seq;
+        for (int i = 1; i < WA_SESSIONS; i++)
+            if (st->s[i].seq < oldest) { oldest = st->s[i].seq; idx = i; }
+    }
 
     st->rnd(st->s[idx].token, WA_TOKEN_LEN);
     st->s[idx].expires_s = now_s + WA_TTL_S;
     st->s[idx].used = 1;
+    st->s[idx].seq = st->next_seq++;
     hex_encode(st->s[idx].token, WA_TOKEN_LEN, cookie_val);
     return 0;
 }
@@ -199,6 +213,11 @@ int web_auth_unpack(wa_state_t *st, const uint8_t *in, size_t n) {
         memcpy(st->s[i].token, p, WA_TOKEN_LEN);
         st->s[i].expires_s = rd32(p + WA_TOKEN_LEN);
         st->s[i].used = (st->s[i].expires_s != 0) ? 1 : 0;
+        /* seq is RAM-only and not part of the packed format: every restored
+         * session is "oldest" and gets evicted first, ahead of anything
+         * created this boot -- acceptable (controller ruling). */
+        st->s[i].seq = 0;
     }
+    st->next_seq = 1;
     return 0;
 }

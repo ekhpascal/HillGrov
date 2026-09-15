@@ -17,8 +17,8 @@ extern "C" {
 typedef void (*wa_sha256_fn)(const uint8_t *in, size_t n, uint8_t out[32]);
 typedef void (*wa_rand_fn)(uint8_t *out, size_t n);
 
-typedef struct { uint8_t token[WA_TOKEN_LEN]; uint32_t expires_s; uint8_t used; } wa_session_t;
-typedef struct { wa_session_t s[WA_SESSIONS]; uint8_t fails; uint32_t lock_until_s; wa_sha256_fn sha; wa_rand_fn rnd; } wa_state_t;
+typedef struct { uint8_t token[WA_TOKEN_LEN]; uint32_t expires_s; uint8_t used; uint32_t seq; } wa_session_t;
+typedef struct { wa_session_t s[WA_SESSIONS]; uint8_t fails; uint32_t lock_until_s; wa_sha256_fn sha; wa_rand_fn rnd; uint32_t next_seq; } wa_state_t;
 
 void web_auth_init(wa_state_t *st, wa_sha256_fn sha, wa_rand_fn rnd);
 
@@ -26,9 +26,12 @@ int  web_auth_set_password(wa_state_t *st, hg_mcfg_t *m, const char *pw);
 /* 8..63 chars else -1; new salt; hash = sha256(salt||pw); clears MCFG_F_WEB_DEFAULT */
 
 int  web_auth_login(wa_state_t *st, const hg_mcfg_t *m, const char *pw, uint32_t now_s, char cookie_val[2 * WA_TOKEN_LEN + 1]);
-/* 0 ok (+cookie hex); -1 wrong password (fails++); -2 locked (lock_until_s > now) -- evicts the oldest session when full.
- * "Oldest" = the slot with the smallest expires_s (0 for a never-used or logged-out slot, so an
- * empty slot is always picked over evicting a live one); on an exact tie the lowest-index slot wins. */
+/* 0 ok (+cookie hex); -1 wrong password (fails++); -2 locked (lock_until_s > now) -- evicts a session when full.
+ * Eviction prefers a free/expired slot (!used, or expires_s == 0, or now_s >= expires_s) so an
+ * empty or stale slot is always picked over evicting a live one; if none qualifies, evicts the
+ * slot with the smallest `seq` (true creation-order LRU, RAM-only -- not min expires_s/lowest
+ * index, which ties every slot together and evicts the just-created session when every session
+ * shares one frozen expiry, e.g. before the clock is set). */
 
 int  web_auth_verify(const wa_state_t *st, const hg_mcfg_t *m, const char *pw);
 /* 0 correct / -1 wrong; creates no session; does not touch the fail counter or lockout
