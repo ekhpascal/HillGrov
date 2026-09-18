@@ -19,6 +19,14 @@ const cmd_core_t *http_srv_core(void);   /* the core passed to http_srv_start() 
  * anything else closes the socket after the response is already sent. */
 esp_err_t http_srv_done(httpd_req_t *req, int drained);
 
+/* Writes len bytes to the socket by hand, looping over short sends, feeding the
+ * task watchdog on progress and abandoning the transfer once deadline_us
+ * (esp_timer_get_time() units; 0 = no deadline) is spent. For responses big
+ * enough that a peer could stretch httpd_resp_send()'s internal loop out
+ * indefinitely -- see the full reasoning at the definition in http_srv.c.
+ * 0 = all sent, -1 = the caller must return ESP_FAIL. */
+int http_srv_send_all(httpd_req_t *req, const char *buf, size_t len, int64_t deadline_us);
+
 /* Reads the whole request body into buf and NUL-terminates it. Returns the
  * byte count (>= 0) or one of the negative codes below WITHOUT sending
  * anything -- the caller answers in its own content type, because /api/cmd

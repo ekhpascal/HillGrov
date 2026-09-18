@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 #include "esp_log.h"
+#include "esp_timer.h"
+#include "esp_task_wdt.h"
 #include "fw_srv.h"
 #include "node_mgr.h"
 #include "http_srv_internal.h"
@@ -46,13 +48,29 @@ void http_srv_json(httpd_req_t *req, int status, const char *json) {
 }
 
 /* httpd_send() returns the count of ONE send() call, which can be short under
- * the socket's 5 s SO_SNDTIMEO -- the same reason fw_srv.c loops. */
-static int send_all(httpd_req_t *req, const char *buf, size_t len) {
+ * the socket's 5 s SO_SNDTIMEO -- the same reason fw_srv.c loops. IDF's own
+ * httpd_send_all() (the loop behind httpd_resp_send) loops the same way but
+ * only gives up on a NEGATIVE return, so send_wait_timeout catches only a send
+ * that moves ZERO bytes: a peer advertising a one-byte receive window makes
+ * every send move a few bytes and come back positive, and the loop is then
+ * unbounded on the single httpd task. deadline_us is that bound -- 0 for none,
+ * which is right only for a response small enough that the socket buffer takes
+ * it whole. The watchdog feed is gated on the subscription, so it is a silent
+ * no-op on the (unsubscribed) httpd task and correct if that ever changes --
+ * fw_srv.c's wdt_kick() has the full reasoning.
+ * 0 once all len bytes are sent; -1 on any ret <= 0 or a spent deadline, after
+ * which the caller must return ESP_FAIL so httpd closes the socket. */
+int http_srv_send_all(httpd_req_t *req, const char *buf, size_t len, int64_t deadline_us) {
     size_t sent = 0;
     while (sent < len) {
+        if (deadline_us && esp_timer_get_time() > deadline_us) {
+            ESP_LOGW(TAG, "send budget spent with %u B to go -- closing", (unsigned)(len - sent));
+            return -1;
+        }
         int n = httpd_send(req, buf + sent, len - sent);
         if (n <= 0) return -1;
         sent += (size_t)n;
+        if (esp_task_wdt_status(NULL) == ESP_OK) esp_task_wdt_reset();
     }
     return 0;
 }
@@ -79,7 +97,9 @@ int http_srv_no_content(httpd_req_t *req, const char *cookie) {
         http_srv_error(req, 500, "INTERNAL", NULL);
         return -1;
     }
-    if (send_all(req, head, (size_t)n) != 0) {
+    /* No deadline: this is one ~110 B header line that the socket buffer takes
+     * whole on any link the AP will hold up at all. */
+    if (http_srv_send_all(req, head, (size_t)n, 0) != 0) {
         ESP_LOGW(TAG, "204 send failed");
         return -1;
     }

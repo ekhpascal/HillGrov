@@ -20,6 +20,7 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES esp_http_server cmd_core cmd_task web_auth hg_mcfg web_assets fw_srv
     PRIV_REQUIRES app_common time_svc time_core hg_blob nvs_flash mbedtls esp_hw_support espressif__cjson
+                  esp_timer
                   app_update esp_partition
                   state_snap hg_json alarm_mgr node_mgr wifi_mgr master_cmds
 )
