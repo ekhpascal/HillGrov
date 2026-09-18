@@ -1187,6 +1187,28 @@ function cfgZoneReady(id) {
  * storm guard intact even if that one retry itself fails again (e.g. a
  * concurrent LOW_HEAP) -- it does not degrade back into a tight loop just
  * because the poll keeps reporting the same already-tried "ready" state. */
+/* Drops every trace of the config editor's per-operator state: the unsaved
+ * edits (cfgDirty), the cached documents they were diffed against (cfgDoc),
+ * and the transient UI state that describes them (which zone/group/index was
+ * open, a .bad highlight from a rejected field, the save/load messages and the
+ * retry guards). Called on logout -- see HG.actions.logout. Deliberately does
+ * NOT clear HG.state.schema: that is server-described shape, identical for
+ * every operator, and keeping it saves the next login a /api/schema fetch.
+ * cfgLoading is left alone on purpose: an in-flight fetch always clears it
+ * itself on both of its paths, and forcing it to null here would only let a
+ * duplicate fetch start alongside the one still running. */
+HG.resetConfigState = function () {
+  HG.state.cfgDoc = {};
+  HG.state.cfgDirty = {};
+  HG.state.cfgUi = { zone: null, group: null, idx: 0 };
+  HG.state.cfgBad = null;
+  HG.state.cfgMsg = "";
+  HG.state.cfgSaving = false;
+  HG.state.cfgLoadErr = "";
+  HG.state.cfgLoadFailedId = null;
+  HG.state.cfgSelfHealAttempted = null;
+};
+
 HG.ensureConfigLoaded = function (id) {
   var ui = HG.state.cfgUi;
   if (ui.zone !== id) {
@@ -1536,6 +1558,14 @@ HG.actions = {
        * typed password is fine (the operator is about to retry), but this
        * is a different person potentially about to sit down at the console. */
       HG.drafts = {};
+      /* Config-editor edits deliberately do NOT live in HG.drafts (they live
+       * in cfgDirty, keyed per zone, which is what lets them survive the 2s
+       * poll without a per-field draft entry) -- so clearing HG.drafts alone
+       * left the previous operator's unsaved, unreviewed edits armed. The
+       * next operator opening the same zone to change one unrelated field
+       * would silently carry them into the merge body and into live
+       * actuation (e.g. a half-typed WATER TARGET). Safety, not hygiene. */
+      HG.resetConfigState();
       location.hash = "#/login";
       HG.render();
     });
