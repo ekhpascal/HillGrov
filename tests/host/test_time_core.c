@@ -132,6 +132,23 @@ static void test_mrule_time_out_of_range_rejected(void) {
     TEST_ASSERT_EQUAL_INT(-1, tz_parse("CET-1CEST,M3.5.0,M10.5.0/-200", &r));
 }
 
+/* --- SP4 final fix wave, F5: the bound above was applied to a total that had
+   ALREADY been computed in 32-bit `long` arithmetic, so a big enough field
+   wrapped back INTO the accepted window instead of being rejected. "UTC1193046"
+   is the worked example: 1193046 * 3600 == 4294965600, which truncates to
+   -1696, passes the +-86400 test, and was accepted as a legal 1696 s offset --
+   which time_svc_utc_offset() then hands node_mgr_enrol.c to broadcast to the
+   whole ring as TIME_SYNC. The minute and second fields wrap the same way.
+   `long` is 32-bit on both targets and on the MSVC host these tests run on;
+   accumulating in 64-bit and bounding before the narrowing is correct on any
+   platform. */
+static void test_offset_overflow_rejected(void) {
+    tz_rule_t r;
+    TEST_ASSERT_EQUAL_INT(-1, tz_parse("UTC1193046", &r));          /* h*3600 wraps to -1696 */
+    TEST_ASSERT_EQUAL_INT(-1, tz_parse("UTC0:71582789", &r));       /* m*60   wraps to +44 */
+    TEST_ASSERT_EQUAL_INT(-1, tz_parse("CET-1CEST,M3.5.0/1193046,M10.5.0/3", &r));   /* same, +-167h bound */
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_parse_cet_std_dst);
@@ -149,5 +166,6 @@ int main(void) {
     RUN_TEST(test_year_rollover_backward_offset);
     RUN_TEST(test_std_offset_out_of_range_rejected);
     RUN_TEST(test_mrule_time_out_of_range_rejected);
+    RUN_TEST(test_offset_overflow_rejected);
     return UNITY_END();
 }

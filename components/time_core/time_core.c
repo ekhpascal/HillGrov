@@ -111,9 +111,18 @@ static const char *parse_hms(const char *p, int32_t max_h, int32_t *out) {
             s = strtol(p, &end, 10); p = end;
         }
     }
-    int32_t total = (int32_t)(sign * (h * 3600 + m * 60 + s));
-    if (total > max_h * 3600 || total < -max_h * 3600) return NULL;
-    *out = total;
+    /* Accumulate in 64 bits and bound BEFORE narrowing: `long` is 32-bit on
+     * both targets, so an `h * 3600` computed in long wraps for h above
+     * ~596523 and the wrapped value can land back inside the accepted window
+     * -- "UTC1193046" gave 4294965600 -> -1696, passed the +-86400 test and
+     * was accepted as a legal 1696 s offset, which time_svc_utc_offset() then
+     * broadcasts to the whole ring as TIME_SYNC. The minute and second fields
+     * wrap the same way. strtol saturates at LONG_MAX/LONG_MIN, and
+     * LONG_MAX * 3600 still fits an int64_t, so nothing overflows here. */
+    int64_t total = (int64_t)sign * ((int64_t)h * 3600 + (int64_t)m * 60 + (int64_t)s);
+    int64_t limit = (int64_t)max_h * 3600;
+    if (total > limit || total < -limit) return NULL;
+    *out = (int32_t)total;
     return p;
 }
 
