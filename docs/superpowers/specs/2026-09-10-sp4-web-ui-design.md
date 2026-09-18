@@ -1,6 +1,6 @@
 # SP4 — Master web UI: design
 
-**Status:** approved in brainstorm 2026-09-10 (owner: ekh).
+**Status:** implemented; bench-verified 2026-09-18 (owner: ekh). Approved in brainstorm 2026-09-10. Owner acceptance ran on real Android Chrome over the master AP and on desktop Chrome: login, dashboard, config editing, the bad-value 400 path, alarms with the ring blame line, web-password change and restore, and a zone fleet OTA end-to-end (`FW 2 TRIAL PASS`, zone config surviving the reflash). Two concurrent sessions (phone + desktop) coexist under an unset clock. Budgets at acceptance: master heap-min 68 488 B against the §6.4 ≥64 KB bar, web bundle 29 131/65 536 B gzipped, master app 966 158 B with 26 % of its slot free.
 **Authority:** the system spec (`2026-08-31-hillgrow-system-design.md`) is binding; this document adds the SP4 integration design and the decisions taken 2026-09-10. Where this doc and the system spec disagree, the system spec wins unless the point is listed under *Decisions*.
 
 ## Scope

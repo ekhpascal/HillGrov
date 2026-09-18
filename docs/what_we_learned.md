@@ -130,3 +130,15 @@ Master on the SP3 rig + the PC on the master's AP; every task reviewed, most wit
 
 **The 100 KB heap bar was set before httpd, mDNS, cJSON, SNTP and APSTA existed.** Measured 87 KB fresh, 75 KB after OTA + upload + fleet; bar moved to ≥ 64 KB with the 40 KB `LOW_HEAP` guard as the floor.
 
+### Owner acceptance on a real phone — 2026-09-18
+
+**A caret bug that only a human thumb could find.** The 2 s poll re-render restored focus but could not restore the caret in `<input type=number>`, so on a phone every digit landed at position 0 (`1` then `2` → `21`). Headless CDP typing was too fast to span a poll tick and never saw it; the desktop bench never saw it. Fixed by skipping the poll-driven rebuild while a form field holds focus. **Rule:** a timer-driven re-render must be tested at human typing speed, on the slowest real client, not just asserted green by a driver that types instantly.
+
+**Every session tied at the same expiry evicted the wrong one.** Before the clock is set all sessions share `expires_s = 0xFFFFFFFF`, so "evict min expiry, tie → lowest index" always chose slot 0 and each new login evicted the session just created — phone and desktop knocked each other out, which is the product's core requirement. Fixed with a RAM-only creation sequence and true LRU. **Rule:** when a sort key can be identical across all candidates, the tie-break *is* the algorithm — design it deliberately.
+
+**A successful password change is invisible, and the next attempt lies.** The handler deliberately mints a fresh cookie so the operator is not bounced to the login page; the only success signal is a small inline line. The owner missed it, retried with the old password, and got "Old password is wrong" — a correct message that reads like a bug. **Rule:** when an action silently changes the credential the user is about to reuse, make the success state unmistakable.
+
+**The master's softAP keeps dropping the Windows client.** Three association drops in one session (4+ in 40 min during the tools task), each presenting as `curl 000` and looking exactly like an httpd hang; the Android phone never dropped, and the same PC held 55/55 pings at 0 % loss against the P4's C6 radio. **Rule:** before reading a timeout as a firmware fault, confirm `netsh wlan show interfaces` says `connected` — and prefer a second client type when characterising an AP.
+
+**The fleet sequence finished faster than the poll that was watching it.** `/api/state` sampled every 10 s never once caught `fleet != IDLE`; the whole zone OTA completed in ~35 s and only the serial `NOTIFY` capture witnessed it. **Rule:** an automated check for a transient state must watch the event stream, not sample a level — or sample far faster than the shortest possible transit.
+

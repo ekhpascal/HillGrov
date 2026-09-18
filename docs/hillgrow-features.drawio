@@ -418,7 +418,7 @@
                 <mxCell id="pmasterg8r4" value="• Player isolated (I²S DMA + own file-read task, ~24 KB buffers) — audio can never delay safety, ring or control work" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg8" vertex="1">
                     <mxGeometry x="4" y="176" width="482" height="40" as="geometry"/>
                 </mxCell>
-                <mxCell id="pmasterg9" value="Web UI + HTTP API — SP4" style="swimlane;rounded=1;startSize=30;fontSize=13;fontStyle=1;fillColor=#e1d5e7;strokeColor=#9673a6;swimlaneFillColor=#ffffff;horizontal=1;arcSize=6;" parent="1" vertex="1">
+                <mxCell id="pmasterg9" value="Web UI + HTTP API — SP4 (bench-verified 2026-09-18: Android Chrome portrait + desktop Chrome, concurrent sessions)" style="swimlane;rounded=1;startSize=30;fontSize=13;fontStyle=1;fillColor=#e1d5e7;strokeColor=#9673a6;swimlaneFillColor=#ffffff;horizontal=1;arcSize=6;" parent="1" vertex="1">
                     <mxGeometry x="1080" y="90" width="490" height="326" as="geometry"/>
                 </mxCell>
                 <mxCell id="pmasterg9r0" value="• Dashboard: all zones and shelves live (1 Hz polling) — soil %, outputs, modes, faults, node health" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg9" vertex="1">
@@ -445,7 +445,7 @@
                 <mxCell id="pmasterg9r7" value="• Served from the AP at 192.168.7.7 (works with zero internet); assets embedded gzipped in the app image" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg9" vertex="1">
                     <mxGeometry x="4" y="280" width="482" height="40" as="geometry"/>
                 </mxCell>
-                <mxCell id="pmasterg10" value="Alarms &amp; history store — SP4" style="swimlane;rounded=1;startSize=30;fontSize=13;fontStyle=1;fillColor=#e1d5e7;strokeColor=#9673a6;swimlaneFillColor=#ffffff;horizontal=1;arcSize=6;" parent="1" vertex="1">
+                <mxCell id="pmasterg10" value="Alarms &amp; history store — SP4 alarms bench-verified 2026-09-18 (ring blame line on a held zone reset); history = SP4b, after SP2" style="swimlane;rounded=1;startSize=30;fontSize=13;fontStyle=1;fillColor=#e1d5e7;strokeColor=#9673a6;swimlaneFillColor=#ffffff;horizontal=1;arcSize=6;" parent="1" vertex="1">
                     <mxGeometry x="1080" y="440" width="490" height="142" as="geometry"/>
                 </mxCell>
                 <mxCell id="pmasterg10r0" value="• Alarm manager: every fault edge from every node → persistent log on LittleFS (2 × 64 KB rotating) + RAM ring for the UI" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg10" vertex="1">
@@ -526,7 +526,7 @@
                 <mxCell id="pmasterg13r6" value="• Telemetry collection from 2 s heartbeats: per-shelf soil/outputs/faults + comm counters per node" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg13" vertex="1">
                     <mxGeometry x="4" y="272" width="482" height="40" as="geometry"/>
                 </mxCell>
-                <mxCell id="pmasterg14" value="Fleet &amp; self OTA — SP3/SP4" style="swimlane;rounded=1;startSize=30;fontSize=13;fontStyle=1;fillColor=#ffe6cc;strokeColor=#d79b00;swimlaneFillColor=#ffffff;horizontal=1;arcSize=6;" parent="1" vertex="1">
+                <mxCell id="pmasterg14" value="Fleet &amp; self OTA — SP3/SP4 (bench-verified 2026-09-18: browser-triggered zone fleet OTA, rescue pull over the AP, FW TRIAL PASS)" style="swimlane;rounded=1;startSize=30;fontSize=13;fontStyle=1;fillColor=#ffe6cc;strokeColor=#d79b00;swimlaneFillColor=#ffffff;horizontal=1;arcSize=6;" parent="1" vertex="1">
                     <mxGeometry x="1080" y="1576" width="490" height="214" as="geometry"/>
                 </mxCell>
                 <mxCell id="pmasterg14r0" value="• zone.bin staged in the zone_fw partition (validated: magic, project name, version)" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;" parent="pmasterg14" vertex="1">
