@@ -146,23 +146,37 @@ int fw_srv_revalidate(void) {
  * headers + blank line via one send_all(), then the body via send_all()
  * chunks -- and never touches httpd_resp_send_chunk/httpd_resp_set_hdr at
  * all. */
-/* How this handler returns (SP4 Task 11 record item, settled in Task 13) --
- * the same rule http_srv_done() states for every other handler on the shared
- * instance, applied by hand here because this file deliberately does not use
- * http_srv's helpers:
- *   404 FW_NO_IMAGE -> ESP_OK. This is a GET with no request body, so there
- *       is nothing for httpd to purge and the connection may be kept; the
- *       rescue client closes it itself after reading the 404.
- *   any failure after the headers are on the wire -> ESP_FAIL, so httpd
- *       CLOSES the socket. The client has been promised Content-Length bytes
- *       it is not going to get, and a truncated body on a kept-alive
- *       connection would be parsed as the next response. The close is the
- *       only honest framing left. */
+/* How this handler returns (SP4 Task 11 record item; Task 13 settled it on a
+ * false premise, corrected in the final fix wave) -- the same rule
+ * http_srv_done() states for every other handler on the shared instance,
+ * applied by hand here because this file deliberately does not use http_srv's
+ * helpers: EVERY exit returns ESP_FAIL, so httpd closes the socket.
+ *
+ * ESP_OK keeps the connection, and httpd_req_delete() then PURGES whatever is
+ * left of the request body first -- a `while (ra->remaining_len)` recv loop on
+ * the ONE httpd task, where every byte received re-arms the 5 s
+ * recv_wait_timeout. A client announcing a huge Content-Length and trickling
+ * one byte every 4 s therefore pins the whole web UI indefinitely, and
+ * /fw/zone.bin is the one auth=0 API route (http_routes.c), so it needs no
+ * login. The earlier 404 exit returned ESP_OK on the premise that "this is a
+ * GET with no request body, so there is nothing to purge"; that premise is
+ * false -- IDF's httpd_parse.c sets content_len from the header for ANY
+ * method, with no method check, so a GET carries a body whenever the client
+ * says it does.
+ *
+ * On the transfer path the close is also the only honest framing left once
+ * anything fails after the headers are on the wire: the client has been
+ * promised Content-Length bytes it is not going to get, and a truncated body
+ * on a kept-alive connection would be parsed as the next response. After a
+ * COMPLETE transfer the close costs nothing -- the response is identity-framed
+ * with Content-Length, so it is self-delimiting, and rescue_pull() does one GET
+ * and closes anyway. httpd logs "uri handler execution failed" on every
+ * ESP_FAIL; on this route that line is routine, not a fault. */
 static esp_err_t zone_bin_get(httpd_req_t *req) {
     if (!s_img_ok) {
         httpd_resp_set_status(req, "404 Not Found");
         httpd_resp_send(req, "FW_NO_IMAGE", HTTPD_RESP_USE_STRLEN);   /* identity by default: fine as-is */
-        return ESP_OK;
+        return ESP_FAIL;   /* answered; now close rather than purge an unread body (see above) */
     }
 
     /* Whole-transfer budget, shared by the header send and every body chunk:
@@ -195,7 +209,9 @@ static esp_err_t zone_bin_get(httpd_req_t *req) {
         rem -= n;
     }
     esp_task_wdt_delete(NULL);
-    return rc;
+    if (rc != ESP_OK)
+        ESP_LOGW(TAG, "zone.bin transfer abandoned with %lu B to go", (unsigned long)rem);
+    return ESP_FAIL;   /* success too: see the comment above */
 }
 
 int fw_srv_validate(void) {
