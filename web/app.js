@@ -359,6 +359,13 @@ HG.mock = {
       }
       if (route === "/api/config") {
         var q = mockParseQuery(path);
+        /* http_api_cfg.c's query_int: a present-but-unparsable zone is a hard
+         * 400, never a silent fall back to zone 0 ("Review fix round 1
+         * (CRITICAL #3)"). The fixture used to Number() it and serve zone 1's
+         * document for anything unrecognised, which turned a real
+         * ?zone=NaN refetch storm into a single successful load in every mock
+         * suite. */
+        if (q.zone !== undefined && !/^-?\d+$/.test(q.zone)) throw new ApiError(400, "BAD_QUERY");
         var zone = q.zone !== undefined ? Number(q.zone) : 0;
         if (method === "GET") {
           var src = self.fixtures.config[zone] || self.fixtures.config[zone === 0 ? 0 : 1];
@@ -1107,16 +1114,35 @@ HG.views.config = function (id) {
     'accept="application/json" hidden></label></div>' + msg + "</form>";
 };
 
-/* ---------- router ---------- */
+/* ---------- router ----------
+ * A route id must survive being compared with === : HG.ensureConfigLoaded's
+ * three guards (ui.zone !== id, cfgLoading === id, cfgLoadFailedId === id) are
+ * ALL defeated at once by NaN, which compares unequal to everything including
+ * itself. A hand-typed or stale "#/config/2x" used to parse as Number("2x") =
+ * NaN, so every render started another GET /api/config?zone=NaN, every one of
+ * those 400'd and re-rendered, and the tab hammered a 2-slot embedded httpd
+ * back-to-back for as long as it sat on that hash. Anything that is not a
+ * plain non-negative integer is therefore not an id at all, and the route
+ * falls back to the dashboard exactly like any other unknown hash. */
+function routeId(raw, dflt) {
+  if (raw === undefined || raw === "") return dflt;
+  return /^\d{1,5}$/.test(raw) ? Number(raw) : null;
+}
+
 HG.router = {
   parse: function () {
     var h = location.hash.replace(/^#\/?/, "");
     if (!h) h = "dashboard";
     var parts = h.split("/");
+    var zid, cid;
     switch (parts[0]) {
       case "login": return { name: "login" };
-      case "zone": return { name: "zone", id: Number(parts[1]) };
-      case "config": return { name: "config", id: Number(parts[1] || 0) };
+      case "zone":
+        zid = routeId(parts[1], null);
+        return zid === null ? { name: "dashboard" } : { name: "zone", id: zid };
+      case "config":
+        cid = routeId(parts[1], 0);
+        return cid === null ? { name: "dashboard" } : { name: "config", id: cid };
       case "alarms": return { name: "alarms" };
       case "system": return { name: "system" };
       case "dashboard": return { name: "dashboard" };
