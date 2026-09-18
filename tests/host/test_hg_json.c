@@ -141,6 +141,33 @@ static void test_merge_validation_path(void) {
     TEST_ASSERT_EQUAL_STRING("shelf[0].light.off", err); /* hg_cfg_validate's own path, verbatim */
 }
 
+/* SP4 final fix wave, F4. node_mgr_cfg_get() zeroes the HW struct when the
+   plane is not cached and signals that only through *hw_gen == 0, so a caller
+   that discards the signal validates every save against an all-zero hardware
+   profile -- and a DEFAULT, untouched config then fails, because dose_s=20 is
+   compared against pump_max_run_s=0. This pins both halves of the contract the
+   http_api_cfg.c fix relies on: zeros reject, NULL skips the hardware-dependent
+   checks entirely. */
+static void test_zeroed_hw_rejects_a_default_config_but_null_hw_does_not(void) {
+    hg_zone_hw_t zero_hw;
+    hg_zone_cfg_t cfg;
+    memset(&zero_hw, 0, sizeof zero_hw);
+    hg_defaults_cfg(&cfg);
+
+    char err[64] = "", warn[256] = "";
+    int rc = hg_json_merge_cfg(&zero_hw, &cfg, "{\"cfg\":{\"shelf\":[{\"WATER\":{\"TARGET\":55}}]}}",
+                                err, sizeof err, warn, sizeof warn);
+    TEST_ASSERT_EQUAL_INT(-3, rc);
+    TEST_ASSERT_EQUAL_STRING("shelf[0].water.dose_s", err);   /* a field the operator never touched */
+
+    err[0] = warn[0] = '\0';
+    rc = hg_json_merge_cfg(NULL, &cfg, "{\"cfg\":{\"shelf\":[{\"WATER\":{\"TARGET\":55}}]}}",
+                            err, sizeof err, warn, sizeof warn);
+    TEST_ASSERT_EQUAL_INT(0, rc);
+    TEST_ASSERT_EQUAL_STRING("", err);
+    TEST_ASSERT_EQUAL_UINT8(55, cfg.shelf[0].water.target_pct);
+}
+
 static void test_hw_keys_are_warnings(void) {
     hg_zone_hw_t hw, orig_hw;
     hg_zone_cfg_t cfg;
@@ -237,6 +264,7 @@ int main(void) {
     RUN_TEST(test_merge_unknown_key_warns_not_fails);
     RUN_TEST(test_merge_bad_value_path);
     RUN_TEST(test_merge_validation_path);
+    RUN_TEST(test_zeroed_hw_rejects_a_default_config_but_null_hw_does_not);
     RUN_TEST(test_hw_keys_are_warnings);
     RUN_TEST(test_hhmm_bool_enum_forms);
     RUN_TEST(test_mcfg_export_secrets);

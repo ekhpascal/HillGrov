@@ -76,11 +76,20 @@ esp_err_t h_config_get(httpd_req_t *req) {
     } else if (zone >= 1 && zone <= HG_MAX_ZONES) {
         hg_zone_cfg_t cfg;
         hg_zone_hw_t  hw;
-        uint32_t      cfg_gen = 0;
-        if (node_mgr_cfg_get((uint8_t)zone, &cfg, &hw, &cfg_gen, NULL) != 0) {
+        uint32_t      cfg_gen = 0, hw_gen = 0;
+        if (node_mgr_cfg_get((uint8_t)zone, &cfg, &hw, &cfg_gen, &hw_gen) != 0) {
             http_srv_error(req, 404, "NO_CACHE", NULL);
             return http_srv_done(req, 0);
         }
+        /* The HW plane is best-effort: node_mgr_cfg_get still answers 0 when it
+         * is missing or unwrappable, zeroes the struct and says so ONLY through
+         * hw_gen == 0 (node_mgr_cfg_api.c). Taking that signal is what stops
+         * the zeroed struct being mistaken for real hardware -- decisively so
+         * on the PUT path below. Here the document is still exported: the read-
+         * only hardware fields render as zeros for the few seconds before the
+         * plane is pulled, which is cosmetic, and refusing the whole config page
+         * over it would be worse. */
+        if (hw_gen == 0) ESP_LOGW(TAG, "zone %ld: hw plane not cached yet -- exporting a zeroed hw section", zone);
         n = hg_json_export_cfg(&hw, &cfg, cfg_gen, doc, sizeof doc);
     } else {
         http_srv_error(req, 404, "ZONE_UNKNOWN", NULL);
@@ -112,14 +121,26 @@ static esp_err_t cfg_put_zone(httpd_req_t *req, uint8_t zone, const char *body) 
 
     hg_zone_cfg_t cfg;
     hg_zone_hw_t  hw;
-    if (node_mgr_cfg_get(zone, &cfg, &hw, NULL, NULL) != 0) {
+    uint32_t      hw_gen = 0;
+    if (node_mgr_cfg_get(zone, &cfg, &hw, NULL, &hw_gen) != 0) {
         http_srv_error(req, 404, "NO_CACHE", NULL);
         return http_srv_done(req, 1);
     }
 
+    /* Review fix round 3: node_mgr_cfg_get treats the HW plane as best-effort
+     * -- when it is absent or its envelope will not unwrap it zeroes the struct
+     * and returns 0, signalling the absence ONLY through hw_gen == 0
+     * (node_mgr_cfg_api.c). Discarding that signal handed hg_cfg_validate an
+     * all-zero hardware profile to validate against, so in the first seconds
+     * after a zone reboot (or behind a terminally latched HW plane) EVERY save
+     * was rejected 400 VALIDATION naming a field the operator never touched --
+     * shelf[0].water.dose_s, because the default dose_s=20 was being compared
+     * against pump_max_run_s=0. hg_json_merge_cfg's hw argument is
+     * hw_or_null precisely so a caller with no hardware plane can skip the
+     * hardware-dependent checks instead of running them against zeros. */
     char err[96]  = "";
     char warn[256] = "";
-    int rc = hg_json_merge_cfg(&hw, &cfg, body, err, sizeof err, warn, sizeof warn);
+    int rc = hg_json_merge_cfg(hw_gen ? &hw : NULL, &cfg, body, err, sizeof err, warn, sizeof warn);
     if (rc == -1) { http_srv_error(req, 400, "BAD_JSON", NULL);     return http_srv_done(req, 1); }
     if (rc == -2) { http_srv_error(req, 400, "INVALID_FIELD", err); return http_srv_done(req, 1); }
     if (rc == -3) { http_srv_error(req, 400, "VALIDATION", err);    return http_srv_done(req, 1); }
