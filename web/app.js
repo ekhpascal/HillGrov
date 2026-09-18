@@ -453,6 +453,16 @@ HG.api = {
     }, function (err) {
       if (err instanceof ApiError && err.status === 401) {
         HG.state.auth = false;
+        /* Disarm exactly as a deliberate logout does. A 401 means the master
+         * no longer knows who this is, and whoever authenticates next may be
+         * someone else -- the master drops every other session when the web
+         * password is changed, so one operator changing it bounces another
+         * operator's tab straight here with their unsaved edits still loaded.
+         * Carrying those into the next person's save is the same defect
+         * HG.actions.logout exists to prevent; the cost of being wrong is that
+         * the SAME operator retypes, which is much cheaper than an unreviewed
+         * value reaching a pump. */
+        HG.forgetOperatorState();
         if (location.hash !== "#/login") {
           HG.state.lastRoute = location.hash || "#/dashboard";
           location.hash = "#/login";
@@ -1255,6 +1265,16 @@ function cfgZoneReady(id) {
  * cfgLoading is left alone on purpose: an in-flight fetch always clears it
  * itself on both of its paths, and forcing it to null here would only let a
  * duplicate fetch start alongside the one still running. */
+/* Everything the previous operator left behind: typed drafts, unsaved config
+ * edits and the per-zone console transcript (which can hold credentials from a
+ * SET WIFI STA line). Called both from a deliberate logout and from the 401
+ * path, because the master cannot tell us which one is about to happen. */
+HG.forgetOperatorState = function () {
+  HG.drafts = {};
+  HG.state.console = {};
+  HG.resetConfigState();
+};
+
 HG.resetConfigState = function () {
   HG.state.cfgDoc = {};
   HG.state.cfgDirty = {};
@@ -1611,23 +1631,15 @@ HG.actions = {
   logout: function () {
     HG.api.post("/api/logout", null, "text").then(noop, noop).then(function () {
       HG.state.auth = false;
-      /* No typed password (or any other draft) should linger in the DOM
-       * past a deliberate logout -- a failed *login attempt* keeping its
-       * typed password is fine (the operator is about to retry), but this
-       * is a different person potentially about to sit down at the console. */
-      HG.drafts = {};
-      /* Config-editor edits deliberately do NOT live in HG.drafts (they live
-       * in cfgDirty, keyed per zone, which is what lets them survive the 2s
-       * poll without a per-field draft entry) -- so clearing HG.drafts alone
-       * left the previous operator's unsaved, unreviewed edits armed. The
-       * next operator opening the same zone to change one unrelated field
-       * would silently carry them into the merge body and into live
-       * actuation (e.g. a half-typed WATER TARGET). Safety, not hygiene. */
-      HG.resetConfigState();
-      /* Same argument as HG.drafts: the per-zone console keeps the previous
-       * operator's transcript and recalled command history, and a console
-       * line can carry credentials (SET WIFI STA <ssid> <pass>). */
-      HG.state.console = {};
+      /* Nothing the previous operator typed or left unsaved should survive a
+       * deliberate logout -- a failed *login attempt* keeping its typed
+       * password is fine (they are about to retry), but this is a different
+       * person potentially about to sit down at the console. Config edits in
+       * particular do NOT live in HG.drafts (they live in cfgDirty, keyed per
+       * zone, which is what lets them survive the 2 s poll), so clearing
+       * drafts alone left them armed to ride into the next operator's save and
+       * into live actuation. Safety, not hygiene. */
+      HG.forgetOperatorState();
       location.hash = "#/login";
       HG.render();
     });
