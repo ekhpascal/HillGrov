@@ -363,7 +363,18 @@ HG.mock = {
         if (method === "GET") {
           var src = self.fixtures.config[zone] || self.fixtures.config[zone === 0 ? 0 : 1];
           var doc = JSON.parse(JSON.stringify(src));
-          if (zone === 0 && q.secrets === "0") { doc.WIFI.STA_PASS = ""; doc.WIFI.AP_PASS = ""; }
+          /* hg_json_export_mcfg OMITS a secret field entirely when secrets==0
+           * (`if (!secrets && hg_mcfg_is_secret(f)) continue;`) -- it does NOT
+           * blank it. This fixture used to blank it, which is exactly what hid
+           * the "touch and clear STA_PASS wipes the stored password" bug from
+           * every mock suite: with "" present, the merge-body's equality check
+           * dropped the field; with the key really absent it did not. Driven
+           * off the schema's own `secret` flags so the two stay in step. */
+          if (zone === 0 && q.secrets === "0") {
+            self.fixtures.schema.mgroups.forEach(function (g) {
+              (g.fields || []).forEach(function (f) { if (f.secret && doc[g.name]) delete doc[g.name][f.key]; });
+            });
+          }
           return doc;
         }
         if (method === "PUT") {
@@ -609,6 +620,22 @@ function cfgFieldOriginal(doc, group, idx, key) {
 function mgroupOriginal(doc, group, key) {
   var obj = doc && doc[group];
   return obj ? obj[key] : undefined;
+}
+
+/* Is this master field a secret (a password)? Read from the schema's own
+ * `secret` flag (hg_json_schema.c emits it for every mgroup field), so the
+ * client never has to hardcode which keys those are. Only ever used to make
+ * the client *more* conservative (drop a blank field from a merge body), so a
+ * tampered schema can at worst cause a legitimate edit to be skipped -- never
+ * cause a write the operator did not ask for. */
+function mfieldIsSecret(schema, group, key) {
+  var gs = (schema && schema.mgroups) || [];
+  for (var i = 0; i < gs.length; i++) {
+    if (gs[i].name !== group) continue;
+    var fs = gs[i].fields || [];
+    for (var j = 0; j < fs.length; j++) if (fs[j].key === key) return !!fs[j].secret;
+  }
+  return false;
 }
 
 /* Pure-numeric id -- CRITICAL: group/key are schema-controlled text (from
@@ -1312,12 +1339,24 @@ HG.rerender = function () {
 /* ---------- config editor: merge-body building + save/import pipeline ---------- */
 
 /* Builds the MINIMAL PUT body: only fields present in `dirty` whose typed
- * value actually differs from the document's own current value. zone 0's
- * password fields need no special-casing to honour "blank = unchanged" --
- * cfgDoc[0] is always fetched with ?secrets=0, so an untouched password
- * field's original value is always "", and leaving the input blank makes
- * dirty's value equal that same "" and therefore fall out via the plain
- * equality check below. */
+ * value actually differs from the document's own current value.
+ *
+ * zone 0's password fields DO need special-casing to honour "blank =
+ * unchanged" (this comment previously claimed the opposite, and was wrong):
+ * hg_json_export_mcfg OMITS a secret field entirely when secrets == 0
+ * (`if (!secrets && hg_mcfg_is_secret(f)) continue;`), and cfgDoc[0] is always
+ * fetched with ?secrets=0 -- so an untouched password's "original" is not ""
+ * but `undefined`. `"" === undefined` is false, so merely focusing the field
+ * and clearing it again (or a phone password manager filling then clearing it)
+ * used to put {"WIFI":{"STA_PASS":""}} in the PUT body; the merge writes the
+ * empty string, hg_mcfg_validate accepts it for STA_PASS (only AP_PASS has the
+ * 8-63 char rule) and the house Wi-Fi credential is destroyed in NVS.
+ *
+ * A blank secret is therefore dropped, matching what the Import path already
+ * does (HG.actions.cfgImportFile deletes empty STA_PASS/AP_PASS keys) and what
+ * the firmware means by blank-means-unchanged. The consequence -- a password
+ * cannot be *cleared* from this form -- is deliberate: AP_PASS may not be
+ * empty at all, and an open STA is set by clearing the SSID, not the key. */
 HG.buildCfgMergeBody = function (id, schema, doc, dirty) {
   if (id === 0) {
     var out = {};
@@ -1325,7 +1364,10 @@ HG.buildCfgMergeBody = function (id, schema, doc, dirty) {
       var parts = k.split("|");
       var group = parts[0], key = parts[2];
       var val = dirty[k];
-      if (val === mgroupOriginal(doc, group, key)) return;
+      var orig = mgroupOriginal(doc, group, key);
+      /* orig === undefined means the key was withheld by ?secrets=0. */
+      if (val === "" && (orig === undefined || mfieldIsSecret(schema, group, key))) return;
+      if (val === orig) return;
       out[group] = out[group] || {};
       out[group][key] = val;
     });
