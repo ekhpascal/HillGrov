@@ -1624,6 +1624,10 @@ HG.actions = {
        * would silently carry them into the merge body and into live
        * actuation (e.g. a half-typed WATER TARGET). Safety, not hygiene. */
       HG.resetConfigState();
+      /* Same argument as HG.drafts: the per-zone console keeps the previous
+       * operator's transcript and recalled command history, and a console
+       * line can carry credentials (SET WIFI STA <ssid> <pass>). */
+      HG.state.console = {};
       location.hash = "#/login";
       HG.render();
     });

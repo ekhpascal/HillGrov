@@ -150,7 +150,8 @@ int fw_srv_revalidate(void) {
  * false premise, corrected in the final fix wave) -- the same rule
  * http_srv_done() states for every other handler on the shared instance,
  * applied by hand here because this file deliberately does not use http_srv's
- * helpers: EVERY exit returns ESP_FAIL, so httpd closes the socket.
+ * helpers: an exit that leaves an announced body unread returns ESP_FAIL, so
+ * httpd closes the socket instead of purging it.
  *
  * ESP_OK keeps the connection, and httpd_req_delete() then PURGES whatever is
  * left of the request body first -- a `while (ra->remaining_len)` recv loop on
@@ -170,13 +171,30 @@ int fw_srv_revalidate(void) {
  * on a kept-alive connection would be parsed as the next response. After a
  * COMPLETE transfer the close costs nothing -- the response is identity-framed
  * with Content-Length, so it is self-delimiting, and rescue_pull() does one GET
- * and closes anyway. httpd logs "uri handler execution failed" on every
- * ESP_FAIL; on this route that line is routine, not a fault. */
+ * and closes anyway.
+ *
+ * The ordinary case -- a GET that announces no body at all -- still returns
+ * ESP_OK: there is nothing left to purge, so the purge loop cannot run and the
+ * connection is safe to keep. Returning ESP_FAIL unconditionally would also be
+ * safe, but it makes httpd log "uri handler execution failed" after every
+ * successful fleet pull, and a routine error line is exactly the kind of noise
+ * that hides a real one. */
+
+/* Same test http_srv_done() applies, replicated here because this component
+ * deliberately does not depend on http_srv. A chunked request counts as "has a
+ * body" even though content_len is 0: httpd would purge nothing and then try to
+ * parse the leftover chunk framing as the next request. */
+static esp_err_t done_or_close(httpd_req_t *req) {
+    if (req->content_len == 0 && httpd_req_get_hdr_value_len(req, "Transfer-Encoding") == 0)
+        return ESP_OK;   /* nothing announced, nothing to purge */
+    return ESP_FAIL;
+}
+
 static esp_err_t zone_bin_get(httpd_req_t *req) {
     if (!s_img_ok) {
         httpd_resp_set_status(req, "404 Not Found");
         httpd_resp_send(req, "FW_NO_IMAGE", HTTPD_RESP_USE_STRLEN);   /* identity by default: fine as-is */
-        return ESP_FAIL;   /* answered; now close rather than purge an unread body (see above) */
+        return done_or_close(req);   /* answered; close rather than purge an unread body (see above) */
     }
 
     /* Whole-transfer budget, shared by the header send and every body chunk:
@@ -209,9 +227,11 @@ static esp_err_t zone_bin_get(httpd_req_t *req) {
         rem -= n;
     }
     esp_task_wdt_delete(NULL);
-    if (rc != ESP_OK)
+    if (rc != ESP_OK) {
         ESP_LOGW(TAG, "zone.bin transfer abandoned with %lu B to go", (unsigned long)rem);
-    return ESP_FAIL;   /* success too: see the comment above */
+        return ESP_FAIL;   /* truncated body promised Content-Length bytes: close is the only honest framing */
+    }
+    return done_or_close(req);
 }
 
 int fw_srv_validate(void) {
