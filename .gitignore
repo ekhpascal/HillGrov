@@ -8,3 +8,9 @@ __pycache__/
 *.pyc
 .worktrees/
 .superpowers/
+
+# Espressif's public reference docs (24 MB) -- always re-downloadable from
+# espressif.com; the board-specific Waveshare schematic IS tracked, because it
+# is the source of the P4<->C6 SDIO pin mapping in spec 11.10.
+assets/**/esp32-p4_datasheet_en.pdf
+assets/**/esp32-p4_technical_reference_manual_en.pdf
