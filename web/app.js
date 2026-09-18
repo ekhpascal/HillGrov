@@ -851,18 +851,50 @@ HG.views.console = function (id) {
     "> Forward to zone " + id + "</label></section>";
 };
 
+/* /api/alarms reports ABSOLUTE readings of the master's monotonic uptime clock
+ * (alarm_mgr is initialised with hg_app_uptime_s and stores ev->at_s = now /
+ * a->since_s = now; alarm_mgr_json exports them verbatim and h_alarms passes
+ * them through untouched -- that wire format is correct and stays). They are
+ * NOT elapsed times, so printing "<stamp>s ago" was simply wrong: a bench
+ * capture at master uptime 2741 carried a ring-blame event at_s 2634 -- 107 s
+ * old -- and the page said "2634s ago" (~44 min); after a reboot an event at
+ * uptime 40 would read "40s ago" forever. The elapsed time is uptime - stamp,
+ * and the master's current uptime is already in the /api/state snapshot this
+ * page polls anyway. Clamped at 0 because the two documents are fetched by
+ * two independent polls and a stamp can briefly be newer than the last state
+ * sample. */
+function fmtAge(s) {
+  s = Math.max(0, Math.floor(s));
+  if (s < 60) return s + "s";
+  if (s < 3600) return Math.floor(s / 60) + "m " + (s % 60) + "s";
+  if (s < 86400) return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
+  return Math.floor(s / 86400) + "d " + Math.floor((s % 86400) / 3600) + "h";
+}
+
+/* "<elapsed> ago", or an em dash while the state snapshot (and therefore the
+ * master's uptime) is not loaded yet -- #/alarms can be opened directly from a
+ * cold load, and showing a raw stamp as if it were an age is exactly the bug
+ * being fixed. */
+HG.alarmAgo = function (stamp) {
+  var snap = HG.state.snap;
+  var up = snap && snap.master ? snap.master.uptime_s : undefined;
+  if (typeof stamp !== "number" || !isFinite(stamp)) return "—";
+  if (typeof up !== "number" || !isFinite(up)) return "—";
+  return fmtAge(up - stamp) + " ago";
+};
+
 HG.views.alarms = function () {
   var a = HG.state.alarms;
   if (!a) return "<h1>Alarms</h1>" + '<p class="loading">Loading…</p>';
   var active = a.active.length
     ? '<ul class="alarm-list">' + a.active.map(function (x) {
         return '<li class="alarm-active"><b>' + HG.esc(x.key) + "</b>" + HG.esc(x.text) +
-          '<span class="muted">' + x.since_s + "s ago</span></li>";
+          '<span class="muted">' + HG.esc(HG.alarmAgo(x.since_s)) + "</span></li>";
       }).join("") + "</ul>"
     : '<p class="empty">No active alarms.</p>';
   var events = a.events.length
     ? '<ul class="event-list">' + a.events.map(function (x) {
-        return "<li>" + '<span class="muted">' + x.at_s + "s ago</span> " + HG.esc(x.text) + "</li>";
+        return "<li>" + '<span class="muted">' + HG.esc(HG.alarmAgo(x.at_s)) + "</span> " + HG.esc(x.text) + "</li>";
       }).join("") + "</ul>"
     : '<p class="empty">No events.</p>';
   return "<h1>Alarms</h1><h2>Active</h2>" + active + "<h2>History</h2>" + events;
