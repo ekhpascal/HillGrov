@@ -1,7 +1,7 @@
 #include <string.h>
 #include "web_auth.h"
 
-#define WA_PWBUF 64   /* clamp: set_password enforces 8..63, this just bounds the stack buffer */
+#define WA_PWBUF (WA_PW_MAX + 1)   /* clamp: set_password enforces the length, this just bounds the stack buffer */
 
 static void wr32(uint8_t *p, uint32_t v) {
     p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
@@ -111,7 +111,7 @@ void web_auth_init(wa_state_t *st, wa_sha256_fn sha, wa_rand_fn rnd) {
 
 int web_auth_set_password(wa_state_t *st, hg_mcfg_t *m, const char *pw) {
     size_t n = strlen(pw);
-    if (n < 8 || n > 63) return -1;
+    if (n < WA_PW_MIN || n > WA_PW_MAX) return -1;
 
     uint8_t salt[sizeof m->web_salt];
     st->rnd(salt, sizeof salt);

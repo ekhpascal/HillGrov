@@ -74,3 +74,5 @@ hg_test(test_node_mgr_cfg ${COMP}/node_mgr/node_mgr_cfg.c ${COMP}/node_mgr/node_
 hg_test(test_state_snap ${COMP}/state_snap/state_snap.c)
 target_link_libraries(test_state_snap cjson_host)
 hg_test(test_http_routes ${COMP}/http_srv/http_routes.c)
+hg_test(test_http_body_sizes)
+target_link_libraries(test_http_body_sizes cjson_host)

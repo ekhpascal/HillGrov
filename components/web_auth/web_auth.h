@@ -14,6 +14,14 @@ extern "C" {
 #define WA_LOCK_FAILS 5
 #define WA_LOCK_S     60
 
+/* The ONLY constraint on a web password: its length. There is deliberately no
+ * charset restriction -- any byte a JSON string can carry (a quote, a
+ * backslash, a control character) is a legal password byte. Anything that has
+ * to carry one of these through a document, buffer or field must be sized for
+ * that (http_body_sizes.h derives the JSON body bounds from WA_PW_MAX). */
+#define WA_PW_MIN     8
+#define WA_PW_MAX     63
+
 typedef void (*wa_sha256_fn)(const uint8_t *in, size_t n, uint8_t out[32]);
 typedef void (*wa_rand_fn)(uint8_t *out, size_t n);
 
@@ -23,7 +31,7 @@ typedef struct { wa_session_t s[WA_SESSIONS]; uint8_t fails; uint32_t lock_until
 void web_auth_init(wa_state_t *st, wa_sha256_fn sha, wa_rand_fn rnd);
 
 int  web_auth_set_password(wa_state_t *st, hg_mcfg_t *m, const char *pw);
-/* 8..63 chars else -1; new salt; hash = sha256(salt||pw); clears MCFG_F_WEB_DEFAULT */
+/* WA_PW_MIN..WA_PW_MAX chars else -1; new salt; hash = sha256(salt||pw); clears MCFG_F_WEB_DEFAULT */
 
 int  web_auth_login(wa_state_t *st, const hg_mcfg_t *m, const char *pw, uint32_t now_s, char cookie_val[2 * WA_TOKEN_LEN + 1]);
 /* 0 ok (+cookie hex); -1 wrong password (fails++); -2 locked (lock_until_s > now) -- evicts a session when full.

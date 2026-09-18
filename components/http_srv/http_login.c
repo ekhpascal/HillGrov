@@ -2,6 +2,7 @@
 #include <string.h>
 #include "esp_log.h"
 #include "cJSON.h"
+#include "http_body_sizes.h"
 #include "http_srv_internal.h"
 
 static const char *TAG = "http_login";
@@ -74,7 +75,11 @@ static const char *json_str(const cJSON *root, const char *key) {
 }
 
 esp_err_t h_login(httpd_req_t *req) {
-    char body[129];   /* spec: login bodies are <= 128 B */
+    /* Sized for the worst JSON body a LEGAL password can produce, not for a
+     * typical one: http_srv_body() refuses content_len > cap-1, so a buffer
+     * that is too small locks the operator out of a password the master itself
+     * accepted (http_body_sizes.h). */
+    char body[HTTP_LOGIN_BODY_MAX];
     int drained = 0;
     cJSON *root = read_json_body(req, body, sizeof body, &drained);
     if (!root) return http_srv_done(req, drained);
@@ -125,7 +130,7 @@ esp_err_t h_logout(httpd_req_t *req) {
 extern int master_web_set_password(const char *pw);
 
 esp_err_t h_password(httpd_req_t *req) {
-    char body[256];   /* two <= 63-char passwords plus JSON punctuation */
+    char body[HTTP_PASSWORD_BODY_MAX];   /* two worst-case-escaped passwords plus JSON punctuation */
     int drained = 0;
     cJSON *root = read_json_body(req, body, sizeof body, &drained);
     if (!root) return http_srv_done(req, drained);
