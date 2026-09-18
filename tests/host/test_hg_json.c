@@ -142,12 +142,16 @@ static void test_merge_validation_path(void) {
 }
 
 /* SP4 final fix wave, F4. node_mgr_cfg_get() zeroes the HW struct when the
-   plane is not cached and signals that only through *hw_gen == 0, so a caller
-   that discards the signal validates every save against an all-zero hardware
+   plane is not cached and reports that through *hw_present, so a caller that
+   discards the signal validates every save against an all-zero hardware
    profile -- and a DEFAULT, untouched config then fails, because dose_s=20 is
    compared against pump_max_run_s=0. This pins both halves of the contract the
    http_api_cfg.c fix relies on: zeros reject, NULL skips the hardware-dependent
-   checks entirely. */
+   checks entirely.
+
+   The presence signal itself is pinned in test_node_mgr_cfg.c: keying it on a
+   generation instead shipped a NULL on EVERY save, which skips the pump-limit
+   rules rather than applying them. */
 static void test_zeroed_hw_rejects_a_default_config_but_null_hw_does_not(void) {
     hg_zone_hw_t zero_hw;
     hg_zone_cfg_t cfg;

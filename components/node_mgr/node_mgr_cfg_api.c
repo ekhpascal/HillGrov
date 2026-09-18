@@ -66,10 +66,11 @@ void nmgr_cfg_drop_set_req(uint8_t zone) {
 }
 
 /* 0 = CFG cached (both planes unwrapped into the caller's structs; an absent
-   HW plane is zeroed with *hw_gen 0), -1 = zone out of range or no CFG cache
-   yet. cfg is required; hw / cfg_gen / hw_gen are optional. */
+   HW plane is zeroed and reported through *hw_present 0), -1 = zone out of
+   range or no CFG cache yet. cfg is required; hw / cfg_gen / hw_present are
+   optional. See node_mgr.h on why presence is its own flag and not a gen. */
 int node_mgr_cfg_get(uint8_t zone, hg_zone_cfg_t *cfg, hg_zone_hw_t *hw,
-                     uint32_t *cfg_gen, uint32_t *hw_gen) {
+                     uint32_t *cfg_gen, int *hw_present) {
     if (zone < 1 || zone > HG_MAX_ZONES || !cfg) return -1;
 
     /* one buffer for both planes in turn: CFG is the larger of the two, and a
@@ -92,7 +93,7 @@ int node_mgr_cfg_get(uint8_t zone, hg_zone_cfg_t *cfg, hg_zone_hw_t *hw,
     if (rc != HG_BLOB_OK && rc != HG_BLOB_MIGRATED) return -1;
     if (cfg_gen) *cfg_gen = gen;
 
-    if (hw_gen) *hw_gen = 0;
+    if (hw_present) *hw_present = 0;
     if (!hw) return 0;
     const size_t hlen = HG_BLOB_HDR_LEN + sizeof(hg_zone_hw_t);
     const nmgr_cache_t *h = nmgr_cfg_cache(zone, 2);
@@ -105,7 +106,7 @@ int node_mgr_cfg_get(uint8_t zone, hg_zone_cfg_t *cfg, hg_zone_hw_t *hw,
                                  hw, (uint16_t)sizeof *hw, &gen)
                : HG_BLOB_E_SHORT;
     if (rc != HG_BLOB_OK && rc != HG_BLOB_MIGRATED) { memset(hw, 0, sizeof *hw); return 0; }
-    if (hw_gen) *hw_gen = gen;
+    if (hw_present) *hw_present = 1;
     return 0;   /* the CFG plane is what this call is about; HW is best-effort */
 }
 

@@ -338,25 +338,32 @@ static void test_cfg_get_returns_unwrapped_copy(void) {
     hg_zone_hw_t h; hg_defaults_hw(&h); h.shelf_count = 2;
     adopt_zone(2, &c, 3, &h);
 
-    hg_zone_cfg_t gc; hg_zone_hw_t gh; uint32_t cg = 9, hwg = 9;
-    TEST_ASSERT_EQUAL_INT(0, node_mgr_cfg_get(2, &gc, &gh, &cg, &hwg));
+    hg_zone_cfg_t gc; hg_zone_hw_t gh; uint32_t cg = 9; int hwp = 9;
+    TEST_ASSERT_EQUAL_INT(0, node_mgr_cfg_get(2, &gc, &gh, &cg, &hwp));
     TEST_ASSERT_EQUAL_STRING("Kitchen", gc.name);
     TEST_ASSERT_EQUAL_UINT32(3, cg);
     TEST_ASSERT_EQUAL_MEMORY(&c, &gc, sizeof c);
     TEST_ASSERT_EQUAL_UINT8(2, gh.shelf_count);
     TEST_ASSERT_EQUAL_MEMORY(&h, &gh, sizeof h);
+    /* The PRESENT case. Nothing asserted this before, which is how the final
+       fix wave shipped `hw_gen ? &hw : NULL` -- hw_gen is structurally always 0
+       (the HW plane carries no generation on the wire), so that expression was
+       NULL even here, silently disabling hg_cfg_validate's pump-limit rules on
+       every save. A presence signal has to be positively asserted when the
+       plane IS there, or "always absent" passes the suite. */
+    TEST_ASSERT_EQUAL_INT(1, hwp);
 
-    /* cfg cached, hw not yet: still 0, with hw zeroed and its gen 0 */
+    /* cfg cached, hw not yet: still 0, with hw zeroed and hw_present 0 */
     seed_cfg(3, &c, 3);
-    memset(&gh, 0xAA, sizeof gh); hwg = 9;
-    TEST_ASSERT_EQUAL_INT(0, node_mgr_cfg_get(3, &gc, &gh, &cg, &hwg));
-    TEST_ASSERT_EQUAL_UINT32(0, hwg);
+    memset(&gh, 0xAA, sizeof gh); hwp = 9;
+    TEST_ASSERT_EQUAL_INT(0, node_mgr_cfg_get(3, &gc, &gh, &cg, &hwp));
+    TEST_ASSERT_EQUAL_INT(0, hwp);
     hg_zone_hw_t zero; memset(&zero, 0, sizeof zero);
     TEST_ASSERT_EQUAL_MEMORY(&zero, &gh, sizeof zero);
 
-    TEST_ASSERT_EQUAL_INT(-1, node_mgr_cfg_get(5, &gc, &gh, &cg, &hwg));   /* no cache */
-    TEST_ASSERT_EQUAL_INT(-1, node_mgr_cfg_get(0, &gc, &gh, &cg, &hwg));
-    TEST_ASSERT_EQUAL_INT(-1, node_mgr_cfg_get(9, &gc, &gh, &cg, &hwg));
+    TEST_ASSERT_EQUAL_INT(-1, node_mgr_cfg_get(5, &gc, &gh, &cg, &hwp));   /* no cache */
+    TEST_ASSERT_EQUAL_INT(-1, node_mgr_cfg_get(0, &gc, &gh, &cg, &hwp));
+    TEST_ASSERT_EQUAL_INT(-1, node_mgr_cfg_get(9, &gc, &gh, &cg, &hwp));
 }
 
 /* A zone running a NEWER config layout than this master can parse is not a

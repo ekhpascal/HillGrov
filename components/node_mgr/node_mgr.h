@@ -55,10 +55,10 @@ int  node_mgr_push_cfg(uint8_t zone);
  * three. All are foreign-task safe (httpd workers, cmd_task).
  *
  * get: unwrapped COPIES of this zone's two cached planes. 0 = the CFG plane is
- *   cached; an absent HW plane is zeroed with *hw_gen 0 (a zone is adopted CFG
- *   first, so that window is real). -1 = zone out of range, or nothing cached
- *   yet -- the master has not finished adopting the zone. cfg is required,
- *   hw/cfg_gen/hw_gen may be NULL.
+ *   cached; an absent HW plane is zeroed and reported through *hw_present 0 (a
+ *   zone is adopted CFG first, so that window is real). -1 = zone out of range,
+ *   or nothing cached yet -- the master has not finished adopting the zone.
+ *   cfg is required, hw/cfg_gen/hw_present may be NULL.
  * set: ASYNCHRONOUS. The payload is queued for the node_mgr task's next 1 Hz
  *   tick, which stamps generation = max(heartbeat, cache) + 1 and
  *   source = MASTER, adopts it into the cache and pushes it (chunks + a
@@ -75,8 +75,15 @@ int  node_mgr_push_cfg(uint8_t zone);
  *   not ONLINE, -2 = a write or a transfer for this zone is already in flight.
  *   Task 12 maps -1 to 404 and -2/-3 to 409.
  * busy: 1 while that is the case -- poll it to know when a save has landed. */
+/* hw_present (optional): 1 when a real HW plane was unwrapped into *hw, 0 when
+ * it is absent and *hw has been zeroed. It must NOT be inferred from a
+ * generation: the HW plane carries no generation anywhere on the wire (the zone
+ * sends gen 0, node_mgr caches gen 0 -- node_mgr_cfgx.c ruling #7), so a gen of
+ * 0 means "HW", not "missing". A caller that validates against *hw has to know
+ * which it got: passing a zeroed hw to hg_cfg_validate silently disables the
+ * pump-limit rules, and treating a present plane as absent rejects every save. */
 int  node_mgr_cfg_get(uint8_t zone, hg_zone_cfg_t *cfg, hg_zone_hw_t *hw,
-                      uint32_t *cfg_gen, uint32_t *hw_gen);
+                      uint32_t *cfg_gen, int *hw_present);
 int  node_mgr_cfg_set(uint8_t zone, const hg_zone_cfg_t *cfg);
 int  node_mgr_cfg_busy(uint8_t zone);
 
