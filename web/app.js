@@ -952,10 +952,21 @@ HG.views.cfgIdxSelector = function (count, cur) {
   return '<div class="cfg-idx-selector">' + btns + "</div>";
 };
 
+/* The two documents have DIFFERENT shapes and therefore need different
+ * accessors: a zone document is nested ({gen,hw:{...},cfg:{...}}) and is read
+ * by cfgFieldOriginal; the master's mcfg (zone 0, hg_json_export_mcfg) is FLAT
+ * ({WIFI:{...},TIME:{...},SYS:{...}}) and is read by mgroupOriginal. Falling
+ * through to cfgFieldOriginal for zone 0 makes every group miss (there is no
+ * doc.cfg at all on a master document) and renders every master field blank --
+ * with the dashboard simultaneously showing the STA associated, so the page
+ * reads as "master unconfigured" and any edit made there is made blind. The
+ * SAVE path (HG.buildCfgMergeBody) already picks the accessor on id === 0;
+ * this is the same choice on the RENDER path. */
 HG.cfgFieldValue = function (zoneId, doc, group, idx, key) {
   var dirty = HG.state.cfgDirty[zoneId] || {};
   var dk = group + "|" + idx + "|" + key;
   if (Object.prototype.hasOwnProperty.call(dirty, dk)) return dirty[dk];
+  if (zoneId === 0) return mgroupOriginal(doc, group, key);
   return cfgFieldOriginal(doc, group, idx, key);
 };
 
