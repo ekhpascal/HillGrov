@@ -18,7 +18,7 @@ endif()
 idf_component_register(
     SRCS ${HTTP_SRV_SRCS}
     INCLUDE_DIRS "."
-    REQUIRES esp_http_server cmd_core cmd_task web_auth hg_mcfg web_assets fw_srv
+    REQUIRES esp_http_server cmd_core cmd_task web_auth hg_mcfg web_assets fw_srv mcfg_ops
     PRIV_REQUIRES app_common time_svc time_core hg_blob nvs_flash mbedtls esp_hw_support espressif__cjson
                   esp_timer
                   app_update esp_partition

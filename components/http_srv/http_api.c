@@ -12,6 +12,7 @@
 #include "node_mgr.h"
 #include "app_if_common.h"
 #include "mcfg_store.h"
+#include "mcfg_ops.h"
 #include "master_cmds.h"   /* net_ops_t -- a component header, safe to include */
 #include "http_srv_internal.h"
 
@@ -19,11 +20,11 @@ static const char *TAG = "http_api";
 
 /* net_ops_master.{h,c} live in master/main -- an app, not a component -- so
  * this component cannot include that header (same reason http_login.c
- * extern-declares master_web_set_password rather than including it). These
- * three symbols are the whole contract this file needs from it. */
+ * extern-declares master_web_set_password rather than including it). This is
+ * the whole contract this file needs from it; the lock itself now comes from
+ * components/mcfg_ops (Task 5), which both this file and http_api_cfg.c take
+ * the SAME instance of. */
 extern const net_ops_t *master_net_ops(void);
-extern int  master_net_ops_try_lock(uint32_t ms);
-extern void master_net_ops_unlock(void);
 
 /* ---- GET /api/schema: built once, served forever ---- */
 
@@ -176,13 +177,13 @@ esp_err_t h_wifi_scan(httpd_req_t *req) {
      * concurrently with a net_ops apply (SET WIFI STA/AP/TZ, SET WEB
      * PASSWORD, or this same handler's own PUT /api/config?zone=0 path),
      * which all take this same net_ops_master mutex internally. */
-    if (master_net_ops_try_lock(100) != 0) {
+    if (mcfg_ops_lock(100) != 0) {
         http_srv_error(req, 409, "BUSY", NULL);
         return http_srv_done(req, 0);
     }
     wifi_scan_t out[20];
     int n = wifi_mgr_scan(out, 20);
-    master_net_ops_unlock();
+    mcfg_ops_unlock();
 
     if (n < 0) {
         http_srv_error(req, 500, "INTERNAL", NULL);
@@ -241,9 +242,9 @@ esp_err_t h_wifi_set(httpd_req_t *req) {
     }
 
     /* net_ops_t's set_sta/set_ap already serialize themselves against every
-     * other net_ops write (net_ops_master.c's own internal lock) -- this
-     * handler must NOT also hold master_net_ops_try_lock() around the call,
-     * that mutex is not recursive. */
+     * other net_ops write (via components/mcfg_ops's mcfg_ops_edit()) -- this
+     * handler must NOT also hold mcfg_ops_lock() around the call, that mutex
+     * is not recursive. */
     const net_ops_t *net = master_net_ops();
     int rc = sta ? net->set_sta(ssid, pass) : net->set_ap(ssid, pass);
     cJSON_Delete(root);

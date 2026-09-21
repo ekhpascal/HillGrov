@@ -14,15 +14,16 @@
 
 static const char *TAG = "http_api_cfg";
 
-/* net_ops_master.{h,c} live in master/main -- an app, not a component -- so
- * this component cannot include that header (same reason http_api.c and
- * http_login.c extern-declare rather than include). cfg_put_zone0 below
- * takes this same lock the CLI's SET WIFI/TZ rows take internally
- * (net_ops_master.c's net_set_sta/net_set_ap/net_set_tz), so a concurrent
- * console command and a zone-0 PUT can never interleave their own
- * snapshot -> modify -> commit -> apply sequences. */
-extern int  master_net_ops_try_lock(uint32_t ms);
-extern void master_net_ops_unlock(void);
+/* components/mcfg_ops owns the master-config read-modify-write lock and the
+ * snapshot->modify->commit sequence (Task 5: moved out of the app file
+ * master/main/net_ops_master.c, which this component used to reach through
+ * extern declarations -- its own comment called that awkward). cfg_put_zone0
+ * below takes this same lock the CLI's SET WIFI/TZ rows take internally
+ * (net_ops_master.c's net_set_sta/net_set_ap/net_set_tz, via
+ * mcfg_ops_edit()), so a concurrent console command and a zone-0 PUT can
+ * never interleave their own snapshot -> modify -> commit -> apply
+ * sequences. */
+#include "mcfg_ops.h"
 
 /* zone=N&secrets=0|1, both optional. Review fix round 1 (CRITICAL #3): a
  * present-but-unparsable value must NOT silently fall back to the default --
@@ -191,7 +192,7 @@ static esp_err_t cfg_put_zone(httpd_req_t *req, uint8_t zone, const char *body) 
  *
  * Review fix round 1 (CRITICAL #1): the whole snapshot -> merge -> validate
  * -> commit -> wifi_mgr_apply -> time_svc_apply_mcfg sequence now runs under
- * master_net_ops_try_lock() -- the exact mutex net_ops_master.c's own
+ * mcfg_ops_lock() -- the exact mutex net_ops_master.c's own
  * net_set_sta/net_set_ap/net_set_tz already hold across their own identical
  * sequence, named in that file's own comment as being for this handler.
  * Without it, a concurrent console `SET WIFI STA`/`SET TZ` and this PUT both
@@ -201,7 +202,7 @@ static esp_err_t cfg_put_zone(httpd_req_t *req, uint8_t zone, const char *body) 
  * handler was bypassing entirely by going straight to mcfg_commit(). 100 ms
  * try-lock, same budget h_wifi_scan uses; 409 BUSY on failure to acquire. */
 static esp_err_t cfg_put_zone0(httpd_req_t *req, const char *body) {
-    if (master_net_ops_try_lock(100) != 0) {
+    if (mcfg_ops_lock(100) != 0) {
         http_srv_error(req, 409, "BUSY", NULL);
         return http_srv_done(req, 1);
     }
@@ -211,38 +212,38 @@ static esp_err_t cfg_put_zone0(httpd_req_t *req, const char *body) {
     char err[64] = "";
     int rc = hg_json_merge_mcfg(&scratch, body, err, sizeof err);
     if (rc == -1) {
-        master_net_ops_unlock();
+        mcfg_ops_unlock();
         http_srv_error(req, 400, "BAD_JSON", NULL);
         return http_srv_done(req, 1);
     }
     if (rc == -2) {
-        master_net_ops_unlock();
+        mcfg_ops_unlock();
         http_srv_error(req, 400, "INVALID_FIELD", err);
         return http_srv_done(req, 1);
     }
 
     char verr[64] = "";
     if (hg_mcfg_validate(&scratch, tz_check, verr, sizeof verr) != 0) {
-        master_net_ops_unlock();
+        mcfg_ops_unlock();
         http_srv_error(req, 400, "VALIDATION", verr);
         return http_srv_done(req, 1);
     }
 
     rc = mcfg_commit(&scratch);
     if (rc == -1) {   /* defensive: see above -- the pre-check should have already caught this */
-        master_net_ops_unlock();
+        mcfg_ops_unlock();
         http_srv_error(req, 400, "VALIDATION", NULL);
         return http_srv_done(req, 1);
     }
     if (rc == -2) {
-        master_net_ops_unlock();
+        mcfg_ops_unlock();
         http_srv_error(req, 503, "STORAGE", NULL);
         return http_srv_done(req, 1);
     }
 
     wifi_mgr_apply();
     time_svc_apply_mcfg();
-    master_net_ops_unlock();
+    mcfg_ops_unlock();
     http_srv_json(req, 200, "{\"ok\":true}");
     return http_srv_done(req, 1);
 }

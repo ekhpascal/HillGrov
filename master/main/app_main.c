@@ -17,6 +17,7 @@
 #include "fw_srv.h"
 #include "http_srv.h"
 #include "mcfg_store.h"
+#include "mcfg_ops.h"
 #include "time_svc.h"
 #include "alarm_mgr.h"
 
@@ -64,6 +65,7 @@ void app_main(void) {
     if (err != ESP_OK) ESP_LOGE(TAG, "nvs_flash_init failed: %s", esp_err_to_name(err));
 
     if (mcfg_store_init() != 0) ESP_LOGW(TAG, "mcfg defaults in use");
+    mcfg_ops_init();
 
     /* Before http_srv_start(), and deliberately not only from it: on a boot
      * where the radio never comes up the server is never started, and a

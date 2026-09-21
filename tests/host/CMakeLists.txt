@@ -23,7 +23,7 @@ include_directories(
   ${COMP}/cli_line ${COMP}/notify ${COMP}/cmd_core ${COMP}/cmd_common
   ${COMP}/zone_cmds ${COMP}/rescue_handover ${COMP}/ring_proto ${COMP}/node_store ${COMP}/ota_trial
   ${COMP}/master_cmds ${COMP}/node_mgr ${COMP}/ring_link ${COMP}/web_auth ${COMP}/hg_json ${COMP}/alarm_mgr
-  ${COMP}/time_core ${COMP}/wifi_mgr ${COMP}/state_snap ${COMP}/http_srv
+  ${COMP}/time_core ${COMP}/wifi_mgr ${COMP}/state_snap ${COMP}/http_srv ${COMP}/mcfg_ops
   ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
 enable_testing()
 function(hg_test NAME)
@@ -79,3 +79,13 @@ target_link_libraries(test_http_body_sizes cjson_host)
 hg_test(test_partitions_p4)
 target_compile_definitions(test_partitions_p4 PRIVATE
     HG_PARTITIONS_P4_CSV="${CMAKE_CURRENT_LIST_DIR}/../../master/partitions_p4.csv")
+
+# mcfg_ops.c is real production code, compiled straight from source like
+# http_routes.c above -- only what is underneath it is faked: the FreeRTOS
+# mutex (fakes/freertos/*.h, header-only) and mcfg_store.c's NVS-backed
+# mcfg_get()/mcfg_commit() (fakes/fake_mcfg_store.c, a RAM-only stand-in that
+# still runs the REAL hg_mcfg_validate()). Same shape as test_node_mgr_cfg.c
+# linking node_mgr's real decision logic against fake_nmgr.c instead of the
+# real, hardware-touching node_mgr.c.
+hg_test(test_mcfg_ops ${COMP}/mcfg_ops/mcfg_ops.c ${COMP}/hg_mcfg/hg_mcfg.c ${HG_CFG_SRC}
+        ${COMP}/hg_blob/hg_blob.c fakes/fake_mcfg_store.c)
