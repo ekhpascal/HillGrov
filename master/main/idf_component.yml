@@ -2,3 +2,14 @@ dependencies:
   idf: ">=6.0"
   espressif/cjson: "^1.7.18"
   espressif/mdns: "^1.8.0"
+  # P4 only: esp_wifi has no radio of its own on this target, so every
+  # esp_wifi_* call routes to the on-board C6 over SDIO. The rules key keeps
+  # the ESP32 build's dependency set unchanged.
+  espressif/esp_hosted:
+    version: "*"
+    rules:
+      - if: "target == esp32p4"
+  espressif/esp_wifi_remote:
+    version: "*"
+    rules:
+      - if: "target == esp32p4"

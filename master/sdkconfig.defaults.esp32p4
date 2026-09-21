@@ -1,0 +1,17 @@
+CONFIG_IDF_TARGET="esp32p4"
+
+# Early P4 silicon (rev v1.3). IDF 6.0.1 defaults to rev v3.1 and the families
+# are mutually exclusive: without these, esptool refuses the flash with
+# "requires chip revision in range [v3.1 - v3.99] (this chip is revision v1.3)".
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y
+
+# 32 MB on the board; the stock default declares 2 MB and the bootloader clamps.
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+
+# P4 puts the partition table at 0x8000, not the ESP32's 0xE000.
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+
+# The MIPI-DSI frame buffer and LVGL need PSRAM (ESP32-P4NRW32, in package).
+# Harmless here and required by the panel plan that follows.
+CONFIG_SPIRAM=y
