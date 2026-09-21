@@ -498,7 +498,12 @@ git commit -m "fix(bootloader): build for the P4 and move the rescue pin off the
 
 - [ ] **Step 5: Bench-verify the rescue paths on the P4**
 
-There is no host test for a bootloader. Flash the P4 (`python tools/flash_all.py --port COM28 --target esp32p4`, which writes bootloader + table + apps) and verify all four paths on hardware, reading the console for `hg_boot` lines:
+There is no host test for a bootloader. **This step has been MOVED to Task 7** — it needs a human to
+hold a pin low for timed intervals and it overwrites live hardware, so it cannot run inside an
+implementer task. Task 7 Step 1 carries the corrected flash command (`--board master --target esp32p4
+--build-dir master/build_p4`, dry-run first) and the caveat that the P4 `factory` slot will be empty
+because no P4 rescue app is built. The four paths to verify on hardware, reading the console for
+`hg_boot` lines, are:
 
 | Action | Expected |
 |---|---|
@@ -825,11 +830,32 @@ Everything above is build-time. This is the first time the real master runs on t
 
 ```
 & C:\esp\v6.0.1\esp-idf\export.ps1
-idf.py -C master -B build_p4 -D SDKCONFIG=build_p4/sdkconfig build
-python tools/flash_all.py --port COM28 --target esp32p4
-python tools/flash_app.py --app cpfw --port COM28 --target esp32p4
+Set-Location C:\Projects\HillGrov\master
+idf.py -B C:\Projects\HillGrov\master\build_p4 -DIDF_TARGET=esp32p4 `
+       -DSDKCONFIG=C:\Projects\HillGrov\master\build_p4\sdkconfig `
+       -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.esp32p4" build
+Set-Location C:\Projects\HillGrov
+python tools/flash_all.py --board master --target esp32p4 --build-dir master/build_p4 --port COM28 --dry-run
+python tools/flash_all.py --board master --target esp32p4 --build-dir master/build_p4 --port COM28
+python tools/flash_app.py --app cpfw --target esp32p4 --cp-image <path to eh_cp_wifi_softap.bin> --port COM28
 ```
+**Dry-run first and read every printed path**: each one must say `build_p4`. An earlier draft of this
+step read `python tools/flash_all.py --port COM28 --target esp32p4`, which was wrong twice over —
+`--board` is required so it fails outright, and adding `--board master` alone would have read
+`master/build`, the **ESP32 xtensa** build this plan's own regression gate keeps green, and written it
+at P4 offsets. `-DIDF_TARGET=esp32p4` is likewise mandatory; `SDKCONFIG_DEFAULTS` alone does not select
+the target (see Global Constraints), and without it the build silently produces an ESP32 image that
+still adopts the P4 flash size and table offset.
+
 Record the image size and the free percentage of `ota_0`.
+
+**Expect `warning: rescue app not built yet ... skipping rescue slot`, and do not treat it as a
+fault.** `rescue/sdkconfig.defaults` pins `CONFIG_IDF_TARGET="esp32"` and there is no
+`rescue/sdkconfig.defaults.esp32p4`, so nothing in this plan builds a rescue app for the P4 and the
+P4 `factory` partition will be **empty**. Consequence for the rescue ladder below: the `>=10 s` hold
+will print its `-> factory` line with no image behind it. **Observe what the bootloader actually does
+with an empty factory slot and record it; do not score that rung as a pass or a failure.** Building a
+P4 rescue app is out of scope here and belongs to a later plan.
 
 - [ ] **Step 2: Verify the boot and the co-processor**
 
@@ -874,7 +900,26 @@ Ring: `P4 IO28 (TX) → first zone RX → ... → last zone TX → P4 IO29 (RX)`
 
 - [ ] **Step 2: Verify enrolment and that config survived**
 
-Expected: `GET NODES` shows all three ONLINE, and **each zone keeps its existing config generation** — the P4 has an empty node table, and §4.4 reconciliation must PULL each zone's config rather than push defaults over it. A zone whose generation resets to a low number is a serious defect; stop and report it.
+Expected: `GET NODES` shows all three ONLINE, and §4.4 reconciliation **PULLs** each zone's config
+rather than pushing defaults over it.
+
+**Do not treat a low generation number as a defect by itself.** The master persists no zone config at
+all: `components/node_mgr/node_mgr_cfg.c` holds RAM arrays only, memset at init, and there are no NVS
+writes anywhere in `components/node_mgr/`. A freshly flashed P4 therefore has an empty node table and
+empty per-zone caches *by construction*, so the reconciler can only take the adopt branch, and the
+generation you read is whatever **the zone itself** holds. `Gen : 0` on a zone whose own NVS was wiped
+is the EXPECTED result, not a failure.
+
+The real defect signals are narrower, and these are what to stop on:
+- a generation that **dropped** on a zone whose NVS was never touched, or
+- `Gen : 0` on a zone whose own `GET CONFIG` still shows non-default fields — that means the master
+  overwrote a zone that had config to keep.
+
+**Pre-step 0, before the P4 is flashed:** record `GET ID` and `GET CONFIG` on all three zone consoles
+plus the MAC-to-id map, and save them to a file. Without that baseline, "config survived" is
+unfalsifiable — there is no master-side copy to compare against. That dump is also the only restore
+path for the hardware plane (pin map, soil dry/wet calibration, `pump_max_run_s` / `pump_max_daily_s`
+caps), which the master never stores and the web UI cannot write.
 
 - [ ] **Step 3: Verify blame on a held zone**
 
