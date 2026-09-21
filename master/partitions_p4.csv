@@ -1,0 +1,18 @@
+# Master v2 (ESP32-P4, 32 MB). Bootloader 0x2000, partition table 0x8000 --
+# both P4 values, unlike the ESP32 table's 0x1000/0xE000.
+#
+# App slots are 4 MB, double the ESP32's: the master is already 966 KB and the
+# panel UI adds LVGL, a large subsetted clock font and an image decoder. cp_fw
+# holds the ESP32-C6 co-processor image so a master OTA does not have to carry
+# a megabyte of unchanged radio firmware (the bring-up spike embedded it in the
+# app, which worked but bloated every update).
+# Name,     Type, SubType, Offset,    Size
+nvs,        data, nvs,     0x10000,   0x10000
+otadata,    data, ota,     0x20000,   0x2000
+phy_init,   data, phy,     0x22000,   0x1000
+factory,    app,  factory, 0x30000,   0x200000
+ota_0,      app,  ota_0,   0x230000,  0x400000
+ota_1,      app,  ota_1,   0x630000,  0x400000
+zone_fw,    data, 0x40,    0xA30000,  0x180000
+cp_fw,      data, 0x41,    0xBB0000,  0x180000
+data,       data, spiffs,  0xD30000,  0x400000

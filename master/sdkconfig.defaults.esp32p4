@@ -11,6 +11,7 @@ CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
 
 # P4 puts the partition table at 0x8000, not the ESP32's 0xE000.
 CONFIG_PARTITION_TABLE_OFFSET=0x8000
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_p4.csv"
 
 # The MIPI-DSI frame buffer and LVGL need PSRAM (ESP32-P4NRW32, in package).
 # Harmless here and required by the panel plan that follows.

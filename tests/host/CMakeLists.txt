@@ -76,3 +76,6 @@ target_link_libraries(test_state_snap cjson_host)
 hg_test(test_http_routes ${COMP}/http_srv/http_routes.c)
 hg_test(test_http_body_sizes)
 target_link_libraries(test_http_body_sizes cjson_host)
+hg_test(test_partitions_p4)
+target_compile_definitions(test_partitions_p4 PRIVATE
+    HG_PARTITIONS_P4_CSV="${CMAKE_CURRENT_LIST_DIR}/../../master/partitions_p4.csv")
