@@ -530,8 +530,8 @@ This is the one refactor in this plan, and unlike the rest it is host-testable.
 - Produces, and both the HTTP handlers and the panel UI must use exactly these:
   - `int mcfg_ops_lock(uint32_t ms);` — 0 acquired, -1 not acquired within `ms` (including "mutex not created yet", which is a failure to take, never an open lock).
   - `void mcfg_ops_unlock(void);`
-  - `int mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx);` — takes the lock, snapshots `mcfg_get()`, calls `fn` on the copy, commits if `fn` returned 0, releases. **This is the entry point that makes the read-modify-write atomic for every caller.** Return contract, which is split three ways on purpose: `fn` returns 0 to commit or a **positive** value to refuse (returned unchanged, nothing written); all negative returns are reserved for the component, namely -1 lock unavailable, **-2 commit failed on storage (NVS or mutex)** and **-3 commit rejected as invalid**. Negative-for-infrastructure / positive-for-refusal keeps the bands from ever colliding. The -2/-3 split exists because `mcfg_commit()` itself returns `-1 invalid / -2 nvs-or-mutex-unavailable` and the CLI and web surfaces map those to *different* owner-visible errors (`ERR INVALID` vs `ERR STORAGE`). Collapsing them would tell an owner who typed a bad POSIX TZ that their storage failed.
-  - `void mcfg_ops_init(void);` — creates the mutex; idempotent; called once at boot before any other entry point.
+  - `int mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx, void (*apply)(void *ctx), const char *what);` — takes the lock, snapshots `mcfg_get()`, calls `fn` on the copy, commits if `fn` returned 0, **then calls `apply` STILL HOLDING THE LOCK** (pass `NULL` when there is nothing to apply), and only then releases. `what` is the log label the commit path prints, e.g. `"SET TZ"`. The apply-under-lock is not a convenience: every pre-existing writer held the lock across its `wifi_mgr_apply()` / `time_svc_apply_mcfg()` / `http_auth_sessions_drop()`, and `GET /api/wifi/scan` takes the same lock precisely so a radio reconfigure cannot land underneath a scan. An `apply` that runs after the release silently removes that exclusion. **This is the entry point that makes the read-modify-write atomic for every caller.** Return contract, which is split three ways on purpose: `fn` returns 0 to commit or a **positive** value to refuse (returned unchanged, nothing written); all negative returns are reserved for the component, namely -1 lock unavailable, **-2 commit failed on storage (NVS or mutex)** and **-3 commit rejected as invalid**. Negative-for-infrastructure / positive-for-refusal keeps the bands from ever colliding. The -2/-3 split exists because `mcfg_commit()` itself returns `-1 invalid / -2 nvs-or-mutex-unavailable` and the CLI and web surfaces map those to *different* owner-visible errors (`ERR INVALID` vs `ERR STORAGE`). Collapsing them would tell an owner who typed a bad POSIX TZ that their storage failed.
+  - `void mcfg_ops_init(void);` — creates the mutex; idempotent. **Must be called before any task that can write config is started** — in `master/main/app_main.c` that means before `cmd_task_start()`, not merely after `mcfg_store_init()`, because the CLI and command task come up first and a `SET` from the console in between would find no mutex. `lock_take()` therefore fails CLOSED on a missing mutex: an uninitialised lock refuses the write rather than proceeding unsynchronised.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -547,10 +547,13 @@ Create `tests/host/test_mcfg_ops.c`. The lock is a FreeRTOS mutex, so the host b
 #include "unity.h"
 #include "mcfg_ops.h"
 #include "hg_mcfg.h"
+#include "mcfg_store.h"   /* mcfg_get(); mcfg_ops.h does not pull this in */
+#include <stdio.h>        /* snprintf */
 #include <string.h>
 
 static int set_hostname(hg_mcfg_t *m, void *ctx) {
-    snprintf(m->sys.hostname, sizeof m->sys.hostname, "%s", (const char *)ctx);
+    /* hg_mcfg_t is FLAT -- there is no `sys` sub-struct. */
+    snprintf(m->hostname, sizeof m->hostname, "%s", (const char *)ctx);
     return 0;
 }
 
@@ -562,18 +565,18 @@ static int reject(hg_mcfg_t *m, void *ctx) {
 
 void test_edit_commits_when_the_edit_function_accepts(void) {
     mcfg_ops_init();
-    TEST_ASSERT_EQUAL_INT(0, mcfg_ops_edit(set_hostname, "greenhouse"));
-    TEST_ASSERT_EQUAL_STRING("greenhouse", mcfg_get()->sys.hostname);
+    TEST_ASSERT_EQUAL_INT(0, mcfg_ops_edit(set_hostname, "greenhouse", NULL, "TEST"));
+    TEST_ASSERT_EQUAL_STRING("greenhouse", mcfg_get()->hostname);
 }
 
 void test_a_rejecting_edit_does_not_commit_and_leaves_no_trace(void) {
     mcfg_ops_init();
-    mcfg_ops_edit(set_hostname, "before");
-    TEST_ASSERT_EQUAL_INT(3, mcfg_ops_edit(reject, NULL));
+    mcfg_ops_edit(set_hostname, "before", NULL, "TEST");
+    TEST_ASSERT_EQUAL_INT(3, mcfg_ops_edit(reject, NULL, NULL, "TEST"));
     /* The edit function scribbled on its copy and then refused. The live config
        must still read "before" -- if mcfg_ops handed out a pointer to the live
        buffer instead of a copy, this reads "scribbled". */
-    TEST_ASSERT_EQUAL_STRING("before", mcfg_get()->sys.hostname);
+    TEST_ASSERT_EQUAL_STRING("before", mcfg_get()->hostname);
 }
 
 void test_lock_is_not_recursive_so_a_second_take_fails_fast(void) {
@@ -589,7 +592,7 @@ void test_edit_reports_failure_when_the_lock_is_held(void) {
     mcfg_ops_init();
     TEST_ASSERT_EQUAL_INT(0, mcfg_ops_lock(10));
     /* Must NOT proceed unsynchronised. */
-    TEST_ASSERT_EQUAL_INT(-1, mcfg_ops_edit(set_hostname, "racer"));
+    TEST_ASSERT_EQUAL_INT(-1, mcfg_ops_edit(set_hostname, "racer", NULL, "TEST"));
     mcfg_ops_unlock();
 }
 
@@ -628,7 +631,11 @@ extern "C" {
  *
  * mcfg_commit() serializes commits against each other but NOT the
  * snapshot-modify-commit sequence, which is why this lock exists on top. */
-void mcfg_ops_init(void);                  /* idempotent; call once at boot */
+/* Idempotent. Call once at boot BEFORE starting any task that can write config
+ * -- in app_main.c that is before cmd_task_start(), since the CLI comes up
+ * first. lock_take() fails closed if the mutex is missing, so an uninitialised
+ * lock refuses the write rather than running unsynchronised. */
+void mcfg_ops_init(void);
 
 /* 0 acquired / -1 not acquired within ms. "Not created yet" counts as NOT
  * acquired -- a caller that somehow runs before boot wiring answers busy
@@ -648,8 +655,20 @@ void mcfg_ops_unlock(void);
  *   -3  mcfg_commit() rejected the config as invalid
  * The -2/-3 split is not decoration: mcfg_commit() distinguishes those two, and
  * the CLI and web surfaces map them to different owner-visible errors
- * (ERR STORAGE vs ERR INVALID). */
-int  mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx);
+ * (ERR STORAGE vs ERR INVALID).
+ *
+ * apply runs after a successful commit and STILL HOLDS THE LOCK; pass NULL when
+ * there is nothing to apply. That scope is deliberate and predates this
+ * component: every writer held the lock across its wifi_mgr_apply() /
+ * time_svc_apply_mcfg() / http_auth_sessions_drop(), and GET /api/wifi/scan
+ * takes this same lock so a radio reconfigure cannot land underneath a scan.
+ * An apply that ran after the release would quietly delete that exclusion.
+ * apply must therefore never call back into mcfg_ops_lock()/mcfg_ops_edit() --
+ * the lock is not recursive.
+ *
+ * what is the label the commit path logs, e.g. "SET TZ". */
+int  mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx,
+                   void (*apply)(void *ctx), const char *what);
 
 #ifdef __cplusplus
 }
