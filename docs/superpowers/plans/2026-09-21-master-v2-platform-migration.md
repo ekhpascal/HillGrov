@@ -14,7 +14,8 @@
 
 - **ESP-IDF 6.0.1 only**, at `C:\esp\v6.0.1\esp-idf`. Run `& C:\esp\v6.0.1\esp-idf\export.ps1` in PowerShell before any `idf.py`. The Bash tool cannot source the IDF environment — `export.sh` fails and `idf.py` is then not found, while the shell still reports exit 0, so **always read build output rather than trusting the exit code**.
 - **Never `idf.py flash` a HillGrow app.** Use `python tools/flash_app.py --app master|zone|rescue|zonefw --port COMx`. `idf.py flash` writes the factory/rescue slot.
-- **The ESP32 build must stay byte-for-byte behaviourally unchanged** at every task boundary. `master`, `zone` and `rescue` all build clean and the host suite stays at **32/32**. This is the regression gate for every task.
+- **The ESP32 build must stay byte-for-byte behaviourally unchanged** at every task boundary. `master`, `zone` and `rescue` all build clean and the host suite passes 100%. This is the regression gate for every task.
+- **How the host suite is counted.** `tests/host/CMakeLists.txt` defines `hg_test(NAME)` which calls `add_test()` **once per file**, so CTest reports one entry per test *file*, not per Unity `RUN_TEST` case. The baseline is **32 entries** (containing 446 RUN_TEST cases); each new test file adds exactly **one** CTest entry however many cases it holds. Verified empirically 2026-09-21 after an earlier draft of this plan got the arithmetic wrong.
 - **P4 silicon is rev v1.3.** IDF 6.0.1 defaults to rev v3.1 and the two families are mutually exclusive — esptool refuses the flash outright with *"requires chip revision in range [v3.1 - v3.99]"*. Every P4 config carries `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y` and `CONFIG_ESP32P4_REV_MIN_100=y`. A binary built this way runs **only** on P4 rev 0.x/1.x.
 - **The board has 32 MB of flash**; the stock default declares 2 MB in the image header and the bootloader clamps to it. `CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y`.
 - **P4 flash offsets differ from ESP32:** bootloader `0x2000` (not `0x1000`), partition table `0x8000` (not `0xE000`).
@@ -295,7 +296,7 @@ data,       data, spiffs,  0xD30000,  0x400000
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `idf.py -C master build`
-Expected: `100% tests passed` with the count now **37** (32 existing + 5 new cases). Then confirm IDF agrees the table is well-formed:
+Expected: `100% tests passed ... out of 33` — the 5 new cases live in ONE new CTest entry, so the count goes 32 → 33, not 32 → 37. Then confirm IDF agrees the table is well-formed:
 ```
 idf.py -C master -B build_p4 -D SDKCONFIG=build_p4/sdkconfig partition-table
 ```
@@ -476,7 +477,7 @@ Expected: either it completes, or it fails on further ESP32-isms. The file's own
 - [ ] **Step 3: Verify the ESP32 bootloader is unchanged**
 
 Run: `idf.py -C master build` and `idf.py -C rescue build`
-Expected: both complete; host suite 37/37. Compare the reported `Bootloader binary size` against the pre-change value (`0x6c70`, 48% free) — **it must be identical**. A changed ESP32 bootloader size means a `#if` fell the wrong way.
+Expected: both complete; host suite 33/33. Compare the reported `Bootloader binary size` against the pre-change value (`0x6c70`, 48% free) — **it must be identical**. A changed ESP32 bootloader size means a `#if` fell the wrong way.
 
 - [ ] **Step 4: Commit**
 
@@ -654,7 +655,7 @@ Call `mcfg_ops_init()` in `master/main/app_main.c` immediately after `mcfg_store
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `idf.py -C master build`
-Expected: `100% tests passed` at **42** (37 + 5 new). Then `idf.py -C zone build` and `idf.py -C rescue build` clean — `http_srv` is master-only, but a new component in `components/` is discovered by every app, so confirm none of them grew a dependency.
+Expected: `100% tests passed ... out of 34` (33 + one new test file). Then `idf.py -C zone build` and `idf.py -C rescue build` clean — `http_srv` is master-only, but a new component in `components/` is discovered by every app, so confirm none of them grew a dependency.
 
 - [ ] **Step 6: Bench-verify no behaviour changed**
 
@@ -744,7 +745,7 @@ Expected: FAIL — `cp_ota.h` not found.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `idf.py -C master build`
-Expected: `100% tests passed` at **46** (42 + 4).
+Expected: `100% tests passed ... out of 35` (34 + one new test file).
 
 - [ ] **Step 5: Wire it in and add the flashing path**
 
