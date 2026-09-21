@@ -14,8 +14,14 @@ extern "C" {
  * the ESP32 master/zone/rescue and the ESP32-P4 master -- so it never
  * includes anything from esp_hosted (that component only resolves on the
  * P4 build: master/main/idf_component.yml gates espressif/esp_hosted on
- * `target == esp32p4`; components/cp_ota/CMakeLists.txt mirrors that gate
- * for its own PRIV_REQUIRES). See components/cp_ota/cp_ota.c for the
+ * `target == esp32p4`). components/cp_ota/CMakeLists.txt does NOT mirror
+ * that gate with a CONFIG_IDF_TARGET_ESP32P4 guard around REQUIRES/
+ * PRIV_REQUIRES -- fix round 1 found that specific pattern silently
+ * resolves an empty requirements list on a real P4 build (see that
+ * CMakeLists.txt's own comment for the full story); it attaches
+ * espressif__esp_hosted with idf_component_optional_requires() AFTER
+ * idf_component_register() instead, which is a no-op wherever esp_hosted
+ * isn't part of the build. See components/cp_ota/cp_ota.c for the
  * HOST_TEST / CONFIG_IDF_TARGET_ESP32P4 split.
  */
 
@@ -82,24 +88,39 @@ int cp_ota_parse_header(const uint8_t hdr[CP_OTA_HDR_LEN], uint32_t part_size,
                          uint32_t body_crc, uint32_t *len_out);
 
 /* Pushes the image staged in the "cp_fw" partition to the C6 over
- * esp_hosted's RPC OTA channel, but only when cp_ota_needed() says the C6's
- * reported version actually differs from CP_OTA_HOST_VERSION.
+ * esp_hosted's RPC OTA channel, but only when the CP link is actually up
+ * AND cp_ota_needed() says the C6's reported version differs from
+ * CP_OTA_HOST_VERSION.
  *
  * Returns:
- *    0  already matching -- nothing done
- *    1  image pushed and activated (the C6 reboots itself)
- *   -1  no VALID image staged in cp_fw: partition absent, or the header at
- *       offset 0 fails cp_ota_parse_header() (bad magic/length/crc -- this
- *       catches a truncated or corrupted staging write before anything is
- *       sent to the radio, not just an untouched/erased partition)
- *   -2  the push failed partway, AFTER validation passed (the C6 keeps
- *       running its old firmware)
+ *    0  nothing done -- either the CP link isn't up yet this boot (init
+ *       event not parsed: get_fw_version() would be untrustworthy, since an
+ *       unresponsive C6 and a factory CP genuinely reporting 0.0.0 both
+ *       read as 0), or the reported version already matches
+ *    1  image pushed, activated, AND CONFIRMED: the C6 rebooted, re-parsed
+ *       the init event, and reported a version cp_ota_needed() now accepts,
+ *       all within a bounded post-activate wait (fix round 2 -- a plain
+ *       "activate() didn't error" used to be enough for this return value;
+ *       it no longer is)
+ *   -1  no VALID image staged in cp_fw: partition absent, the header at
+ *       offset 0 fails validation (bad magic/length/crc -- this catches a
+ *       truncated or corrupted staging write before anything is sent to the
+ *       radio, not just an untouched/erased partition), OR a flash read
+ *       failed while checking (an I/O fault, not necessarily an actually-
+ *       empty partition -- the log line distinguishes which)
+ *   -2  either the RPC push itself failed partway (the C6 keeps running its
+ *       old firmware), OR the push and activate looked fine but the C6 did
+ *       NOT come back within the bounded wait reporting a version
+ *       cp_ota_needed() accepts (fix round 2, Major 5) -- in both cases
+ *       treat this as a failed update, not a completed one
  *
- * A 1 does NOT mean the new firmware is confirmed running: the C6 reboots
- * on its own ~2 s timer after activation, inside esp_hosted's 5 s RPC wait,
- * so the activate RPC's own reply routinely never arrives. Never trust this
- * return code as proof -- verify by re-reading the C6's version after the
- * link re-handshakes.
+ * This function never reboots the master, on any return path: the update is
+ * version-gated, so a correct image needs no repeat next boot, but a wrong
+ * image auto-rebooting the master on a failed verify would reboot-loop
+ * forever. A -2 from the post-activate verify does NOT mean Wi-Fi is
+ * guaranteed down for the rest of this boot -- only that this function
+ * cannot confirm the C6 is running the version it just tried to push; the
+ * C6 has already rebooted once by that point regardless of the outcome.
  *
  * ESP32 master build: stub, always returns 0. The ESP32 master's Wi-Fi is
  * on-die -- it has no co-processor to update. The real implementation is

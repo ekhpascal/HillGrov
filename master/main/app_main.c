@@ -96,20 +96,6 @@ void app_main(void) {
     int ap_ok = wifi_mgr_start() == 0;
     if (!ap_ok) ESP_LOGE(TAG, "wifi_mgr_start failed -- AP/STA/web unavailable this boot");
 
-    /* Task 6: co-processor OTA, gated on version so a healthy C6 is never
-     * re-flashed on every boot (the bring-up spike's bug). Deliberately after
-     * wifi_mgr_start(), not before -- a working AP proves the RPC path this
-     * needs is actually up. On the ESP32 master (no co-processor) cp_ota_sync()
-     * is a stub that always returns 0. A 1 here is not proof the new firmware
-     * is running (see cp_ota.h) -- it only means the push was accepted and the
-     * C6 was told to reboot into it. */
-    int cp_rc = cp_ota_sync();
-    const char *cp_msg = cp_rc == 0  ? "up to date" :
-                         cp_rc == 1  ? "updated -- C6 rebooting" :
-                         cp_rc == -1 ? "no image staged in cp_fw" :
-                                       "push failed -- C6 keeps its old firmware";
-    ESP_LOGW(TAG, "co-processor OTA: %s (rc=%d)", cp_msg, cp_rc);
-
     /* Flash-only work (header + crc32 over the zone image), so it no longer
      * depends on the radio: fw_srv_image_ok() is what the fleet sequencer's
      * PRECHECK reads, and it should be truthful even on a boot with no Wi-Fi.
@@ -141,6 +127,21 @@ void app_main(void) {
     hg_app_get_mac(mac);
     ring_link_start(1, master_id_fn, mac);
     node_mgr_start();
+
+    /* Task 6: co-processor OTA, gated on version so a healthy C6 is never
+     * re-flashed on every boot (the bring-up spike's bug). Deliberately
+     * AFTER ring_link_start()/node_mgr_start(), not before (fix round 2,
+     * Major 4): the ring is this device's core function and the radio is
+     * not, and cp_ota_sync()'s own internal link-up gate means an
+     * unresponsive C6 can no longer make the host commit to a begin() that
+     * alone can block up to 30 s -- but even a *quick* no-op return
+     * shouldn't sit ahead of the ring on principle. cp_ota_sync() logs its
+     * own outcome at the right level for each case (INFO/WARN/ERROR) --
+     * deliberately no summary log here: an earlier version of this line
+     * always logged "up to date" at WARN, including on the ESP32 master
+     * (whose cp_ota_sync() is a stub that always returns 0), which was
+     * false every single boot on hardware that has no co-processor at all. */
+    cp_ota_sync();
 
     /* spec 3.10 drivers criterion (master): AP netif + httpd both up,
      * checked once here -- Task 10's plan-sequenced obligation this task

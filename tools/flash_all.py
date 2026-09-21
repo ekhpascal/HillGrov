@@ -31,6 +31,22 @@ import hg_otadata
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+
+def build_dir(app, override=None):
+    """override, when given, replaces the whole default <repo>/<app>/build
+    path -- same helper as tools/flash_app.py's. Used for both the board's
+    own files (bootloader/table/otadata/app) AND the rescue slot: fix round
+    2 found rescue_bin hardcoded straight to REPO_ROOT/rescue/build, bypassing
+    --build-dir entirely, so a --target esp32p4 --build-dir <P4 dir> call
+    took bootloader/table/app from the P4 directory but rescue from whatever
+    ESP32 build happened to be sitting in rescue/build -- and wrote that
+    xtensa binary into the P4 factory slot. Routing rescue through this same
+    helper makes --build-dir, when given, cover every file this tool
+    flashes (as the module docstring already claimed); when --build-dir is
+    omitted, rescue's default stays rescue/build exactly as before, because
+    override is None for both calls."""
+    return override if override else os.path.join(REPO_ROOT, app, "build")
+
 # P4 moves all of these. The app offset especially: the ESP32 value 0x170000
 # lands INSIDE the P4 table's factory/rescue partition, so a mis-targeted
 # --board master would overwrite the rescue image with nothing to complain
@@ -96,7 +112,7 @@ def main():
         parser.error(f"--board {args.board} is not a thing on {args.target} "
                      f"(valid: {', '.join(sorted(layout['boards']))})")
 
-    bdir = args.build_dir if args.build_dir else os.path.join(REPO_ROOT, args.board, "build")
+    bdir = build_dir(args.board, args.build_dir)
     bootloader_bin = require_file(os.path.join(bdir, "bootloader", "bootloader.bin"), "bootloader.bin")
     part_table_bin = require_file(os.path.join(bdir, "partition_table", "partition-table.bin"), "partition-table.bin")
     app_bin = require_file(os.path.join(bdir, f"hillgrow_{args.board}.bin"), f"hillgrow_{args.board}.bin")
@@ -112,7 +128,7 @@ def main():
         hex(layout["otadata"]), otadata_bin,
     ]
 
-    rescue_bin = os.path.join(REPO_ROOT, "rescue", "build", "hillgrow_rescue.bin")
+    rescue_bin = os.path.join(build_dir("rescue", args.build_dir), "hillgrow_rescue.bin")
     if os.path.isfile(rescue_bin):
         write_flash_args += [hex(layout["rescue"]), rescue_bin]
     else:
