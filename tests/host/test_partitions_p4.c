@@ -66,8 +66,9 @@ void test_p4_partitions_do_not_overlap_and_clear_the_table(void) {
     part_t p[16];
     int n = load(p, 16);
     for (int i = 0; i < n; i++) {
-        /* table at 0x8000 on the P4; 0x9000 is the first byte a partition may use */
-        TEST_ASSERT_TRUE_MESSAGE(p[i].off >= 0x9000, p[i].name);
+        /* table at 0xF000 on the P4 and IDF reserves 0x1000 for it, so 0x10000
+         * is the first byte a partition may use */
+        TEST_ASSERT_TRUE_MESSAGE(p[i].off >= 0x10000, p[i].name);
         for (int j = i + 1; j < n; j++) {
             unsigned long ae = p[i].off + p[i].size, be = p[j].off + p[j].size;
             TEST_ASSERT_TRUE_MESSAGE(p[i].off >= be || p[j].off >= ae, p[i].name);

@@ -27,6 +27,12 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # --board master would overwrite the rescue image with nothing to complain
 # until rescue was needed. Must match master/partitions.csv (esp32) and
 # master/partitions_p4.csv (esp32p4).
+#
+# The P4 partition table is at 0xF000, NOT IDF's P4 default of 0x8000: the
+# custom bootloader is 0x60f0 bytes and 0x8000 would leave it only the 0x6000
+# above the bootloader at 0x2000. 0xF000 gives it the same 0xD000 window the
+# ESP32 has. Writing the table to 0x8000 here would leave the real table
+# unwritten and the chip would boot the stale one, or none.
 FLASH_LAYOUT = {
     "esp32": {
         "bootloader": 0x1000, "partition_table": 0xE000,
@@ -34,7 +40,7 @@ FLASH_LAYOUT = {
         "boards": ("zone", "master"),
     },
     "esp32p4": {
-        "bootloader": 0x2000, "partition_table": 0x8000,
+        "bootloader": 0x2000, "partition_table": 0xF000,
         "otadata": 0x20000, "rescue": 0x30000, "app": 0x230000,
         "boards": ("master",),
     },
