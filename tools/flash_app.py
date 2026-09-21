@@ -145,7 +145,7 @@ def main():
         otadata_bin = hg_otadata.write_otadata_file(bdir)
         write_flash_args = [hex(OTADATA_OFFSET), otadata_bin, hex(offsets[args.app]), app_bin]
 
-    cmd = [sys.executable, "-m", "esptool", "--chip", "esp32", "-p", args.port,
+    cmd = [sys.executable, "-m", "esptool", "--chip", args.target, "-p", args.port,
            "-b", args.baud, "write-flash"] + write_flash_args
     if args.dry_run:
         print(" ".join(cmd))
