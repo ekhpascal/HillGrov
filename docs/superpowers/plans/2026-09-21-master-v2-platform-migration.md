@@ -530,7 +530,7 @@ This is the one refactor in this plan, and unlike the rest it is host-testable.
 - Produces, and both the HTTP handlers and the panel UI must use exactly these:
   - `int mcfg_ops_lock(uint32_t ms);` — 0 acquired, -1 not acquired within `ms` (including "mutex not created yet", which is a failure to take, never an open lock).
   - `void mcfg_ops_unlock(void);`
-  - `int mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx);` — takes the lock, snapshots `mcfg_get()`, calls `fn` on the copy, commits if `fn` returned 0, releases. Returns `fn`'s non-zero value unchanged, or -1 if the lock could not be taken, or -2 if the commit failed. **This is the entry point that makes the read-modify-write atomic for every caller.**
+  - `int mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx);` — takes the lock, snapshots `mcfg_get()`, calls `fn` on the copy, commits if `fn` returned 0, releases. **This is the entry point that makes the read-modify-write atomic for every caller.** Return contract, which is split three ways on purpose: `fn` returns 0 to commit or a **positive** value to refuse (returned unchanged, nothing written); all negative returns are reserved for the component, namely -1 lock unavailable, **-2 commit failed on storage (NVS or mutex)** and **-3 commit rejected as invalid**. Negative-for-infrastructure / positive-for-refusal keeps the bands from ever colliding. The -2/-3 split exists because `mcfg_commit()` itself returns `-1 invalid / -2 nvs-or-mutex-unavailable` and the CLI and web surfaces map those to *different* owner-visible errors (`ERR INVALID` vs `ERR STORAGE`). Collapsing them would tell an owner who typed a bad POSIX TZ that their storage failed.
   - `void mcfg_ops_init(void);` — creates the mutex; idempotent; called once at boot before any other entry point.
 
 - [ ] **Step 1: Write the failing test**
@@ -556,8 +556,8 @@ static int set_hostname(hg_mcfg_t *m, void *ctx) {
 
 static int reject(hg_mcfg_t *m, void *ctx) {
     (void)ctx;
-    snprintf(m->sys.hostname, sizeof m->sys.hostname, "scribbled");
-    return -3;   /* a validation refusal */
+    snprintf(m->hostname, sizeof m->hostname, "scribbled");
+    return 3;    /* a refusal from fn: POSITIVE, since negatives are reserved */
 }
 
 void test_edit_commits_when_the_edit_function_accepts(void) {
@@ -569,7 +569,7 @@ void test_edit_commits_when_the_edit_function_accepts(void) {
 void test_a_rejecting_edit_does_not_commit_and_leaves_no_trace(void) {
     mcfg_ops_init();
     mcfg_ops_edit(set_hostname, "before");
-    TEST_ASSERT_EQUAL_INT(-3, mcfg_ops_edit(reject, NULL));
+    TEST_ASSERT_EQUAL_INT(3, mcfg_ops_edit(reject, NULL));
     /* The edit function scribbled on its copy and then refused. The live config
        must still read "before" -- if mcfg_ops handed out a pointer to the live
        buffer instead of a copy, this reads "scribbled". */
@@ -637,10 +637,18 @@ void mcfg_ops_init(void);                  /* idempotent; call once at boot */
 int  mcfg_ops_lock(uint32_t ms);
 void mcfg_ops_unlock(void);
 
-/* Atomic snapshot -> fn(copy) -> commit. fn returns 0 to commit, non-zero to
- * refuse (returned unchanged, nothing written). -1 lock unavailable, -2 commit
- * failed. fn receives a PRIVATE copy, so a refusal cannot leave the live
- * config half-modified. */
+/* Atomic snapshot -> fn(copy) -> commit. fn receives a PRIVATE copy, so a
+ * refusal cannot leave the live config half-modified.
+ *
+ * fn returns 0 to commit, or a POSITIVE value to refuse -- returned unchanged,
+ * nothing written. Every NEGATIVE return belongs to this component, so fn must
+ * never return one:
+ *   -1  the lock could not be taken
+ *   -2  mcfg_commit() failed on storage (NVS or mutex)
+ *   -3  mcfg_commit() rejected the config as invalid
+ * The -2/-3 split is not decoration: mcfg_commit() distinguishes those two, and
+ * the CLI and web surfaces map them to different owner-visible errors
+ * (ERR STORAGE vs ERR INVALID). */
 int  mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx);
 
 #ifdef __cplusplus
