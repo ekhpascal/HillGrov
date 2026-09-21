@@ -48,20 +48,23 @@ int mcfg_ops_lock(uint32_t ms) {
 
 void mcfg_ops_unlock(void) { lock_give(); }
 
-/* mcfg_ops_edit()'s own rc convention (mcfg_ops.h): -1 lock unavailable, -2
- * commit failed. mcfg_commit() itself distinguishes a validation reject (-1)
- * from a storage failure (-2), but mcfg_ops_edit() cannot pass that through
- * unchanged -- -1 is already reserved for "lock unavailable" -- so both
- * collapse to -2 here. */
+/* mcfg_ops_edit()'s own rc convention (mcfg_ops.h): fn returns 0 to commit,
+ * a POSITIVE value to refuse (returned unchanged). Every NEGATIVE return
+ * belongs to this component: -1 lock unavailable, -2 mcfg_commit() failed on
+ * storage (its own -2), -3 mcfg_commit() rejected the config as invalid
+ * (its own -1). This split has to survive past this function: the CLI and
+ * web surfaces map -2/-3 to different owner-visible errors (ERR STORAGE /
+ * ERR INVALID) -- fix round 1 collapsed both into -2, which quietly told an
+ * owner who typed a bad POSIX TZ that their storage had failed. */
 static int commit_and_log(hg_mcfg_t *m) {
     int rc = mcfg_commit(m);
     if (rc == 0) return 0;
     if (rc == -2) {
         ESP_LOGE(TAG, "mcfg_ops_edit: mcfg_commit failed to store (NVS/mutex)");
-    } else {
-        ESP_LOGW(TAG, "mcfg_ops_edit: rejected by mcfg validation");
+        return -2;
     }
-    return -2;
+    ESP_LOGW(TAG, "mcfg_ops_edit: rejected by mcfg validation");
+    return -3;
 }
 
 int mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx) {

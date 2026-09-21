@@ -22,13 +22,18 @@ void mcfg_ops_init(void);                  /* idempotent; call once at boot */
 int  mcfg_ops_lock(uint32_t ms);
 void mcfg_ops_unlock(void);
 
-/* Atomic snapshot -> fn(copy) -> commit. fn returns 0 to commit, non-zero to
- * refuse (returned unchanged, nothing written). -1 lock unavailable, -2 commit
- * failed. fn must NOT itself return -1 or -2 -- both are reserved for this
- * function's own two failure modes, so a validator that reused -1 for "bad
- * value" would be silently misreported as "the lock could not be taken".
- * fn receives a PRIVATE copy, so a refusal cannot leave the live config
- * half-modified. */
+/* Atomic snapshot -> fn(copy) -> commit. fn receives a PRIVATE copy, so a
+ * refusal cannot leave the live config half-modified.
+ *
+ * fn returns 0 to commit, or a POSITIVE value to refuse -- returned unchanged,
+ * nothing written. Every NEGATIVE return belongs to this component, so fn must
+ * never return one:
+ *   -1  the lock could not be taken
+ *   -2  mcfg_commit() failed on storage (NVS or mutex)
+ *   -3  mcfg_commit() rejected the config as invalid
+ * The -2/-3 split is not decoration: mcfg_commit() distinguishes those two, and
+ * the CLI and web surfaces map them to different owner-visible errors
+ * (ERR STORAGE vs ERR INVALID). */
 int  mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx);
 
 #ifdef __cplusplus

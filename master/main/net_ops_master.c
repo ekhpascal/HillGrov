@@ -25,25 +25,23 @@ static const char *TAG = "net_ops";
  * that pointer again, per mcfg_store.h's RAM contract.
  *
  * rc convention (master_cmds.h): 0 ok, -1 "the caller asked for something
- * invalid", -2 "valid, but it could not be stored" (NVS write failure, a
- * commit-time validation reject, or the mcfg_ops lock timing out -- retry
- * or check the flash), -3 "this board is broken" (the SHA-256 provider is
- * unavailable, so no password can be hashed at all). The rows answer ERR
- * INVALID / ERR STORAGE / ERR INTERNAL. -2 is deliberately reserved for
- * storage: a missing hash function is not something retrying or reflashing
- * NVS will fix.
+ * invalid", -2 "valid, but it could not be stored" (NVS write failure or the
+ * mcfg_ops lock timing out -- retry or check the flash), -3 "this board is
+ * broken" (the SHA-256 provider is unavailable, so no password can be
+ * hashed at all). The rows answer ERR INVALID / ERR STORAGE / ERR INTERNAL.
+ * This is the SAME convention the CLI/web surfaces read before Task 5 --
+ * unchanged by moving the lock and sequence into components/mcfg_ops.
  *
- * mcfg_ops_edit() itself reserves -1 for "the lock could not be taken" and
- * -2 for "commit failed" (mcfg_ops.h), and does not distinguish a
- * commit-time validation reject (bad TZ, an out-of-range AP/STA field) from
- * a storage failure -- both are -2. Below, mcfg_ops_edit()'s own -1 (lock
- * unavailable) is remapped to this file's -2 so a busy lock still reads as
- * "could not be stored, retry" rather than "invalid", matching the rc
- * convention above exactly as it read before this task. The one thing that
- * changed: a commit-time validation reject used to surface here as -1; it
- * now surfaces as -2 like a storage failure, because only mcfg_ops_edit()'s
- * fn callback (which does not see mcfg_commit()'s own verdict) can tell the
- * two apart, and this file's callbacks below do not. */
+ * mcfg_ops_edit() reserves three negative codes for itself (mcfg_ops.h):
+ * -1 the lock could not be taken, -2 mcfg_commit() failed on storage, -3
+ * mcfg_commit() rejected the config as invalid -- deliberately split so a
+ * caller can restore the distinction the rc convention above depends on.
+ * Every function below remaps -1 (lock unavailable) to this file's own -2
+ * ("could not be stored, retry") and -3 (validation reject) to this file's
+ * own -1 ("invalid"), which is exactly what these functions reported before
+ * Task 5: a busy lock was always -2 here (net_ops_master.c's own lock used
+ * to fail the same way), and a commit-time validation reject (bad TZ, an
+ * out-of-range AP/STA field) was always -1. */
 
 static void net_get_mcfg(hg_mcfg_t *out) { *out = *mcfg_get(); }
 
@@ -57,7 +55,8 @@ static int set_sta_fn(hg_mcfg_t *m, void *ctx) {
 static int net_set_sta(const char *ssid, const char *pass) {
     const char *a[2] = { ssid, pass };
     int rc = mcfg_ops_edit(set_sta_fn, a);
-    if (rc == -1) rc = -2;   /* mcfg_ops lock unavailable -> this file's "could not be stored" */
+    if (rc == -1) rc = -2;        /* mcfg_ops lock unavailable -> this file's "could not be stored" */
+    else if (rc == -3) rc = -1;   /* mcfg_commit() rejected as invalid -> this file's "invalid" */
     /* The credentials are already persisted at this point, so a failed
      * re-apply is a warning, not a rejection: the next boot joins anyway. */
     if (rc == 0 && wifi_mgr_apply() != 0)
@@ -77,6 +76,7 @@ static int net_set_ap(const char *ssid, const char *pass) {
     const char *a[2] = { ssid, pass };
     int rc = mcfg_ops_edit(set_ap_fn, a);
     if (rc == -1) rc = -2;
+    else if (rc == -3) rc = -1;
     if (rc == 0 && wifi_mgr_apply() != 0)
         ESP_LOGW(TAG, "wifi_mgr_apply failed; AP change takes effect on reboot");
     return rc;
@@ -90,6 +90,7 @@ static int set_tz_fn(hg_mcfg_t *m, void *ctx) {
 static int net_set_tz(const char *tz) {
     int rc = mcfg_ops_edit(set_tz_fn, (void *)tz);   /* bad POSIX TZ fails tz_check inside mcfg_commit */
     if (rc == -1) rc = -2;
+    else if (rc == -3) rc = -1;
     if (rc == 0) time_svc_apply_mcfg();
     return rc;
 }
@@ -109,23 +110,27 @@ typedef struct { const char *pw; int hash_rc; } pw_edit_ctx_t;
 static int set_password_fn(hg_mcfg_t *m, void *ctx_) {
     pw_edit_ctx_t *ctx = (pw_edit_ctx_t *)ctx_;
     /* http_auth_hash_password: 0 ok, -1 outside 8..63, -3 SHA-256
-     * unavailable. -1 cannot travel back out through fn's own return value --
-     * mcfg_ops.h reserves -1/-2 for its own lock/commit failures -- so a
-     * non-zero hash_rc here always answers -9 (just "fn declines to
-     * commit"); the real verdict comes back out through ctx->hash_rc
-     * instead. */
+     * unavailable. Both are negative and mcfg_ops.h reserves every negative
+     * return for itself, so hash_rc cannot travel back out through fn's own
+     * return value -- a non-zero hash_rc here always answers 1 (fn's generic
+     * "decline, positive" signal); the real verdict comes back out through
+     * ctx->hash_rc instead. */
     ctx->hash_rc = http_auth_hash_password(m, ctx->pw);
-    return ctx->hash_rc == 0 ? 0 : -9;
+    return ctx->hash_rc == 0 ? 0 : 1;
 }
 
 int master_web_set_password(const char *pw) {
     pw_edit_ctx_t ctx = { .pw = pw, .hash_rc = 0 };
     int rc = mcfg_ops_edit(set_password_fn, &ctx);
-    if (rc == -9) {
+    if (rc == 1) {
         rc = ctx.hash_rc;   /* -1 length, -3 broken board */
         if (rc == -1) ESP_LOGW(TAG, "SET WEB PASSWORD: length must be 8..63");
     } else if (rc == -1) {
         rc = -2;   /* mcfg_ops lock unavailable -> this file's "could not be stored" */
+    } else if (rc == -3) {
+        rc = -1;   /* mcfg_commit() rejected as invalid -> this file's "invalid" (matches
+                      hash_rc's own -1 above, exactly as it did before Task 5: both were
+                      already the same external code) */
     } else if (rc == 0) {
         http_auth_sessions_drop();
     }

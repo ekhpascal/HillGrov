@@ -1,4 +1,5 @@
 #include "mcfg_store.h"
+#include "fake_mcfg_store.h"
 
 /* Host fake of components/hg_mcfg/mcfg_store.c's RAM+NVS layer. The real file
  * is not host-testable (nvs_flash.h/esp_err.h/esp_log.h are ESP-IDF-only) and
@@ -17,7 +18,10 @@
 static hg_mcfg_t s_cfg;
 static uint32_t  s_gen;
 static int       s_ready;
+static int       s_force_storage_fail;
 static hg_tz_check_fn s_tzck;
+
+void fake_mcfg_store_force_storage_fail(int on) { s_force_storage_fail = on; }
 
 static void ensure_ready(void) {
     if (s_ready) return;
@@ -50,6 +54,7 @@ void mcfg_store_set_tz_check(hg_tz_check_fn fn) {
 int mcfg_commit(const hg_mcfg_t *m) {
     ensure_ready();
     if (!m) return -1;
+    if (s_force_storage_fail) return -2;   /* NVS/mutex path, forced by a test */
     char err[48];
     if (hg_mcfg_validate(m, s_tzck, err, sizeof err) != 0) return -1;
     s_cfg = *m;
