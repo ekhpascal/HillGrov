@@ -15,6 +15,7 @@
 #include "node_mgr.h"
 #include "wifi_mgr.h"
 #include "fw_srv.h"
+#include "cp_ota.h"
 #include "http_srv.h"
 #include "mcfg_store.h"
 #include "mcfg_ops.h"
@@ -94,6 +95,20 @@ void app_main(void) {
      * ("do NOT call ota_trial_drivers_ok on failure"). */
     int ap_ok = wifi_mgr_start() == 0;
     if (!ap_ok) ESP_LOGE(TAG, "wifi_mgr_start failed -- AP/STA/web unavailable this boot");
+
+    /* Task 6: co-processor OTA, gated on version so a healthy C6 is never
+     * re-flashed on every boot (the bring-up spike's bug). Deliberately after
+     * wifi_mgr_start(), not before -- a working AP proves the RPC path this
+     * needs is actually up. On the ESP32 master (no co-processor) cp_ota_sync()
+     * is a stub that always returns 0. A 1 here is not proof the new firmware
+     * is running (see cp_ota.h) -- it only means the push was accepted and the
+     * C6 was told to reboot into it. */
+    int cp_rc = cp_ota_sync();
+    const char *cp_msg = cp_rc == 0  ? "up to date" :
+                         cp_rc == 1  ? "updated -- C6 rebooting" :
+                         cp_rc == -1 ? "no image staged in cp_fw" :
+                                       "push failed -- C6 keeps its old firmware";
+    ESP_LOGW(TAG, "co-processor OTA: %s (rc=%d)", cp_msg, cp_rc);
 
     /* Flash-only work (header + crc32 over the zone image), so it no longer
      * depends on the radio: fw_srv_image_ok() is what the fleet sequencer's

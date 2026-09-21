@@ -23,7 +23,7 @@ include_directories(
   ${COMP}/cli_line ${COMP}/notify ${COMP}/cmd_core ${COMP}/cmd_common
   ${COMP}/zone_cmds ${COMP}/rescue_handover ${COMP}/ring_proto ${COMP}/node_store ${COMP}/ota_trial
   ${COMP}/master_cmds ${COMP}/node_mgr ${COMP}/ring_link ${COMP}/web_auth ${COMP}/hg_json ${COMP}/alarm_mgr
-  ${COMP}/time_core ${COMP}/wifi_mgr ${COMP}/state_snap ${COMP}/http_srv ${COMP}/mcfg_ops
+  ${COMP}/time_core ${COMP}/wifi_mgr ${COMP}/state_snap ${COMP}/http_srv ${COMP}/mcfg_ops ${COMP}/cp_ota
   ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
 enable_testing()
 function(hg_test NAME)
@@ -89,3 +89,10 @@ target_compile_definitions(test_partitions_p4 PRIVATE
 # real, hardware-touching node_mgr.c.
 hg_test(test_mcfg_ops ${COMP}/mcfg_ops/mcfg_ops.c ${COMP}/hg_mcfg/hg_mcfg.c ${HG_CFG_SRC}
         ${COMP}/hg_blob/hg_blob.c fakes/fake_mcfg_store.c)
+
+# cp_ota.c compiles ${CP_OTA_SRC} straight from source, same as http_routes.c
+# and mcfg_ops.c above: only cp_ota_needed() is pure and host-tested here.
+# cp_ota_sync() (the RPC push) is guarded out under HOST_TEST -- see
+# components/cp_ota/cp_ota.c -- so this test link never needs esp_partition,
+# esp_task_wdt or esp_hosted at all.
+hg_test(test_cp_ota ${COMP}/cp_ota/cp_ota.c)

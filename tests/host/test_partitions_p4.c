@@ -10,7 +10,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-typedef struct { char name[24], type[8]; unsigned long off, size; } part_t;
+typedef struct { char name[24], type[8], subtype[16]; unsigned long off, size; } part_t;
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -28,8 +28,10 @@ static int load(part_t *p, int cap) {
         /* trim trailing spaces the CSV uses for column alignment */
         for (char *e = nm + strlen(nm) - 1; e > nm && *e == ' '; e--) *e = 0;
         for (char *e = ty + strlen(ty) - 1; e > ty && *e == ' '; e--) *e = 0;
+        for (char *e = sub + strlen(sub) - 1; e > sub && *e == ' '; e--) *e = 0;
         snprintf(p[n].name, sizeof p[n].name, "%s", nm);
         snprintf(p[n].type, sizeof p[n].type, "%s", ty);
+        snprintf(p[n].subtype, sizeof p[n].subtype, "%s", sub);
         p[n].off  = strtoul(o, NULL, 0);
         p[n].size = strtoul(sz, NULL, 0);
         n++;
@@ -97,6 +99,20 @@ void test_p4_cp_fw_holds_the_coprocessor_image(void) {
     TEST_ASSERT_TRUE_MESSAGE(find(p, n, "cp_fw")->size >= 0x180000, "cp_fw under 1.5 MB");
 }
 
+/* Deferred from Task 2 as cosmetic (the parser read the subtype column and
+   threw it away); Task 6 makes it load-bearing. cp_ota_sync() looks cp_fw up
+   with an EXPLICIT subtype -- esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
+   0x41, "cp_fw") -- unlike fw_srv.c and http_upload_zone.c, which both pass
+   ESP_PARTITION_SUBTYPE_ANY and match zone_fw by name alone. A hand-edited CSV
+   that renamed or renumbered either subtype would make esp_partition_find_first()
+   return NULL at runtime with nothing else here to catch it. */
+void test_p4_zone_fw_and_cp_fw_have_the_subtypes_their_lookups_pin_to(void) {
+    part_t p[16];
+    int n = load(p, 16);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("0x40", find(p, n, "zone_fw")->subtype, "zone_fw subtype");
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("0x41", find(p, n, "cp_fw")->subtype, "cp_fw subtype");
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_p4_table_has_the_partitions_the_firmware_looks_up_by_name);
@@ -104,5 +120,6 @@ int main(void) {
     RUN_TEST(test_p4_partitions_do_not_overlap_and_clear_the_table);
     RUN_TEST(test_p4_app_slots_are_large_enough_for_the_master_plus_the_panel_ui);
     RUN_TEST(test_p4_cp_fw_holds_the_coprocessor_image);
+    RUN_TEST(test_p4_zone_fw_and_cp_fw_have_the_subtypes_their_lookups_pin_to);
     return UNITY_END();
 }

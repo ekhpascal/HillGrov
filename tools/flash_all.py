@@ -12,6 +12,15 @@ does not exist yet, its slot is skipped with a warning instead of failing.
 Must run under a python that has esptool installed -- either the IDF venv
 python (source C:\\esp\\v6.0.1\\esp-idf\\export.ps1 first) or any python
 with `pip install esptool`.
+
+--build-dir overrides the directory every one of the files above (bootloader,
+partition table, otadata, rescue, app) is read from (default:
+<repo>/<board>/build -- today's hard-coded path, unchanged unless you pass
+this). Needed whenever the binaries actually built for --target don't live in
+that default directory -- e.g. after building master for esp32p4 into a
+separate out-of-tree dir, --target esp32 with no --build-dir would silently
+read those P4 binaries out of master/build and still write them at the ESP32
+offsets.
 """
 import argparse
 import os
@@ -75,6 +84,9 @@ def main():
     parser.add_argument("--baud", default="460800")
     parser.add_argument("--target", default="esp32", choices=sorted(FLASH_LAYOUT),
                          help="chip the OFFSETS are for; default esp32")
+    parser.add_argument("--build-dir", default=None, metavar="DIR",
+                         help="override the build directory everything is read from "
+                              "(default: <repo>/<board>/build); see module docstring")
     parser.add_argument("--dry-run", action="store_true",
                          help="print the esptool command without executing it")
     args = parser.parse_args()
@@ -84,7 +96,7 @@ def main():
         parser.error(f"--board {args.board} is not a thing on {args.target} "
                      f"(valid: {', '.join(sorted(layout['boards']))})")
 
-    bdir = os.path.join(REPO_ROOT, args.board, "build")
+    bdir = args.build_dir if args.build_dir else os.path.join(REPO_ROOT, args.board, "build")
     bootloader_bin = require_file(os.path.join(bdir, "bootloader", "bootloader.bin"), "bootloader.bin")
     part_table_bin = require_file(os.path.join(bdir, "partition_table", "partition-table.bin"), "partition-table.bin")
     app_bin = require_file(os.path.join(bdir, f"hillgrow_{args.board}.bin"), f"hillgrow_{args.board}.bin")
