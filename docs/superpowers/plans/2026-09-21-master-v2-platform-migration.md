@@ -18,7 +18,8 @@
 - **How the host suite is counted.** `tests/host/CMakeLists.txt` defines `hg_test(NAME)` which calls `add_test()` **once per file**, so CTest reports one entry per test *file*, not per Unity `RUN_TEST` case. The baseline is **32 entries** (containing 446 RUN_TEST cases); each new test file adds exactly **one** CTest entry however many cases it holds. Verified empirically 2026-09-21 after an earlier draft of this plan got the arithmetic wrong.
 - **P4 silicon is rev v1.3.** IDF 6.0.1 defaults to rev v3.1 and the two families are mutually exclusive — esptool refuses the flash outright with *"requires chip revision in range [v3.1 - v3.99]"*. Every P4 config carries `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y` and `CONFIG_ESP32P4_REV_MIN_100=y`. A binary built this way runs **only** on P4 rev 0.x/1.x.
 - **The board has 32 MB of flash**; the stock default declares 2 MB in the image header and the bootloader clamps to it. `CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y`.
-- **P4 flash offsets differ from ESP32:** bootloader `0x2000` (not `0x1000`), partition table `0x8000` (not `0xE000`).
+- **P4 flash offsets differ from ESP32:** bootloader `0x2000` (not `0x1000`), partition table `0xF000` (not `0xE000`). Note this is **not** IDF's P4 default of `0x8000`. The custom bootloader is `0x60f0` bytes, and a table at `0x8000` leaves only `0x6000` of room above the bootloader at `0x2000`, so the build fails a post-link assertion by 240 bytes. `0xF000` gives the P4 the same `0xD000` bootloader window the ESP32 has, using the dead space below `nvs` at `0x10000`, and moves no partition. The stock P4 bootloader already fills ~96% of the `0x6000` window, so this is not caused by HillGrow's own bootloader features (~830 bytes). Measured and built clean 2026-09-21.
+- **How to configure a P4 build.** `SDKCONFIG_DEFAULTS` does **not** select the target. `tools/cmake/targets.cmake` builds its search list as `"${SDKCONFIG}" "${CMAKE_SOURCE_DIR}/sdkconfig" "${defaults}"` and stops at the first file carrying a `CONFIG_IDF_TARGET` line, so the existing ESP32 `master/sdkconfig` wins — and within the defaults list `sdkconfig.defaults` (`CONFIG_IDF_TARGET="esp32"`) beats `sdkconfig.defaults.esp32p4`. A P4 build therefore **requires `-DIDF_TARGET=esp32p4`**, and must always be proved by grepping the generated sdkconfig for `CONFIG_IDF_TARGET="esp32p4"`. Without it the build silently produces an ESP32 image while still picking up the P4 flash size and table offset, which looks entirely convincing. Also: never run `idf.py set-target` from inside `master/` — it damages `master/build` even when `-B` points elsewhere.
 - **Main-only by owner consent.** Commit directly to `main`; push when a task is green. Commit trailer: `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`.
 - **Heap floor:** master heap-min ≥ 64 KB (spec §6.4), with the 40 KB `LOW_HEAP` guard as the hard floor.
 
@@ -48,7 +49,9 @@ All verified on hardware 2026-09-18/21. Do not re-litigate these; they are input
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: a P4 build that configures and compiles. Later tasks rely on `idf.py -C master -B build_p4 -D SDKCONFIG=build_p4/sdkconfig set-target esp32p4` working, and on `SDKCONFIG_DEFAULTS` picking up `sdkconfig.defaults.esp32p4` automatically via IDF's per-target defaults mechanism.
+- Produces: a P4 build that configures and compiles. Later tasks configure it with, from `master/`:
+  `idf.py -B <ABSOLUTE build dir> -DIDF_TARGET=esp32p4 -DSDKCONFIG=<ABSOLUTE sdkconfig> -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.esp32p4" build`
+  Both paths must be absolute (a relative `-B` resolves against the shell cwd, not `-C`), and `-DIDF_TARGET` is mandatory — see Global Constraints for why `SDKCONFIG_DEFAULTS` alone silently yields an ESP32 image.
 
 - [ ] **Step 1: Make SDKCONFIG_DEFAULTS overridable**
 
@@ -80,8 +83,11 @@ CONFIG_ESP32P4_REV_MIN_100=y
 # 32 MB on the board; the stock default declares 2 MB and the bootloader clamps.
 CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
 
-# P4 puts the partition table at 0x8000, not the ESP32's 0xE000.
-CONFIG_PARTITION_TABLE_OFFSET=0x8000
+# The partition table sits at 0xF000, NOT IDF's P4 default of 0x8000. The custom
+# bootloader is 0x60f0 bytes and 0x8000 leaves only 0x6000 above the bootloader
+# at 0x2000, which fails a post-link size assertion by 240 bytes. 0xF000 gives
+# the same 0xD000 window the ESP32 has, using dead space below nvs at 0x10000.
+CONFIG_PARTITION_TABLE_OFFSET=0xF000
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_p4.csv"
 
 # The MIPI-DSI frame buffer and LVGL need PSRAM (ESP32-P4NRW32, in package).
@@ -223,8 +229,9 @@ void test_p4_partitions_do_not_overlap_and_clear_the_table(void) {
     part_t p[16];
     int n = load(p, 16);
     for (int i = 0; i < n; i++) {
-        /* table at 0x8000 on the P4; 0x9000 is the first byte a partition may use */
-        TEST_ASSERT_TRUE_MESSAGE(p[i].off >= 0x9000, p[i].name);
+        /* table at 0xF000 on the P4 and IDF reserves 0x1000 for it, so 0x10000
+         * is the first byte a partition may use */
+        TEST_ASSERT_TRUE_MESSAGE(p[i].off >= 0x10000, p[i].name);
         for (int j = i + 1; j < n; j++) {
             unsigned long ae = p[i].off + p[i].size, be = p[j].off + p[j].size;
             TEST_ASSERT_TRUE_MESSAGE(p[i].off >= be || p[j].off >= ae, p[i].name);
@@ -273,7 +280,7 @@ Expected: FAIL — `cannot open partitions_p4.csv`, because the file does not ex
 Create `master/partitions_p4.csv`:
 
 ```
-# Master v2 (ESP32-P4, 32 MB). Bootloader 0x2000, partition table 0x8000 --
+# Master v2 (ESP32-P4, 32 MB). Bootloader 0x2000, partition table 0xF000 --
 # both P4 values, unlike the ESP32 table's 0x1000/0xE000.
 #
 # App slots are 4 MB, double the ESP32's: the master is already 966 KB and the
@@ -384,10 +391,11 @@ the argument, again leaving the ESP32 values untouched:
 
 ```python
 # P4 moves both: the second-stage bootloader starts at 0x2000 rather than
-# 0x1000, and the partition table at 0x8000 rather than 0xE000.
+# 0x1000, and the partition table at 0xF000 rather than 0xE000 (0xF000, not
+# IDF's P4 default 0x8000, because the custom bootloader does not fit under it).
 FLASH_LAYOUT = {
     "esp32":   {"bootloader": 0x1000, "partition_table": 0xE000},
-    "esp32p4": {"bootloader": 0x2000, "partition_table": 0x8000},
+    "esp32p4": {"bootloader": 0x2000, "partition_table": 0xF000},
 }
 ```
 
