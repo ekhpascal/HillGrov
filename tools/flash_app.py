@@ -29,10 +29,23 @@ import hg_otadata
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Offset of each app's OTA slot / rescue slot / (zonefw) data partition in
-# flash -- must match the partitions.csv of the corresponding board
-# (Task 13/14; zonefw: master's partitions.csv, Task 15).
-APP_OFFSET = {"zone": 0x170000, "master": 0x170000, "rescue": 0x30000, "zonefw": 0x570000}
+# Per target, because the P4 partition table is not the ESP32 one. Getting this
+# wrong is silent and destructive: the ESP32 master offset (0x170000) lands
+# inside the P4 table's factory/rescue partition, so a mis-targeted master flash
+# would overwrite the rescue image and nothing would complain until rescue was
+# needed. Offsets must match master/partitions.csv (esp32) and
+# master/partitions_p4.csv (esp32p4).
+APP_OFFSET = {
+    "esp32": {
+        "zone": 0x170000, "master": 0x170000, "rescue": 0x30000,
+        "zonefw": 0x570000,
+    },
+    "esp32p4": {
+        "master": 0x230000, "rescue": 0x30000,
+        "zonefw": 0xA30000, "cpfw": 0xBB0000,
+    },
+}
+OTADATA_OFFSET = 0x20000        # same on both tables
 
 ZONE_FW_HDR_LEN = 16
 ZONE_FW_PART_SIZE = 0x180000
@@ -94,10 +107,22 @@ def run_esptool(cmd):
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                       formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--app", required=True, choices=sorted(APP_OFFSET))
+    all_apps = set()
+    for target_offsets in APP_OFFSET.values():
+        all_apps.update(target_offsets)
+    parser.add_argument("--app", required=True, choices=sorted(all_apps))
     parser.add_argument("--port", required=True)
     parser.add_argument("--baud", default="460800")
+    parser.add_argument("--target", default="esp32", choices=sorted(APP_OFFSET),
+                         help="chip the OFFSETS are for; default esp32")
+    parser.add_argument("--dry-run", action="store_true",
+                         help="print the esptool command without executing it")
     args = parser.parse_args()
+
+    offsets = APP_OFFSET[args.target]
+    if args.app not in offsets:
+        parser.error(f"--app {args.app} is not a thing on {args.target} "
+                     f"(valid: {', '.join(sorted(offsets))})")
 
     if args.app == "zonefw":
         # Builds nothing (per the brief): takes the zone app's own build
@@ -106,11 +131,11 @@ def main():
         zone_bin = require_file(os.path.join(build_dir("zone"), "hillgrow_zone.bin"),
                                  "hillgrow_zone.bin (build zone first)")
         zonefw_bin = build_zonefw_image(zone_bin, build_dir("master"))
-        write_flash_args = [hex(APP_OFFSET["zonefw"]), zonefw_bin]
+        write_flash_args = [hex(offsets["zonefw"]), zonefw_bin]
     elif args.app == "rescue":
         bdir = build_dir(args.app)
         app_bin = require_file(os.path.join(bdir, "hillgrow_rescue.bin"), "rescue app binary")
-        write_flash_args = [hex(APP_OFFSET["rescue"]), app_bin]
+        write_flash_args = [hex(offsets["rescue"]), app_bin]
     else:
         bdir = build_dir(args.app)
         app_bin = require_file(os.path.join(bdir, f"hillgrow_{args.app}.bin"), f"hillgrow_{args.app}.bin")
@@ -118,10 +143,13 @@ def main():
         # rather than flashing the stock all-0xFF ota_data_initial.bin (see
         # tools/hg_otadata.py for why that would boot factory/rescue instead).
         otadata_bin = hg_otadata.write_otadata_file(bdir)
-        write_flash_args = [hex(0x20000), otadata_bin, hex(APP_OFFSET[args.app]), app_bin]
+        write_flash_args = [hex(OTADATA_OFFSET), otadata_bin, hex(offsets[args.app]), app_bin]
 
     cmd = [sys.executable, "-m", "esptool", "--chip", "esp32", "-p", args.port,
            "-b", args.baud, "write-flash"] + write_flash_args
+    if args.dry_run:
+        print(" ".join(cmd))
+        return
     run_esptool(cmd)
 
 

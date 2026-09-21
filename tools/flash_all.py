@@ -22,8 +22,12 @@ import hg_otadata
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-BOOTLOADER_OFFSET = 0x1000
-PARTITION_TABLE_OFFSET = 0xE000
+# P4 moves both: the second-stage bootloader starts at 0x2000 rather than
+# 0x1000, and the partition table at 0x8000 rather than 0xE000.
+FLASH_LAYOUT = {
+    "esp32":   {"bootloader": 0x1000, "partition_table": 0xE000},
+    "esp32p4": {"bootloader": 0x2000, "partition_table": 0x8000},
+}
 OTA_DATA_OFFSET = 0x20000
 RESCUE_OFFSET = 0x30000
 APP_OFFSET = 0x170000
@@ -52,7 +56,13 @@ def main():
     parser.add_argument("--board", required=True, choices=["zone", "master"])
     parser.add_argument("--port", required=True)
     parser.add_argument("--baud", default="460800")
+    parser.add_argument("--target", default="esp32", choices=sorted(FLASH_LAYOUT),
+                         help="chip the OFFSETS are for; default esp32")
+    parser.add_argument("--dry-run", action="store_true",
+                         help="print the esptool command without executing it")
     args = parser.parse_args()
+
+    layout = FLASH_LAYOUT[args.target]
 
     bdir = os.path.join(REPO_ROOT, args.board, "build")
     bootloader_bin = require_file(os.path.join(bdir, "bootloader", "bootloader.bin"), "bootloader.bin")
@@ -65,8 +75,8 @@ def main():
     otadata_bin = hg_otadata.write_otadata_file(bdir)
 
     write_flash_args = [
-        hex(BOOTLOADER_OFFSET), bootloader_bin,
-        hex(PARTITION_TABLE_OFFSET), part_table_bin,
+        hex(layout["bootloader"]), bootloader_bin,
+        hex(layout["partition_table"]), part_table_bin,
         hex(OTA_DATA_OFFSET), otadata_bin,
     ]
 
@@ -80,6 +90,9 @@ def main():
 
     cmd = [sys.executable, "-m", "esptool", "--chip", "esp32", "-p", args.port,
            "-b", args.baud, "write-flash"] + write_flash_args
+    if args.dry_run:
+        print(" ".join(cmd))
+        return
     run_esptool(cmd)
 
 
