@@ -58,7 +58,24 @@ Reserved I²C: 0x70 (PCA9685 all-call — never use) · 0x48–0x4B (future ADS1
 
 ## Master v2 — ESP32-P4-WIFI6-Touch-LCD-7B (reserved allocations, spec §11.10; effective at the migration sub-project)
 
-Onboard and therefore no longer external: 7" touch display · RTC + coin cell · RS-485 transceiver (own UART, 120 Ω jumpers, non-isolated) · microSD (SDMMC — expected on GPIO39–44, VERIFY no collision with the IO46–52 header at bring-up) · audio codec/PA (unused by us — see streamer) · ESP32-C6 Wi-Fi 6 (SDIO). Ring = the board's dedicated UART header (TX→zone1 RX, RX←zoneN TX). I²C header carries PCF8575 + STCC4 + AHT20/BMP280.
+Onboard and therefore no longer external: 7" touch display · RTC + coin cell · RS-485 transceiver (own UART, 120 Ω jumpers, non-isolated) · microSD (SDMMC) · audio codec/PA (unused by us — see streamer) · ESP32-C6 Wi-Fi 6 (SDIO). I²C header carries PCF8575 + STCC4 + AHT20/BMP280.
+
+**On-board pin assignments read off the schematic and confirmed on hardware 2026-09-18/21** (`assets/ESP32-P4-WIFI6-Touch-LCD-7B/`):
+
+| On-board peripheral | P4 pins | How confirmed |
+|---|---|---|
+| ESP32-C6 Wi-Fi (SDIO slot 1) | CLK **18**, CMD **19**, D0–D3 **14–17**, CP reset **54** | schematic net labels, then echoed verbatim by the esp_hosted boot log; these are esp_hosted's stock P4 defaults, so no pin config is needed |
+| microSD (SDMMC **slot 0**, IOMUX-fixed) | **39–44** | schematic; **no collision with the IO46–52 header** — the earlier VERIFY item is settled. Being on slot 0 while the C6 is on slot 1 means SD and Wi-Fi coexist |
+| 7" LCD | backlight **32**, reset **33** (+ MIPI-DSI lanes) | BSP header `BSP_LCD_BACKLIGHT` / `BSP_LCD_RST` |
+| RS-485 transceiver | TXD **26**, RXD **27** | schematic (`485_TXD`/`485_RXD` into the THVD1406 RO/DI) |
+| CAN transceiver | TX **22**, RX **21** | schematic (`CANTX`/`CANRX` into the TJA1051) |
+| I²C header | SCL **7**, SDA **8** (level-shifted to `D_SCL`/`D_SDA`) | schematic |
+| UART0 console / flashing | TX **37**, RX **38** | boot log (`GPIO 38 and 37 are used as console UART I/O pins`) |
+| Broken-out GPIO header P3 | 3V3, GND, **IO2–5, IO28–31, IO34, IO36** | silkscreen |
+| Broken-out GPIO header P1 | BAT, GND, 3V3, VO4, GND, **IO46–52** | silkscreen |
+| C6-UART header (CP recovery) | C6 `TXD`/`RXD`/`IO9` + GND | silkscreen + schematic — a 3.3 V USB-UART adapter here reflashes the co-processor if an OTA ever leaves it unusable |
+
+**Ring UART: use IO28 (TX) and IO29 (RX) from the carefree local-I/O pool**, not the board's "UART" silkscreen header. The header's GPIOs could not be established from the schematic, and the only TTL UART pair broken out on that edge is the RS-485 transceiver's own (26/27), which §11.7 wants for the Modbus field bus. The P4 routes UART through the GPIO matrix, so a dedicated header was always a convenience rather than a requirement — spending two pins from the pool costs nothing and leaves RS-485 intact. (Supersedes the earlier "Ring = the board's dedicated UART header" note.)
 
 | Function | P4 pin | Notes |
 |---|---|---|
