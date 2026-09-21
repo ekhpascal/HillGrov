@@ -175,8 +175,11 @@ esp_err_t h_alarms(httpd_req_t *req) {
 esp_err_t h_wifi_scan(httpd_req_t *req) {
     /* wifi_mgr_scan() blocks ~2 s and parks the single radio -- must not run
      * concurrently with a net_ops apply (SET WIFI STA/AP/TZ, SET WEB
-     * PASSWORD, or this same handler's own PUT /api/config?zone=0 path),
-     * which all take this same net_ops_master mutex internally. */
+     * PASSWORD, or this same handler's own PUT /api/config?zone=0 path).
+     * Each of those holds this same components/mcfg_ops lock across its own
+     * commit AND its apply (net_ops_master.c's mcfg_ops_edit() `apply`
+     * callbacks, or cfg_put_zone0's own mcfg_ops_lock()/_unlock() pair in
+     * http_api_cfg.c), so taking it here for the whole scan is enough. */
     if (mcfg_ops_lock(100) != 0) {
         http_srv_error(req, 409, "BUSY", NULL);
         return http_srv_done(req, 0);

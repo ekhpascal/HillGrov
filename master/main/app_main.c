@@ -49,6 +49,17 @@ void app_main(void) {
      * has run) -- setting it here alongside the other core fields, before
      * cmd_task_start(), is safe and keeps this block in one place. */
     core.forward = node_mgr_forward;
+
+    /* Must run before cmd_task_start()/cli_start(): those hand the console
+     * to a task that can immediately run a NET/TIME/WEB row, and the mutex
+     * has to exist by then. A fix-round regression once placed this call
+     * down by mcfg_store_init() instead, after both of the below -- nothing
+     * on this bench caught it, because mcfg_ops.c's internal lock_take()
+     * used to report SUCCESS on a missing mutex (an unsynchronised write,
+     * not a rejected one). lock_take() now fails closed instead (mcfg_ops.c),
+     * so that class of bug can no longer hide, but the mutex still belongs
+     * here, ahead of the first task that could reach it. */
+    mcfg_ops_init();
     cmd_task_start(&core);
     cli_init();
     cli_start();
@@ -65,7 +76,6 @@ void app_main(void) {
     if (err != ESP_OK) ESP_LOGE(TAG, "nvs_flash_init failed: %s", esp_err_to_name(err));
 
     if (mcfg_store_init() != 0) ESP_LOGW(TAG, "mcfg defaults in use");
-    mcfg_ops_init();
 
     /* Before http_srv_start(), and deliberately not only from it: on a boot
      * where the radio never comes up the server is never started, and a

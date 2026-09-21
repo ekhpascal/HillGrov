@@ -16,13 +16,18 @@ static const char *TAG = "mcfg_ops";
  * read-modify-write around them: two ops running concurrently (httpd workers
  * racing the CLI, or each other) would both snapshot the same mcfg and the
  * second commit would silently drop the first one's field. This mutex makes
- * each snapshot->modify->commit atomic. Created by mcfg_ops_init(), which
- * must run once at boot before any other entry point here -- so no lazy-init
- * race. */
+ * each snapshot->modify->commit atomic. mcfg_ops_init() must run once at
+ * boot before any other entry point here (app_main.c calls it before
+ * cmd_task_start()/cli_start(), so no CLI/HTTP task can reach a writer
+ * first) -- but lock_take() below fails CLOSED rather than trusting that,
+ * because a fix-round regression put mcfg_ops_init() after cmd_task_start()
+ * for one commit and nothing caught it: a "not created yet" that reports
+ * success is a silent unsynchronised write, not a safe single-threaded
+ * window. */
 static SemaphoreHandle_t s_lock;
 
 static int lock_take(void) {
-    if (!s_lock) return 1;   /* pre-init, i.e. still single-threaded boot */
+    if (!s_lock) return 0;   /* fail CLOSED: not created yet is NOT an open lock */
     /* Longer than mcfg_commit()'s own 5000 ms mutex timeout, so a caller that
      * loses this race reports the commit's verdict rather than ours. */
     return xSemaphoreTake(s_lock, pdMS_TO_TICKS(6000)) == pdTRUE;
@@ -55,23 +60,32 @@ void mcfg_ops_unlock(void) { lock_give(); }
  * (its own -1). This split has to survive past this function: the CLI and
  * web surfaces map -2/-3 to different owner-visible errors (ERR STORAGE /
  * ERR INVALID) -- fix round 1 collapsed both into -2, which quietly told an
- * owner who typed a bad POSIX TZ that their storage had failed. */
-static int commit_and_log(hg_mcfg_t *m) {
+ * owner who typed a bad POSIX TZ that their storage had failed. what is the
+ * caller's own label (e.g. "SET TZ"), logged instead of a generic one so
+ * fix round 1's lost per-op log context is restored too. */
+static int commit_and_log(hg_mcfg_t *m, const char *what) {
     int rc = mcfg_commit(m);
     if (rc == 0) return 0;
     if (rc == -2) {
-        ESP_LOGE(TAG, "mcfg_ops_edit: mcfg_commit failed to store (NVS/mutex)");
+        ESP_LOGE(TAG, "%s: mcfg_commit failed to store (NVS/mutex)", what);
         return -2;
     }
-    ESP_LOGW(TAG, "mcfg_ops_edit: rejected by mcfg validation");
+    ESP_LOGW(TAG, "%s: rejected by mcfg validation", what);
     return -3;
 }
 
-int mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx) {
+int mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx,
+                   void (*apply)(void *ctx), const char *what) {
     if (!lock_take()) return -1;
     hg_mcfg_t m = *mcfg_get();
     int rc = fn(&m, ctx);
-    if (rc == 0) rc = commit_and_log(&m);
+    if (rc == 0) {
+        rc = commit_and_log(&m, what);
+        /* STILL holding the lock here, on purpose: apply must run in the
+         * same exclusion a caller like GET /api/wifi/scan holds mcfg_ops_lock()
+         * across, or the radio reconfigure it triggers could land mid-scan. */
+        if (rc == 0 && apply) apply(ctx);
+    }
     lock_give();
     return rc;
 }

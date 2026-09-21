@@ -41,7 +41,19 @@ static const char *TAG = "net_ops";
  * own -1 ("invalid"), which is exactly what these functions reported before
  * Task 5: a busy lock was always -2 here (net_ops_master.c's own lock used
  * to fail the same way), and a commit-time validation reject (bad TZ, an
- * out-of-range AP/STA field) was always -1. */
+ * out-of-range AP/STA field) was always -1.
+ *
+ * Each function's wifi_mgr_apply()/time_svc_apply_mcfg()/
+ * http_auth_sessions_drop() now runs as mcfg_ops_edit()'s `apply` callback
+ * instead of inline after the old lock_give() -- `apply` runs before
+ * mcfg_ops_edit() releases the lock, so the scope matches this file's
+ * pre-Task-5 shape exactly (see mcfg_ops.h): GET /api/wifi/scan takes the
+ * same lock across its blocking radio scan specifically so a STA/AP
+ * reconfigure here cannot land mid-scan, and an apply that ran after
+ * release would silently delete that exclusion. Each `what` string below
+ * (e.g. "SET TZ") is the same per-op log label these functions logged
+ * before Task 5, now passed through to mcfg_ops_edit() instead of being
+ * lost to a generic one. */
 
 static void net_get_mcfg(hg_mcfg_t *out) { *out = *mcfg_get(); }
 
@@ -52,15 +64,20 @@ static int set_sta_fn(hg_mcfg_t *m, void *ctx) {
     return 0;
 }
 
+/* Runs inside mcfg_ops_edit()'s lock, after a successful commit. The
+ * credentials are already persisted at this point, so a failed re-apply is
+ * a warning, not a rejection: the next boot joins anyway. */
+static void set_sta_apply(void *ctx) {
+    (void)ctx;
+    if (wifi_mgr_apply() != 0)
+        ESP_LOGW(TAG, "wifi_mgr_apply failed; STA change takes effect on reboot");
+}
+
 static int net_set_sta(const char *ssid, const char *pass) {
     const char *a[2] = { ssid, pass };
-    int rc = mcfg_ops_edit(set_sta_fn, a);
+    int rc = mcfg_ops_edit(set_sta_fn, a, set_sta_apply, "SET WIFI STA");
     if (rc == -1) rc = -2;        /* mcfg_ops lock unavailable -> this file's "could not be stored" */
     else if (rc == -3) rc = -1;   /* mcfg_commit() rejected as invalid -> this file's "invalid" */
-    /* The credentials are already persisted at this point, so a failed
-     * re-apply is a warning, not a rejection: the next boot joins anyway. */
-    if (rc == 0 && wifi_mgr_apply() != 0)
-        ESP_LOGW(TAG, "wifi_mgr_apply failed; STA change takes effect on reboot");
     return rc;
 }
 
@@ -72,13 +89,18 @@ static int set_ap_fn(hg_mcfg_t *m, void *ctx) {
     return 0;
 }
 
+/* Runs inside mcfg_ops_edit()'s lock, after a successful commit. */
+static void set_ap_apply(void *ctx) {
+    (void)ctx;
+    if (wifi_mgr_apply() != 0)
+        ESP_LOGW(TAG, "wifi_mgr_apply failed; AP change takes effect on reboot");
+}
+
 static int net_set_ap(const char *ssid, const char *pass) {
     const char *a[2] = { ssid, pass };
-    int rc = mcfg_ops_edit(set_ap_fn, a);
+    int rc = mcfg_ops_edit(set_ap_fn, a, set_ap_apply, "SET WIFI AP");
     if (rc == -1) rc = -2;
     else if (rc == -3) rc = -1;
-    if (rc == 0 && wifi_mgr_apply() != 0)
-        ESP_LOGW(TAG, "wifi_mgr_apply failed; AP change takes effect on reboot");
     return rc;
 }
 
@@ -87,11 +109,17 @@ static int set_tz_fn(hg_mcfg_t *m, void *ctx) {
     return 0;
 }
 
+/* Runs inside mcfg_ops_edit()'s lock, after a successful commit. */
+static void set_tz_apply(void *ctx) {
+    (void)ctx;
+    time_svc_apply_mcfg();
+}
+
 static int net_set_tz(const char *tz) {
-    int rc = mcfg_ops_edit(set_tz_fn, (void *)tz);   /* bad POSIX TZ fails tz_check inside mcfg_commit */
+    /* bad POSIX TZ fails tz_check inside mcfg_commit */
+    int rc = mcfg_ops_edit(set_tz_fn, (void *)tz, set_tz_apply, "SET TZ");
     if (rc == -1) rc = -2;
     else if (rc == -3) rc = -1;
-    if (rc == 0) time_svc_apply_mcfg();
     return rc;
 }
 
@@ -119,9 +147,18 @@ static int set_password_fn(hg_mcfg_t *m, void *ctx_) {
     return ctx->hash_rc == 0 ? 0 : 1;
 }
 
+/* Runs inside mcfg_ops_edit()'s lock, after a successful commit -- matches
+ * this section's own "hash, commit, THEN drop sessions" ordering comment
+ * above: dropping them any earlier would log every operator out even when
+ * the commit went on to fail. */
+static void set_password_apply(void *ctx) {
+    (void)ctx;
+    http_auth_sessions_drop();
+}
+
 int master_web_set_password(const char *pw) {
     pw_edit_ctx_t ctx = { .pw = pw, .hash_rc = 0 };
-    int rc = mcfg_ops_edit(set_password_fn, &ctx);
+    int rc = mcfg_ops_edit(set_password_fn, &ctx, set_password_apply, "SET WEB PASSWORD");
     if (rc == 1) {
         rc = ctx.hash_rc;   /* -1 length, -3 broken board */
         if (rc == -1) ESP_LOGW(TAG, "SET WEB PASSWORD: length must be 8..63");
@@ -131,8 +168,6 @@ int master_web_set_password(const char *pw) {
         rc = -1;   /* mcfg_commit() rejected as invalid -> this file's "invalid" (matches
                       hash_rc's own -1 above, exactly as it did before Task 5: both were
                       already the same external code) */
-    } else if (rc == 0) {
-        http_auth_sessions_drop();
     }
     return rc;
 }

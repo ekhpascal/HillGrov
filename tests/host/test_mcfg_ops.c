@@ -12,8 +12,21 @@
 #include <string.h>
 #include <stdio.h>
 
-void setUp(void) {}
-void tearDown(void) {}
+/* Reset every bit of shared static state before each test so case order
+   cannot matter: the fake store (hostname/ap_ssid/... back to defaults, a
+   fresh generation) and the storage-fail knob, which a test that forces it
+   on must not be trusted to turn back off itself -- Unity's longjmp on a
+   failed TEST_ASSERT skips the rest of that test's body, so a reset placed
+   AFTER the assertion (as this file used to do) never runs on failure and
+   leaks into every test that follows. tearDown() runs unconditionally even
+   on failure, which setUp() alone would not cover for the test that fails. */
+void setUp(void) {
+    mcfg_store_init();
+    fake_mcfg_store_force_storage_fail(0);
+}
+void tearDown(void) {
+    fake_mcfg_store_force_storage_fail(0);
+}
 
 static int set_hostname(hg_mcfg_t *m, void *ctx) {
     snprintf(m->hostname, sizeof m->hostname, "%s", (const char *)ctx);
@@ -37,14 +50,14 @@ static int break_validation(hg_mcfg_t *m, void *ctx) {
 
 void test_edit_commits_when_the_edit_function_accepts(void) {
     mcfg_ops_init();
-    TEST_ASSERT_EQUAL_INT(0, mcfg_ops_edit(set_hostname, "greenhouse"));
+    TEST_ASSERT_EQUAL_INT(0, mcfg_ops_edit(set_hostname, "greenhouse", NULL, "TEST"));
     TEST_ASSERT_EQUAL_STRING("greenhouse", mcfg_get()->hostname);
 }
 
 void test_a_rejecting_edit_does_not_commit_and_leaves_no_trace(void) {
     mcfg_ops_init();
-    mcfg_ops_edit(set_hostname, "before");
-    TEST_ASSERT_EQUAL_INT(3, mcfg_ops_edit(reject, NULL));
+    mcfg_ops_edit(set_hostname, "before", NULL, "TEST");
+    TEST_ASSERT_EQUAL_INT(3, mcfg_ops_edit(reject, NULL, NULL, "TEST"));
     /* The edit function scribbled on its copy and then refused. The live config
        must still read "before" -- if mcfg_ops handed out a pointer to the live
        buffer instead of a copy, this reads "scribbled". */
@@ -57,14 +70,15 @@ void test_a_rejecting_edit_does_not_commit_and_leaves_no_trace(void) {
    their storage had failed. */
 void test_edit_reports_dash3_when_the_commit_rejects_as_invalid(void) {
     mcfg_ops_init();
-    TEST_ASSERT_EQUAL_INT(-3, mcfg_ops_edit(break_validation, NULL));
+    TEST_ASSERT_EQUAL_INT(-3, mcfg_ops_edit(break_validation, NULL, NULL, "TEST"));
 }
 
 void test_edit_reports_dash2_when_the_commit_fails_to_store(void) {
     mcfg_ops_init();
     fake_mcfg_store_force_storage_fail(1);
-    TEST_ASSERT_EQUAL_INT(-2, mcfg_ops_edit(set_hostname, "storage-fail"));
-    fake_mcfg_store_force_storage_fail(0);   /* don't leak into later tests */
+    TEST_ASSERT_EQUAL_INT(-2, mcfg_ops_edit(set_hostname, "storage-fail", NULL, "TEST"));
+    /* tearDown() clears the flag -- not here, so a failed assertion above
+       (which longjmps past this line) still can't leak it into later tests. */
 }
 
 void test_lock_is_not_recursive_so_a_second_take_fails_fast(void) {
@@ -80,7 +94,7 @@ void test_edit_reports_failure_when_the_lock_is_held(void) {
     mcfg_ops_init();
     TEST_ASSERT_EQUAL_INT(0, mcfg_ops_lock(10));
     /* Must NOT proceed unsynchronised. */
-    TEST_ASSERT_EQUAL_INT(-1, mcfg_ops_edit(set_hostname, "racer"));
+    TEST_ASSERT_EQUAL_INT(-1, mcfg_ops_edit(set_hostname, "racer", NULL, "TEST"));
     mcfg_ops_unlock();
 }
 
@@ -93,6 +107,43 @@ void test_init_is_idempotent(void) {
     mcfg_ops_unlock();
 }
 
+/* fix round 2's regression (Major 1): apply used to run after mcfg_ops_edit()
+   had already released the lock, deleting the exclusion GET /api/wifi/scan
+   depends on. Proven directly: apply tries to take the SAME lock via the
+   public mcfg_ops_lock() -- if mcfg_ops_edit() already let go, that succeeds
+   (0); it must fail (-1), because mcfg_ops_edit() itself is still holding it. */
+static int s_apply_lock_probe_rc;
+static void apply_lock_probe(void *ctx) {
+    (void)ctx;
+    s_apply_lock_probe_rc = mcfg_ops_lock(10);
+    if (s_apply_lock_probe_rc == 0) mcfg_ops_unlock();   /* don't wedge later tests if this regresses */
+}
+
+void test_apply_runs_while_mcfg_ops_edit_still_holds_the_lock(void) {
+    mcfg_ops_init();
+    s_apply_lock_probe_rc = 99;
+    TEST_ASSERT_EQUAL_INT(0, mcfg_ops_edit(set_hostname, "apply-probe", apply_lock_probe, "TEST"));
+    TEST_ASSERT_EQUAL_INT(-1, s_apply_lock_probe_rc);
+}
+
+static int s_apply_calls;
+static void apply_counter(void *ctx) { (void)ctx; s_apply_calls++; }
+
+void test_apply_does_not_run_when_the_edit_is_refused(void) {
+    mcfg_ops_init();
+    s_apply_calls = 0;
+    mcfg_ops_edit(reject, NULL, apply_counter, "TEST");
+    TEST_ASSERT_EQUAL_INT(0, s_apply_calls);
+}
+
+void test_apply_does_not_run_when_the_commit_fails_to_store(void) {
+    mcfg_ops_init();
+    s_apply_calls = 0;
+    fake_mcfg_store_force_storage_fail(1);
+    mcfg_ops_edit(set_hostname, "no-apply", apply_counter, "TEST");
+    TEST_ASSERT_EQUAL_INT(0, s_apply_calls);
+}
+
 int main(void) { UNITY_BEGIN();
     RUN_TEST(test_edit_commits_when_the_edit_function_accepts);
     RUN_TEST(test_a_rejecting_edit_does_not_commit_and_leaves_no_trace);
@@ -101,4 +152,7 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_init_is_idempotent);
     RUN_TEST(test_edit_reports_dash3_when_the_commit_rejects_as_invalid);
     RUN_TEST(test_edit_reports_dash2_when_the_commit_fails_to_store);
+    RUN_TEST(test_apply_runs_while_mcfg_ops_edit_still_holds_the_lock);
+    RUN_TEST(test_apply_does_not_run_when_the_edit_is_refused);
+    RUN_TEST(test_apply_does_not_run_when_the_commit_fails_to_store);
     return UNITY_END(); }

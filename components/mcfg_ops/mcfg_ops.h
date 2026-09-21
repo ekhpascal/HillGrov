@@ -33,8 +33,20 @@ void mcfg_ops_unlock(void);
  *   -3  mcfg_commit() rejected the config as invalid
  * The -2/-3 split is not decoration: mcfg_commit() distinguishes those two, and
  * the CLI and web surfaces map them to different owner-visible errors
- * (ERR STORAGE vs ERR INVALID). */
-int  mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx);
+ * (ERR STORAGE vs ERR INVALID).
+ *
+ * apply runs after a successful commit and STILL HOLDS THE LOCK; pass NULL when
+ * there is nothing to apply. That scope is deliberate and predates this
+ * component: every writer held the lock across its wifi_mgr_apply() /
+ * time_svc_apply_mcfg() / http_auth_sessions_drop(), and GET /api/wifi/scan
+ * takes this same lock so a radio reconfigure cannot land underneath a scan.
+ * An apply that ran after the release would quietly delete that exclusion.
+ * apply must therefore never call back into mcfg_ops_lock()/mcfg_ops_edit() --
+ * the lock is not recursive.
+ *
+ * what is the label the commit path logs, e.g. "SET TZ". */
+int  mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx,
+                    void (*apply)(void *ctx), const char *what);
 
 #ifdef __cplusplus
 }
