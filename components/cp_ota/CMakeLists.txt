@@ -46,6 +46,7 @@ idf_component_register(
     SRCS "cp_ota.c"
     INCLUDE_DIRS "."
     REQUIRES esp_partition
+    PRIV_REQUIRES hg_blob
 )
 
 idf_component_optional_requires(PRIVATE espressif__esp_hosted)

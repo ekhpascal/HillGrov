@@ -51,6 +51,36 @@ extern "C" {
  * change esp_hosted itself considers fine. */
 int cp_ota_needed(uint32_t cp_ver);
 
+/* HillGrow's shared "data-partition firmware" header format -- the same one
+ * zone_fw uses (components/fw_srv/fw_srv.c's FW_HDR_MAGIC/FW_HDR_LEN,
+ * tools/flash_app.py's build_hgfw_image()): 16 bytes, { magic 'HGFW' u32 LE,
+ * len u32 LE, crc32 u32 LE, rsvd u32 }, prefixed ahead of the raw image at
+ * offset 0. A DATA partition can't recover its payload length by parsing
+ * esp_image segments (that's bootloader territory), so the length has to be
+ * carried explicitly -- fix-round finding (Task 6 concern 1): the first cut
+ * of this component pushed the WHOLE cp_fw partition, including trailing
+ * erased/stale bytes past the real image, because nothing else told it
+ * where the image ended. */
+#define CP_OTA_HDR_LEN   16u
+#define CP_OTA_HDR_MAGIC 0x57464748u   /* 'HGFW' LE */
+
+/* Validates a 16-byte header already read from cp_fw offset 0, against a
+ * body crc32 the CALLER already computed -- hg_crc32(0, ...) (components/
+ * hg_blob/hg_blob.h; seed 0 for one-shot) over `len` bytes starting at
+ * cp_fw offset CP_OTA_HDR_LEN. Streaming that body is not this function's
+ * job (cp_fw can hold up to ~1.5 MB, too big to pass by value), so it stays
+ * pure, allocation-free and host-tested (tests/host/test_cp_ota.c) even
+ * though the thing it validates is not.
+ *
+ * Checks, all of which must hold: hdr's magic == CP_OTA_HDR_MAGIC; hdr's len
+ * is non-zero and CP_OTA_HDR_LEN + len fits within part_size; body_crc
+ * matches hdr's own stored crc32. Returns 0 and sets *len_out to the
+ * validated length on success; -1 otherwise (*len_out untouched). An erased
+ * (0xFF-filled) partition is rejected by the magic check like any other
+ * garbage header -- no separate erased-byte check is needed. */
+int cp_ota_parse_header(const uint8_t hdr[CP_OTA_HDR_LEN], uint32_t part_size,
+                         uint32_t body_crc, uint32_t *len_out);
+
 /* Pushes the image staged in the "cp_fw" partition to the C6 over
  * esp_hosted's RPC OTA channel, but only when cp_ota_needed() says the C6's
  * reported version actually differs from CP_OTA_HOST_VERSION.
@@ -58,9 +88,12 @@ int cp_ota_needed(uint32_t cp_ver);
  * Returns:
  *    0  already matching -- nothing done
  *    1  image pushed and activated (the C6 reboots itself)
- *   -1  no image staged in cp_fw (partition absent, or its first byte is
- *       still erased 0xFF)
- *   -2  the push failed partway (the C6 keeps running its old firmware)
+ *   -1  no VALID image staged in cp_fw: partition absent, or the header at
+ *       offset 0 fails cp_ota_parse_header() (bad magic/length/crc -- this
+ *       catches a truncated or corrupted staging write before anything is
+ *       sent to the radio, not just an untouched/erased partition)
+ *   -2  the push failed partway, AFTER validation passed (the C6 keeps
+ *       running its old firmware)
  *
  * A 1 does NOT mean the new firmware is confirmed running: the C6 reboots
  * on its own ~2 s timer after activation, inside esp_hosted's 5 s RPC wait,

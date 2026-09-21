@@ -32,16 +32,23 @@ components/fw_srv/fw_srv.h) so the master's fw_srv component can serve it at
 GET /fw/zone.bin for a fleet update (Task 15). --port therefore names the
 MASTER's serial port here, not a zone's.
 
---app cpfw (esp32p4 only) writes a raw ESP32-C6 co-processor image into the
-MASTER's "cp_fw" data partition (offset 0xBB0000, size 0x180000; subtype
-0x41 -- a DATA partition, not an app/ota slot, so this gets its own branch
-here rather than falling into the generic app-slot path, which would wrongly
-write an otadata selecting ota_0). --cp-image PATH is REQUIRED with
---app cpfw: there's no default build directory for it because the source
-project isn't part of this repo yet (promoting it is Task 9). Today it comes
-from the eh_cp project in the throwaway P4 bring-up spike
-(C:\\Projects\\hillgrow-p4-spike\\eh_cp) -- `idf.py build` there produces
-build/eh_cp_wifi_softap.bin. Building it needs
+--app cpfw (esp32p4 only) stages a raw ESP32-C6 co-processor image,
+HGFW-header-prefixed like zonefw's (build_cpfw_image() -- same 16-byte
+header, same shared writer as build_zonefw_image()), into the MASTER's
+"cp_fw" data partition (offset 0xBB0000, size 0x180000; subtype 0x41 -- a
+DATA partition, not an app/ota slot, so this gets its own branch here rather
+than falling into the generic app-slot path, which would wrongly write an
+otadata selecting ota_0). The header matters here, not just for zone_fw:
+cp_fw is a data partition too, so components/cp_ota/cp_ota.c can't recover
+the real image length by parsing esp_image segments either, and it validates
+the header's crc32 before ever touching the radio over RPC.
+
+--cp-image PATH is REQUIRED with --app cpfw: there's no default build
+directory for it because the source project isn't part of this repo yet
+(promoting it is Task 9). The file it names is the eh_cp project's
+eh_cp_wifi_softap.bin -- today that only exists in the throwaway P4 bring-up
+spike (C:\\Projects\\hillgrow-p4-spike\\eh_cp) -- `idf.py build` there
+produces build/eh_cp_wifi_softap.bin. Building it needs
 CONFIG_EH_TRANSPORT_CP_SDIO_MODE_STREAM=y: esp_hosted's default SW_AGGR SDIO
 mode needs an ESP-IDF patch that the shared 6.0.1 install lacks. Do NOT run
 `eh.py patch-idf` against C:\\esp\\v6.0.1 -- that patches the shared install
@@ -76,40 +83,72 @@ APP_OFFSET = {
 }
 OTADATA_OFFSET = 0x20000        # same on both tables
 
-ZONE_FW_HDR_LEN = 16
+# HGFW header shared by every data-type "staged firmware" partition -- today
+# zone_fw and cp_fw, both size 0x180000. Neither partition is app-type, so
+# neither can have its payload length recovered by parsing esp_image
+# segments (that's bootloader territory); the length has to be carried
+# explicitly. { magic 'HGFW' u32 LE, len u32 LE, crc32 u32 LE, rsvd u32 },
+# checked on the device side by components/fw_srv/fw_srv.c's
+# validate_image() (zone_fw) and components/cp_ota/cp_ota.c's
+# cp_ota_parse_header() (cp_fw) -- both read the SAME 16-byte layout.
+HGFW_HDR_LEN = 16
+HGFW_MAGIC = 0x57464748   # 'HGFW' LE -- see components/fw_srv/fw_srv.c's FW_HDR_MAGIC
+                          # and components/cp_ota/cp_ota.h's CP_OTA_HDR_MAGIC
+
 ZONE_FW_PART_SIZE = 0x180000
-ZONE_FW_MAX_IMAGE = ZONE_FW_PART_SIZE - ZONE_FW_HDR_LEN
-ZONE_FW_MAGIC = 0x57464748   # 'HGFW' LE -- see components/fw_srv/fw_srv.c's FW_HDR_MAGIC
+ZONE_FW_MAX_IMAGE = ZONE_FW_PART_SIZE - HGFW_HDR_LEN
+CP_FW_PART_SIZE = 0x180000   # master/partitions_p4.csv: cp_fw, same size as zone_fw
+CP_FW_MAX_IMAGE = CP_FW_PART_SIZE - HGFW_HDR_LEN
+
+# Back-compat aliases -- nothing outside this module used the old names, but
+# keeping them cheap avoids a silent behavior change for anything that does.
+ZONE_FW_HDR_LEN = HGFW_HDR_LEN
+ZONE_FW_MAGIC = HGFW_MAGIC
 
 
-def build_zonefw_image(zone_bin_path, out_dir):
-    """Prepends the 16-byte HGFW header { magic 'HGFW' u32 LE, len u32 LE,
-    crc32 u32 LE, rsvd u32 } fw_srv.c validates at zone_fw+0, ahead of the
-    raw zone app image at zone_fw+16 (the partition is data-type, so the
-    image length can't be recovered by parsing esp_image segments --
-    that's bootloader territory -- and has to be carried explicitly).
+def build_hgfw_image(src_bin_path, out_dir, out_name, max_image, what):
+    """Prepends the 16-byte HGFW header (see HGFW_HDR_LEN/HGFW_MAGIC above)
+    ahead of the raw image at +16. Shared by --app zonefw (build_zonefw_image,
+    zone_fw) and --app cpfw (build_cpfw_image, cp_fw) -- same header format,
+    same partition size, same device-side check shape (fw_srv.c's
+    validate_image() / cp_ota.c's cp_ota_parse_header()), so this is written
+    once rather than as two near-identical header writers.
 
     crc32 is plain binascii.crc32(image) (seed 0 -- the standard zlib/
     CRC-32-ISO-HDLC convention): the SAME check value family hg_blob.c's
-    hg_crc32(0, ...) computes, which fw_srv.c verifies against. This is
-    NOT hg_otadata.py's 0xFFFFFFFF-seeded esp_rom_crc32_le convention (a
-    different check value family used for a different, bootloader-owned
-    structure) -- do not conflate the two.
+    hg_crc32(0, ...) computes, which both device-side validators verify
+    against. This is NOT hg_otadata.py's 0xFFFFFFFF-seeded esp_rom_crc32_le
+    convention (a different check value family used for a different,
+    bootloader-owned structure) -- do not conflate the two.
 
-    Refuses images that wouldn't fit the zone_fw partition once the header
-    is added."""
-    with open(zone_bin_path, "rb") as f:
+    `what` names the image kind in the size-limit error message (e.g. "zone"
+    or "coprocessor"). Refuses images that wouldn't fit the target partition
+    once the header is added."""
+    with open(src_bin_path, "rb") as f:
         image = f.read()
-    if len(image) > ZONE_FW_MAX_IMAGE:
-        sys.exit(f"error: zone image too large for zone_fw ({len(image)} > "
-                 f"{ZONE_FW_MAX_IMAGE} bytes = 0x180000 - 16)")
+    if len(image) > max_image:
+        sys.exit(f"error: {what} image too large for its partition ({len(image)} > "
+                 f"{max_image} bytes = {max_image + HGFW_HDR_LEN:#x} - {HGFW_HDR_LEN})")
     crc = binascii.crc32(image) & 0xFFFFFFFF
-    header = struct.pack("<IIII", ZONE_FW_MAGIC, len(image), crc, 0)
+    header = struct.pack("<IIII", HGFW_MAGIC, len(image), crc, 0)
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, "hg_zonefw.bin")
+    out_path = os.path.join(out_dir, out_name)
     with open(out_path, "wb") as f:
         f.write(header + image)
     return out_path
+
+
+def build_zonefw_image(zone_bin_path, out_dir):
+    """--app zonefw: stages a zone app image behind the HGFW header for the
+    MASTER's zone_fw partition. See build_hgfw_image() for the format."""
+    return build_hgfw_image(zone_bin_path, out_dir, "hg_zonefw.bin", ZONE_FW_MAX_IMAGE, "zone")
+
+
+def build_cpfw_image(cp_bin_path, out_dir):
+    """--app cpfw: stages a raw ESP32-C6 co-processor image (eh_cp's
+    eh_cp_wifi_softap.bin) behind the HGFW header for the MASTER's cp_fw
+    partition. See build_hgfw_image() for the format."""
+    return build_hgfw_image(cp_bin_path, out_dir, "hg_cpfw.bin", CP_FW_MAX_IMAGE, "coprocessor")
 
 
 def build_dir(app, override=None):
@@ -168,11 +207,18 @@ def main():
         # zonefw, this gets its own branch: no otadata write, nothing boots
         # from it directly. (An earlier build of this tool let --app cpfw fall
         # through to the generic app-slot branch below, which wrote a bogus
-        # otadata selecting ota_0 -- see the task-6 brief.)
+        # otadata selecting ota_0 -- see the task-6 brief.) Fix round 1: also
+        # stages the raw image behind the HGFW header (build_cpfw_image(),
+        # same shape as build_zonefw_image()) rather than writing it raw --
+        # cp_fw is a data partition, so cp_ota.c can't recover the real image
+        # length by parsing esp_image segments, and the first cut of this
+        # branch left it pushing the whole partition, trailing erased bytes
+        # and all.
         if not args.cp_image:
             parser.error("--app cpfw requires --cp-image PATH (see --help for where it comes from)")
         cp_bin = require_file(args.cp_image, "coprocessor image")
-        write_flash_args = [hex(offsets["cpfw"]), cp_bin]
+        cpfw_bin = build_cpfw_image(cp_bin, build_dir("master"))
+        write_flash_args = [hex(offsets["cpfw"]), cpfw_bin]
     elif args.app == "zonefw":
         # Builds nothing (per the brief): takes the zone app's own build
         # output and re-packages it for the MASTER's zone_fw partition --

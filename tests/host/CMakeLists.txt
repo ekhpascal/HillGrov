@@ -90,9 +90,12 @@ target_compile_definitions(test_partitions_p4 PRIVATE
 hg_test(test_mcfg_ops ${COMP}/mcfg_ops/mcfg_ops.c ${COMP}/hg_mcfg/hg_mcfg.c ${HG_CFG_SRC}
         ${COMP}/hg_blob/hg_blob.c fakes/fake_mcfg_store.c)
 
-# cp_ota.c compiles ${CP_OTA_SRC} straight from source, same as http_routes.c
-# and mcfg_ops.c above: only cp_ota_needed() is pure and host-tested here.
-# cp_ota_sync() (the RPC push) is guarded out under HOST_TEST -- see
-# components/cp_ota/cp_ota.c -- so this test link never needs esp_partition,
-# esp_task_wdt or esp_hosted at all.
-hg_test(test_cp_ota ${COMP}/cp_ota/cp_ota.c)
+# cp_ota.c compiles straight from source, same as http_routes.c and
+# mcfg_ops.c above: only cp_ota_needed() and cp_ota_parse_header() are pure
+# and host-tested here. cp_ota_sync() (the RPC push) is guarded out under
+# HOST_TEST -- see components/cp_ota/cp_ota.c -- so this test link never
+# needs esp_partition, esp_task_wdt or esp_hosted at all. hg_blob.c is
+# linked in for hg_crc32 -- the test builds body_crc values the same way
+# production code does (fix round 1, Task 6 concern 1: cp_fw carries the
+# same HGFW header zone_fw does, and cp_ota_parse_header() checks it).
+hg_test(test_cp_ota ${COMP}/cp_ota/cp_ota.c ${COMP}/hg_blob/hg_blob.c)

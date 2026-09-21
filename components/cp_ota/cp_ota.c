@@ -12,6 +12,26 @@ int cp_ota_needed(uint32_t cp_ver) {
             ver_minor(cp_ver) != ver_minor(CP_OTA_HOST_VERSION)) ? 1 : 0;
 }
 
+/* Explicit little-endian byte-offset read (C code rule: wire/persisted data
+ * is packed by explicit offset, never via struct-cast) -- mirrors
+ * hg_blob.c's and fw_srv.c's own private rd32() helpers. */
+static uint32_t rd32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/* Pure, host-tested (tests/host/test_cp_ota.c) -- see cp_ota.h for the
+ * header format and what body_crc means. */
+int cp_ota_parse_header(const uint8_t hdr[CP_OTA_HDR_LEN], uint32_t part_size,
+                         uint32_t body_crc, uint32_t *len_out) {
+    if (rd32(hdr) != CP_OTA_HDR_MAGIC) return -1;
+    uint32_t len = rd32(hdr + 4);
+    uint32_t want_crc = rd32(hdr + 8);
+    if (len == 0 || (uint64_t)CP_OTA_HDR_LEN + len > part_size) return -1;
+    if (body_crc != want_crc) return -1;
+    *len_out = len;
+    return 0;
+}
+
 /* Everything below is the RPC push -- not pure, not host-tested. HOST_TEST
  * (tests/host/CMakeLists.txt's hg_test()) compiles this file straight from
  * source for the host suite, which has no sdkconfig.h and no esp_hosted, so
@@ -35,17 +55,14 @@ int cp_ota_needed(uint32_t cp_ver) {
 #include "eh_host_cp_ota.h"
 #include "eh_host_mcu_transport_init_event.h"
 #include "eh_host_feat_rpc_ext_v2_types.h"   /* EH_RPC_OTA_CHUNK_MAX */
+#include "hg_blob.h"                         /* hg_crc32 -- same check-value family
+                                                 fw_srv.c and tools/flash_app.py's
+                                                 build_hgfw_image() use for this
+                                                 header format */
 
 static const char *TAG = "cp_ota";
 
-/* cp_fw is 0x180000 B (master/partitions_p4.csv) -- exactly 1024 chunks of
- * EH_RPC_OTA_CHUNK_MAX (1536 B), no partial final chunk. The image itself is
- * shorter (~1.146 MB); the tail is whatever flash_app.py's --app cpfw left
- * behind (erased 0xFF on a clean chip), which is harmless -- the C6's own
- * esp_image loader reads exactly as many bytes as its image header
- * describes, the same way any ESP OTA partition is normally larger than the
- * image it holds. */
-#define CP_OTA_CHUNK EH_RPC_OTA_CHUNK_MAX
+#define CP_OTA_CHUNK EH_RPC_OTA_CHUNK_MAX   /* esp_hosted's RPC OTA frame limit, 1536 B */
 
 /* esp_task_wdt_reset() logs an ESP_LOGE("task not found") every call for a
  * task that isn't subscribed (fw_srv.c's wdt_kick() found this first) --
@@ -75,10 +92,47 @@ int cp_ota_sync(void) {
         return -1;
     }
 
-    uint8_t first_byte;
-    if (esp_partition_read(part, 0, &first_byte, 1) != ESP_OK || first_byte == 0xFF) {
-        ESP_LOGW(TAG, "cp_fw is empty (erased) -- nothing staged, run "
-                      "flash_app.py --app cpfw first");
+    uint8_t hdr[CP_OTA_HDR_LEN];
+    if (esp_partition_read(part, 0, hdr, CP_OTA_HDR_LEN) != ESP_OK) {
+        ESP_LOGW(TAG, "cp_fw header read failed -- nothing staged");
+        return -1;
+    }
+
+    static uint8_t buf[CP_OTA_CHUNK];
+
+    /* Validate BEFORE touching the radio (fix-round finding, Task 6 concern
+     * 1): a truncated or corrupted staged image must be caught here, while
+     * the C6 is still running working firmware. A half-written radio image
+     * means no Wi-Fi at all, recoverable only from the board's C6-UART
+     * header -- so this crc check is not optional polish.
+     *
+     * hdr's own length field isn't trusted yet (that's exactly what's being
+     * validated), so the read below is capped at the partition's physical
+     * remainder -- never a runaway read even if the header is garbage -- and
+     * cp_ota_parse_header() below is the one place that decides the header
+     * is actually good, the same way fw_srv.c's validate_image() folds its
+     * own magic/length/crc checks into one decision. */
+    uint32_t body_max = (uint32_t)(part->size - CP_OTA_HDR_LEN);
+    uint32_t peek_len = rd32(hdr + 4);
+    uint32_t scan_len = peek_len < body_max ? peek_len : body_max;
+
+    uint32_t crc = 0, off = CP_OTA_HDR_LEN, rem = scan_len;
+    while (rem) {
+        wdt_kick();
+        uint32_t n = rem < CP_OTA_CHUNK ? rem : CP_OTA_CHUNK;
+        if (esp_partition_read(part, off, buf, n) != ESP_OK) {
+            ESP_LOGW(TAG, "cp_fw read failed while validating -- nothing staged");
+            return -1;
+        }
+        crc = hg_crc32(crc, buf, n);
+        off += n;
+        rem -= n;
+    }
+
+    uint32_t len;
+    if (cp_ota_parse_header(hdr, part->size, crc, &len) != 0) {
+        ESP_LOGW(TAG, "cp_fw image failed validation (magic/length/crc) -- "
+                      "nothing staged (or a corrupt/truncated transfer)");
         return -1;
     }
 
@@ -88,8 +142,12 @@ int cp_ota_sync(void) {
         return -2;
     }
 
-    static uint8_t buf[CP_OTA_CHUNK];
-    uint32_t off = 0, rem = part->size;
+    /* Push exactly the validated length, starting after the header -- not
+     * the whole partition (the first cut of this component pushed all of
+     * part->size, including trailing erased/stale bytes past the real
+     * image). */
+    off = CP_OTA_HDR_LEN;
+    rem = len;
     int push_failed = 0;
     while (rem) {
         wdt_kick();   /* the whole push takes ~7.3 s; the TWDT is 8 s */
@@ -104,7 +162,7 @@ int cp_ota_sync(void) {
     }
     if (push_failed) {
         ESP_LOGE(TAG, "cp_fw OTA write failed at %lu/%lu B -- C6 keeps its old firmware",
-                 (unsigned long)off, (unsigned long)part->size);
+                 (unsigned long)(off - CP_OTA_HDR_LEN), (unsigned long)len);
         return -2;   /* no eh_host_cp_ota_end()/activate(): the transfer never completed */
     }
 
