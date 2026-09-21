@@ -728,7 +728,7 @@ The spike embedded the 1.09 MB C6 image in the app. Task 2 gave it `cp_fw`. Move
 **Interfaces:**
 - Consumes: `cp_fw` partition (Task 2); `eh_host_cp_ota_begin/write/end/activate` and `eh_host_mcu_transport_get_fw_version` / `_verify_fw_compat` from `esp_hosted`.
 - Produces: `int cp_ota_sync(void);` — 0 = already matching, nothing done; 1 = image pushed and activated (the C6 reboots itself); -1 = no image staged in `cp_fw`; -2 = the push failed (the C6 keeps running its old firmware).
-- Produces: `int cp_ota_needed(uint32_t cp_ver);` — **pure**, host-tested: 1 when `cp_ver` differs from the host in major.minor, else 0.
+- Produces: `int cp_ota_needed(uint32_t cp_ver);` — **pure**, host-tested: 1 when `cp_ver` differs from the host in the major or minor byte, else 0. A patch-only difference returns 0, because esp_hosted's own `verify_fw_compat()` treats it as compatible and re-flashing the radio for it would be churn.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -754,12 +754,23 @@ void test_a_zero_version_needs_an_update(void) {
 }
 
 void test_a_differing_minor_needs_an_update(void) {
-    TEST_ASSERT_EQUAL_INT(1, cp_ota_needed(0x00030006u));   /* 3.0.6 vs 3.0.7 */
+    /* 3.1.7 vs 3.0.7. The version word is EH_VERSION_VAL(major, minor, patch)
+       == (major << 16) | (minor << 8) | patch, so the MINOR byte is bits 8-15 --
+       0x00030006 would be 3.0.6, a patch difference, not a minor one. */
+    TEST_ASSERT_EQUAL_INT(1, cp_ota_needed(0x00030107u));
+}
+
+void test_a_differing_major_needs_an_update(void) {
+    TEST_ASSERT_EQUAL_INT(1, cp_ota_needed(0x00020007u));   /* 2.0.7 vs 3.0.7 */
 }
 
 void test_a_differing_patch_alone_does_not(void) {
-    /* verify_fw_compat matches on major.minor only; a patch bump is compatible
-       and re-flashing for it would be churn. */
+    /* Read from esp_hosted's own implementation, not inferred: after an exact
+       compare, eh_host_mcu_transport_verify_fw_compat() returns +-1 when the
+       major or the minor byte differs, and for a patch-only difference it logs
+       "patch version differs (compatible)" and returns 0. cp_ota_needed() must
+       agree with it, or the host would re-flash the radio for a patch bump that
+       esp_hosted itself considers compatible. */
     TEST_ASSERT_EQUAL_INT(0, cp_ota_needed(0x00030008u));
 }
 ```
@@ -771,7 +782,7 @@ Expected: FAIL — `cp_ota.h` not found.
 
 - [ ] **Step 3: Write the component**
 
-`cp_ota_needed()` compares major.minor against `CP_OTA_HOST_VERSION` (a header constant, `0x00030007` for esp_hosted 3.0.7). `cp_ota_sync()`:
+`cp_ota_needed()` compares major.minor against `CP_OTA_HOST_VERSION` (a header constant, `0x00030007` for esp_hosted 3.0.7 — the word is `(major << 16) | (minor << 8) | patch`, matching esp_hosted's `EH_VERSION_VAL`). It must stay a *pure* function so the host suite can test it, which is why it re-implements the comparison instead of calling `eh_host_mcu_transport_verify_fw_compat()` — that lives in a component the host build does not have. Because it is a copy, it must agree with the original: exact match 0, major or minor differing 1, **patch-only differing 0**. `cp_ota_sync()`:
 
 1. `eh_host_mcu_transport_get_fw_version()`, then `cp_ota_needed()`; return 0 if not needed.
 2. `esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x41, "cp_fw")`; return -1 if absent or its first bytes are erased (`0xFF`), i.e. nothing staged.
