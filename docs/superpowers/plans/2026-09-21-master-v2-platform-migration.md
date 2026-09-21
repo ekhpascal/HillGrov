@@ -281,7 +281,9 @@ Create `master/partitions_p4.csv`:
 
 ```
 # Master v2 (ESP32-P4, 32 MB). Bootloader 0x2000, partition table 0xF000 --
-# both P4 values, unlike the ESP32 table's 0x1000/0xE000.
+# not the ESP32 table's 0x1000/0xE000. 0x2000 is the P4's fixed bootloader
+# offset; 0xF000 is ours, NOT IDF's P4 default of 0x8000, because the custom
+# bootloader (0x60f0) does not fit in the 0x6000 that 0x8000 would leave it.
 #
 # App slots are 4 MB, double the ESP32's: the master is already 966 KB and the
 # panel UI adds LVGL, a large subsetted clock font and an image decoder. cp_fw
