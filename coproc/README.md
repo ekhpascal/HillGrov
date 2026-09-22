@@ -142,19 +142,32 @@ through a co-processor that may not be answering.
 
 ## esp_hosted version pin
 
-`dependencies.lock` pins `espressif/esp_hosted` to **3.0.7** for target
-`esp32c6`, built against `idf: 6.0.1`. This is load-bearing: the host side
-(`components/cp_ota`) is also built against `esp_hosted` 3.0.7, and it gates
-whether it will even attempt an OTA on a **major.minor** version match
-between the host's and the co-processor's `esp_hosted` (see `ver_major`/
-`ver_minor` and the check in `cp_ota.c`). If this project were rebuilt
-without `dependencies.lock` pinning the version, the component manager could
-silently pull a newer `esp_hosted`, and the resulting co-processor image
-would either be refused outright by the host's version gate, or — worse, if
-a future major.minor happened to still pass that gate — could churn against
-a host that doesn't actually speak its wire protocol correctly. Do not
-delete `dependencies.lock` or regenerate it without a deliberate, tested
-decision to move both sides of the version together.
+The host side (`components/cp_ota`) gates whether it will even attempt an
+OTA on a **major.minor** version match between the host's and the
+co-processor's `esp_hosted` (see `ver_major`/`ver_minor` and the check in
+`cp_ota.c`). That makes "host and co-processor both run `esp_hosted` 3.0.x"
+a real, load-bearing invariant of this system — so it is pinned at the
+source, not left to two lock files happening to agree:
+
+- `coproc/main/idf_component.yml` constrains `espressif/esp_hosted` to
+  `~3.0.7` (i.e. `>=3.0.7, <3.1.0` — exactly `cp_ota`'s compatibility
+  window), with a comment pointing at this section.
+- `master/main/idf_component.yml` carries the mirror-image `~3.0.7` pin on
+  its own `espressif/esp_hosted` entry (still gated by `rules: - if: "target
+  == esp32p4"`, unchanged), with a comment pointing back here.
+
+**The manifest constraint is the primary guard; `dependencies.lock` is just
+the record of what it last resolved to.** `coproc/dependencies.lock`
+currently records `espressif/esp_hosted` resolving to **3.0.7** for target
+`esp32c6`, built against `idf: 6.0.1` — but even if that lock file were
+deleted and regenerated, the `~3.0.7` constraint in `idf_component.yml`
+would stop the component manager from silently resolving a newer
+`esp_hosted` that `cp_ota`'s major.minor gate would refuse (or, worse, a
+future major.minor that happened to still pass that gate and churn against
+a host that doesn't actually speak its wire protocol correctly). Moving
+either side's pin past `3.0.x` is a deliberate, tested decision that must
+change both `coproc/main/idf_component.yml` and
+`master/main/idf_component.yml` together.
 
 ## Not part of the master/zone/rescue regression gate
 

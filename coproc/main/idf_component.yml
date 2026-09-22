@@ -1,5 +1,11 @@
 dependencies:
+  # components/cp_ota (on the host/master side) refuses to OTA a co-processor
+  # whose esp_hosted version differs from the host's in major.minor. Pinning
+  # to the 3.0.x line keeps that invariant explicit instead of relying on
+  # this lock file and master/main/idf_component.yml's happening to agree --
+  # the two must move together; see coproc/README.md's "esp_hosted version
+  # pin" section.
   espressif/esp_hosted:
-    version: '*'
+    version: '~3.0.7'
   idf:
-    version: '>=5.5'
+    version: '>=6.0'

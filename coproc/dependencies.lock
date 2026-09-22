@@ -29,6 +29,6 @@ dependencies:
 direct_dependencies:
 - espressif/esp_hosted
 - idf
-manifest_hash: a00c63fc3ffb33e5ddaa0e768e1fea480d9fe36c6e23cacd8240916425d67edd
+manifest_hash: 4925c7ef26586e18e6eec99aeb335b389e6ab84a93842613f9e957bacd3221e1
 target: esp32c6
 version: 3.0.0

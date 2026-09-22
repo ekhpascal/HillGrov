@@ -5,8 +5,14 @@ dependencies:
   # P4 only: esp_wifi has no radio of its own on this target, so every
   # esp_wifi_* call routes to the on-board C6 over SDIO. The rules key keeps
   # the ESP32 build's dependency set unchanged.
+  #
+  # Pinned to 3.0.x, not "*": components/cp_ota refuses to OTA a co-processor
+  # whose esp_hosted version differs from this host's in major.minor, so the
+  # two sides of that gate must move together deliberately. The coproc/
+  # project (coproc/main/idf_component.yml) carries the mirror-image pin and
+  # comment -- see coproc/README.md's "esp_hosted version pin" section.
   espressif/esp_hosted:
-    version: "*"
+    version: "~3.0.7"
     rules:
       - if: "target == esp32p4"
   espressif/esp_wifi_remote:
