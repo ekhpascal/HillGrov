@@ -84,7 +84,11 @@ import binascii
 import os
 import struct
 
-OTADATA_PARTITION_SIZE = 0x2000  # matches zone/master partitions.csv "otadata" size
+# 0x2000 at 0x20000 on all FOUR tables this module now serves -- zone/,
+# rescue/ and master/partitions.csv plus master/partitions_p4.csv (both flash
+# tools became target-aware and both call this one helper). Value verified
+# correct on every one of them; the comment used to name only two.
+OTADATA_PARTITION_SIZE = 0x2000
 OTADATA_ENTRY_SIZE = 32
 ESP_OTA_IMG_UNDEFINED = 0xFFFFFFFF  # "App can boot and work without limits" -- our
                                      # apps mark VALID at runtime (app_update rollback)

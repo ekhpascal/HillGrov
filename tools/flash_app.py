@@ -26,7 +26,9 @@ master/zone OTA app image) is checked against --target by reading its own
 esp_image_header_t chip_id before it's flashed -- see tools/hg_image.py.
 On mismatch this refuses rather than flashing a right-offset,
 wrong-architecture image. --app zonefw and --app cpfw are deliberately
-exempt from that check: see the next paragraph for why.
+exempt from *that* check -- see the next paragraph -- but they are not
+unchecked: each gets its own inner-header check against the chip its
+partition's on-device consumer requires, independent of --target.
 
 --app zonefw and --app cpfw are different in kind from the app-slot cases
 (zone/master/rescue): neither flashes an app slot -- no otadata write,
@@ -50,16 +52,22 @@ cp_fw is a data partition too, so components/cp_ota/cp_ota.c can't recover
 the real image length by parsing esp_image segments either, and it validates
 the header's crc32 before ever touching the radio over RPC.
 
---cp-image PATH is REQUIRED with --app cpfw: there's no default build
-directory for it because the source project isn't part of this repo yet
-(promoting it is Task 9). The file it names is the eh_cp project's
-eh_cp_wifi_softap.bin -- today that only exists in the throwaway P4 bring-up
-spike (C:\\Projects\\hillgrow-p4-spike\\eh_cp) -- `idf.py build` there
-produces build/eh_cp_wifi_softap.bin. Building it needs
-CONFIG_EH_TRANSPORT_CP_SDIO_MODE_STREAM=y: esp_hosted's default SW_AGGR SDIO
-mode needs an ESP-IDF patch that the shared 6.0.1 install lacks. Do NOT run
+--cp-image PATH is REQUIRED with --app cpfw. The co-processor project lives
+in this repo at coproc/ and its image is coproc/build/eh_cp_wifi_softap.bin:
+
+    idf.py -C coproc set-target esp32c6     # first time only
+    idf.py -C coproc build
+
+There is still no default build directory for it (and --build-dir does not
+apply) because coproc/ is a different TARGET with its own partition table, so
+it is not one of the <repo>/<app>/build apps this tool flashes -- the path is
+passed explicitly on purpose. coproc/README.md gives this same invocation and
+points back here for the HGFW_HDR_LEN/HGFW_MAGIC header this tool writes.
+Building it needs CONFIG_EH_TRANSPORT_CP_SDIO_MODE_STREAM=y (set in
+coproc/sdkconfig.defaults): esp_hosted's default SW_AGGR SDIO mode needs an
+ESP-IDF patch that the shared 6.0.1 install lacks. Do NOT run
 `eh.py patch-idf` against C:\\esp\\v6.0.1 -- that patches the shared install
-for every project that uses it, not just eh_cp.
+for every project that uses it, not just coproc.
 """
 import argparse
 import binascii
@@ -233,6 +241,18 @@ def main():
         # chip). Checking it against --target would reject every legitimate
         # --app cpfw call. See tools/hg_image.py's module docstring.
         cpfw_bin = build_cpfw_image(cp_bin, build_dir("master"))
+        # Its own check instead, kept deliberately separate from the --target
+        # guard because the two answers are SUPPOSED to differ here: cp_fw's
+        # payload must be an esp32c6 image whatever --target is, because what
+        # reads it back is components/cp_ota/cp_ota.c, which pushes it
+        # straight into the radio over esp_hosted RPC. The only recovery from
+        # a half-written radio is the board's C6-UART header (see
+        # coproc/README.md), which makes this the most destructive unguarded
+        # path this tool had. Checked on the STAGED file -- the exact bytes
+        # esptool is about to write -- so the inner esp_image_header_t is at
+        # +HGFW_HDR_LEN, behind the header build_cpfw_image() just wrote.
+        hg_image.require_payload_chip(cpfw_bin, "esp32c6", "coprocessor image",
+                                      offset=HGFW_HDR_LEN, staged_from=cp_bin)
         write_flash_args = [hex(offsets["cpfw"]), cpfw_bin]
     elif args.app == "zonefw":
         # Builds nothing (per the brief): takes the zone app's own build
@@ -245,6 +265,14 @@ def main():
         # partition -- always ESP32, regardless of the master's --target.
         # Same reasoning as --app cpfw above.
         zonefw_bin = build_zonefw_image(zone_bin, build_dir("master"))
+        # And the same separate payload check: zone_fw's consumer is
+        # components/fw_srv, which serves these bytes at GET /fw/zone.bin to a
+        # zone in rescue, so the payload must be an esp32 image on either
+        # --target. A wrong image here bricks every zone in the fleet update
+        # that pulls it. Staged file, inner header at +HGFW_HDR_LEN, as above.
+        hg_image.require_payload_chip(zonefw_bin, "esp32",
+                                      "hillgrow_zone.bin (zone_fw payload)",
+                                      offset=HGFW_HDR_LEN, staged_from=zone_bin)
         write_flash_args = [hex(offsets["zonefw"]), zonefw_bin]
     elif args.app == "rescue":
         bdir = build_dir(args.app, args.build_dir)

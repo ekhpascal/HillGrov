@@ -122,6 +122,17 @@ int cp_ota_parse_header(const uint8_t hdr[CP_OTA_HDR_LEN], uint32_t part_size,
  * cannot confirm the C6 is running the version it just tried to push; the
  * C6 has already rebooted once by that point regardless of the outcome.
  *
+ * The CALLER, however, now does reboot on 1 -- and only on 1. Final-review
+ * F3: the C6 is the master's radio, so a successful update leaves wifi_mgr,
+ * mDNS, SNTP and httpd bound to a radio that has just restarted with fresh
+ * unconfigured state, and nothing re-applies them. master/main/app_main.c's
+ * cp_ota_restart_for_new_radio() restarts the master for that one return
+ * value, which is loop-safe *because* it is gated on the confirmed case
+ * (cp_ota_needed() returns 0 next boot, so the update cannot repeat) and is
+ * additionally suppressed while the running slot is PENDING_VERIFY. That
+ * narrow supersession of the never-auto-reboot rule is argued in full at
+ * that function; the rule still holds here and for every other return path.
+ *
  * ESP32 master build: stub, always returns 0. The ESP32 master's Wi-Fi is
  * on-die -- it has no co-processor to update. The real implementation is
  * ESP32-P4-only (CONFIG_IDF_TARGET_ESP32P4), where esp_hosted's SDIO link

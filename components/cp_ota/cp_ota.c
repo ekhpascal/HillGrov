@@ -79,15 +79,36 @@ static const char *TAG = "cp_ota";
 
 #define CP_OTA_CHUNK EH_RPC_OTA_CHUNK_MAX   /* esp_hosted's RPC OTA frame limit, 1536 B */
 
-/* Fix round 2 finding: the C6 reboots into the new image on its own ~2000 ms
- * timer after activate() (see the comment on that call below); this bounds
- * how long cp_ota_sync() waits for it to come back reporting a version
- * cp_ota_needed() accepts, polled every CP_OTA_REHANDSHAKE_POLL_MS. Wide
- * enough for the ~2000 ms reboot plus SDIO re-enumeration and a fresh
- * init-event exchange, same order of magnitude as esp_hosted's own 5000 ms
- * RPC wait convention used elsewhere in this file. */
-#define CP_OTA_REHANDSHAKE_TIMEOUT_MS 6000u
-#define CP_OTA_REHANDSHAKE_POLL_MS     250u
+/* Fix round 2 finding: the C6 reboots into the new image on its own timer
+ * after activate() (see the comment on that call below); this bounds how long
+ * cp_ota_sync() waits for it to come back reporting a version
+ * cp_ota_needed() accepts, polled every CP_OTA_REHANDSHAKE_POLL_MS.
+ *
+ * Deferred-findings #6, now closed as far as it can be: that reboot timer is
+ * a TICK COUNT ON THE OTHER CHIP, so what it is worth in wall-clock
+ * milliseconds depends on the co-processor's FreeRTOS tick rate -- a value
+ * this host cannot read and therefore cannot assert. The window works today
+ * only because coproc/sdkconfig.defaults pins CONFIG_FREERTOS_HZ=1000, which
+ * is what makes 2000 ticks 2000 ms; at IDF's 100 Hz default the same 2000
+ * ticks would be 20 s, this poll would give up first, and every genuinely
+ * SUCCESSFUL radio update would report -2 -- a false negative on a state the
+ * master does not recover from by itself. The coupling cannot be asserted
+ * from here, so it is made legible instead: the timeout is derived from the
+ * two assumptions rather than written as one number, and the timeout's own
+ * error log names both, so that failure points at the co-processor's tick
+ * rate instead of looking like a dead radio. */
+#define CP_OTA_ASSUMED_CP_REBOOT_TICKS 2000u   /* esp_hosted's post-activate reboot delay */
+#define CP_OTA_ASSUMED_CP_TICK_HZ      1000u   /* coproc/sdkconfig.defaults: CONFIG_FREERTOS_HZ */
+#define CP_OTA_ASSUMED_CP_REBOOT_MS \
+    (CP_OTA_ASSUMED_CP_REBOOT_TICKS * 1000u / CP_OTA_ASSUMED_CP_TICK_HZ)
+/* SDIO re-enumeration plus a fresh init-event exchange on top of the reboot.
+ * Keeps the total at the 6000 ms this was carrying as a literal, which is the
+ * same order of magnitude as esp_hosted's own 5000 ms RPC wait convention
+ * used elsewhere in this file. */
+#define CP_OTA_REHANDSHAKE_MARGIN_MS   4000u
+#define CP_OTA_REHANDSHAKE_TIMEOUT_MS \
+    (CP_OTA_ASSUMED_CP_REBOOT_MS + CP_OTA_REHANDSHAKE_MARGIN_MS)
+#define CP_OTA_REHANDSHAKE_POLL_MS      250u
 
 /* esp_task_wdt_reset() logs an ESP_LOGE("task not found") every call for a
  * task that isn't subscribed (fw_srv.c's wdt_kick() found this first). Gated
@@ -261,7 +282,9 @@ int cp_ota_sync(void) {
     }
 
     /* eh_host_cp_ota_activate() sets the C6's boot partition then reboots it
-     * on its own ~2000 ms timer, inside the host's 5000 ms RPC wait -- so
+     * on its own timer (CP_OTA_ASSUMED_CP_REBOOT_TICKS above, ~2000 ms at the
+     * tick rate coproc/sdkconfig.defaults pins), inside the host's 5000 ms
+     * RPC wait -- so
      * the reply routinely never arrives and this call comes back ESP_FAIL
      * with esp_hosted logging "no response". Log either outcome; NEITHER is
      * proof, per cp_ota.h -- eh_host_cp_ota_end() above only confirmed the
@@ -277,15 +300,21 @@ int cp_ota_sync(void) {
      * missing: "Verify by re-reading the version after the link
      * re-handshakes; never trust this return code." Bounded poll, feeding
      * the watchdog throughout (same "no-op today" caveat as elsewhere in
-     * this function) -- NEVER reboots the master. The update is
-     * version-gated, so a correct image needs no repeat; a wrong image
-     * would reboot-loop forever if this auto-rebooted on a failed verify.
-     * If the C6 never comes back reporting a version cp_ota_needed()
-     * accepts within the window, that is logged loudly and returned as -2,
-     * not 1 -- Wi-Fi may be down for the rest of this boot either way (the
-     * C6 has already rebooted once by this point regardless of outcome),
-     * and only Task 7, on real hardware, can establish whether it recovers
-     * without a power cycle. */
+     * this function) -- and THIS FUNCTION still never reboots the master, on
+     * any path. A wrong image would reboot-loop forever if a failed verify
+     * auto-rebooted, so if the C6 never comes back reporting a version
+     * cp_ota_needed() accepts within the window, that is logged loudly and
+     * returned as -2, not 1: Wi-Fi may be down for the rest of this boot
+     * either way (the C6 has already rebooted once by this point regardless
+     * of outcome), but an unconfirmed push is exactly the case that could
+     * repeat.
+     *
+     * The confirmed case is different and, per final-review F3, the caller
+     * now acts on it: master/main/app_main.c restarts the master on a return
+     * of 1 so the Wi-Fi stack rebinds to the radio's new firmware. That is
+     * loop-safe precisely because it is confined to the confirmed case --
+     * cp_ota_needed() returns 0 on the next boot -- which is why the
+     * narrowing matters and why -2 must keep returning without a reboot. */
     int64_t deadline_us = esp_timer_get_time() +
                            (int64_t)CP_OTA_REHANDSHAKE_TIMEOUT_MS * 1000;
     uint32_t relinked_ver;
@@ -301,10 +330,23 @@ int cp_ota_sync(void) {
     } while (esp_timer_get_time() < deadline_us);
 
     if (!confirmed) {
+        /* Names the cross-chip assumption the window is built on (deferred
+         * #6): if coproc/sdkconfig.defaults has stopped pinning
+         * CONFIG_FREERTOS_HZ=CP_OTA_ASSUMED_CP_TICK_HZ, the C6's reboot delay
+         * is longer than this whole window and a SUCCESSFUL update reports
+         * here as a failure. Check that before concluding the radio is
+         * dead. */
         ESP_LOGE(TAG, "co-processor did not come back reporting the new version within "
-                      "%u ms of activate() (last seen 0x%08lx) -- Wi-Fi may be down until "
-                      "the master reboots; treating this OTA as FAILED, not confirmed",
-                 (unsigned)CP_OTA_REHANDSHAKE_TIMEOUT_MS, (unsigned long)relinked_ver);
+                      "%u ms of activate() (last seen 0x%08lx) -- that window is the "
+                      "assumed %u-tick CP reboot delay at an assumed %u Hz CP tick rate "
+                      "(= %u ms; see coproc/sdkconfig.defaults CONFIG_FREERTOS_HZ) plus "
+                      "%u ms of re-enumeration margin. Wi-Fi may be down until the "
+                      "master reboots; treating this OTA as FAILED, not confirmed",
+                 (unsigned)CP_OTA_REHANDSHAKE_TIMEOUT_MS, (unsigned long)relinked_ver,
+                 (unsigned)CP_OTA_ASSUMED_CP_REBOOT_TICKS,
+                 (unsigned)CP_OTA_ASSUMED_CP_TICK_HZ,
+                 (unsigned)CP_OTA_ASSUMED_CP_REBOOT_MS,
+                 (unsigned)CP_OTA_REHANDSHAKE_MARGIN_MS);
         return -2;
     }
 

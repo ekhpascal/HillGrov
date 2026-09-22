@@ -7,9 +7,17 @@ extern "C" {
 
 /* Master's zone-firmware image server (Task 15 controller ruling #2):
  * exactly one URI, GET /fw/zone.bin, that streams the "zone_fw" data
- * partition (master's partitions.csv, offset
- * 0x570000, size 0x180000) to a zone rebooted into rescue for a fleet
- * update.
+ * partition to a zone rebooted into rescue for a fleet update.
+ *
+ * The offset is TARGET-DEPENDENT, because the Master v2 P4 build has its own
+ * partition table: zone_fw is at 0x570000 on esp32 (master/partitions.csv)
+ * and at 0xA30000 on esp32p4 (master/partitions_p4.csv), size 0x180000 on
+ * both. fw_srv.c itself never uses either number -- it finds zone_fw BY NAME
+ * and derives everything else from part->size, which is why the same code
+ * serves both tables. The numbers are documented here because
+ * tools/flash_app.py cites this header as the authority for them (its
+ * APP_OFFSET table has to know an offset before any partition table has been
+ * parsed), so a single-target answer here is wrong for half the fleet.
  *
  * Storage convention (plan-fixed, shared with tools/flash_app.py --app
  * zonefw): a 16-byte prefix at zone_fw+0 -- { magic 'HGFW' u32 LE, len u32

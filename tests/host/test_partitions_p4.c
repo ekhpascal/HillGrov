@@ -45,6 +45,22 @@ static const part_t *find(const part_t *p, int n, const char *name) {
     return NULL;
 }
 
+/* Every lookup whose RESULT IS DEREFERENCED goes through this, never through
+   find() directly. find() returns NULL for an absent name, and a renamed or
+   removed partition is precisely the scenario this file exists to catch (see
+   the header comment) -- so dereferencing find() there crashed the test binary
+   instead of printing which partition went missing. Today the crash is masked
+   because test_p4_table_has_the_partitions_...() runs first and fails cleanly,
+   and Unity runs cases in listed order; that is an ordering accident, not a
+   property, and it evaporates the moment someone reorders main() or adds a
+   case ahead of it. TEST_ASSERT_* aborts the case via Unity's longjmp from
+   here exactly as it does from load() above. */
+static const part_t *need(const part_t *p, int n, const char *name) {
+    const part_t *e = find(p, n, name);
+    TEST_ASSERT_NOT_NULL_MESSAGE(e, name);
+    return e;
+}
+
 void test_p4_table_has_the_partitions_the_firmware_looks_up_by_name(void) {
     part_t p[16];
     int n = load(p, 16);
@@ -84,10 +100,10 @@ void test_p4_app_slots_are_large_enough_for_the_master_plus_the_panel_ui(void) {
     /* The ESP32 master is already 966 KB and the panel adds LVGL, a large
        subsetted font and an image decoder. 2 MB (the ESP32 slot size) leaves too
        little; require 4 MB so an OTA cannot be blocked by a slot ceiling. */
-    TEST_ASSERT_TRUE_MESSAGE(find(p, n, "ota_0")->size >= 0x400000, "ota_0 under 4 MB");
-    TEST_ASSERT_TRUE_MESSAGE(find(p, n, "ota_1")->size >= 0x400000, "ota_1 under 4 MB");
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(find(p, n, "ota_0")->size,
-                                     find(p, n, "ota_1")->size,
+    TEST_ASSERT_TRUE_MESSAGE(need(p, n, "ota_0")->size >= 0x400000, "ota_0 under 4 MB");
+    TEST_ASSERT_TRUE_MESSAGE(need(p, n, "ota_1")->size >= 0x400000, "ota_1 under 4 MB");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(need(p, n, "ota_0")->size,
+                                     need(p, n, "ota_1")->size,
                                      "OTA slots must match in size");
 }
 
@@ -96,7 +112,7 @@ void test_p4_cp_fw_holds_the_coprocessor_image(void) {
     int n = load(p, 16);
     /* The built CP image is 1 145 984 B and its own OTA layout allows 1.75 MB
        per slot, so give it 1.5 MB of headroom rather than a snug fit. */
-    TEST_ASSERT_TRUE_MESSAGE(find(p, n, "cp_fw")->size >= 0x180000, "cp_fw under 1.5 MB");
+    TEST_ASSERT_TRUE_MESSAGE(need(p, n, "cp_fw")->size >= 0x180000, "cp_fw under 1.5 MB");
 }
 
 /* Deferred from Task 2 as cosmetic (the parser read the subtype column and
@@ -109,8 +125,8 @@ void test_p4_cp_fw_holds_the_coprocessor_image(void) {
 void test_p4_zone_fw_and_cp_fw_have_the_subtypes_their_lookups_pin_to(void) {
     part_t p[16];
     int n = load(p, 16);
-    TEST_ASSERT_EQUAL_STRING_MESSAGE("0x40", find(p, n, "zone_fw")->subtype, "zone_fw subtype");
-    TEST_ASSERT_EQUAL_STRING_MESSAGE("0x41", find(p, n, "cp_fw")->subtype, "cp_fw subtype");
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("0x40", need(p, n, "zone_fw")->subtype, "zone_fw subtype");
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("0x41", need(p, n, "cp_fw")->subtype, "cp_fw subtype");
 }
 
 int main(void) {

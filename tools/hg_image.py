@@ -32,15 +32,20 @@ e9 06 02 20 44 15 08 40 ee 00 00 00 00 00 00 00 -- chip_id (bytes 12-13)
 reads 0x0000 (ESP_CHIP_ID_ESP32), matching that rescue is only ever built
 for the ESP32 master today.
 
-NOT covered here, deliberately: tools/flash_app.py's --app zonefw and --app
-cpfw. Both stage a PAYLOAD for a chip other than --target into a MASTER data
-partition by design -- a zone app image is always ESP32 regardless of the
-master's --target, and a coprocessor image is always ESP32-C6. Running this
-module's require_target_chip() against --target on either would break two
-working paths; see flash_app.py for where those branches deliberately skip
-it. (Those payloads end up wrapped behind a 16-byte HGFW header once
-staged, inner esp_image_header_t at +16 -- but nothing here reads that
-offset, on purpose: see flash_app.py for why.)
+--target is NOT the right question for tools/flash_app.py's --app zonefw and
+--app cpfw. Both stage a PAYLOAD for a chip other than --target into a MASTER
+data partition by design -- a zone app image is always ESP32 regardless of
+the master's --target, and a coprocessor image is always ESP32-C6 -- so
+require_target_chip() against --target would refuse every legitimate call on
+both paths. They get require_payload_chip() instead, which asks the question
+that IS meaningful there: is this the chip the partition's *consumer*
+expects, on every --target. Those payloads are wrapped behind a 16-byte HGFW
+header once staged, so their inner esp_image_header_t sits at +16, which is
+what the `offset` argument below is for. (Originally deferred: with no
+ESP32-C6 image in the checkout there was no way to prove the accept path
+still worked, and an unverifiable guard on a destructive path is worse than
+none. The promoted coproc/ project builds one in-tree, so it is now provable
+and is done.)
 """
 import struct
 import sys
@@ -72,23 +77,26 @@ CHIP_ID_NAME = {
 TARGET_CHIP_ID = {name: chip_id for chip_id, name in CHIP_ID_NAME.items()}
 
 
-def read_chip_id(path, what):
-    """Return the little-endian chip_id at offset 12 of the ESP app image
-    header at the START of `path` (offset 0 -- every caller in this repo
-    checks a real app image, never a wrapped payload; see module docstring).
-    Exits (sys.exit) with a message naming `what` and `path` if the file is
-    too short or doesn't start with the ESP image magic byte -- such a file
-    isn't an app image at all, and reading its chip_id would be reading
-    garbage, producing a confusing "wrong chip" refusal instead of the real
-    problem."""
+def read_chip_id(path, what, offset=0):
+    """Return the little-endian chip_id at +12 of the esp_image_header_t that
+    starts at `offset` in `path`. offset defaults to 0 (a bare app image, as
+    flashed); pass flash_app.py's HGFW_HDR_LEN to read the INNER header of a
+    staged HGFW payload, whose 16-byte wrapper sits ahead of the real image.
+    Exits (sys.exit) with a message naming `what` and `path` if there aren't
+    HEADER_LEN bytes at `offset` or those bytes don't start with the ESP image
+    magic byte -- such a file isn't an app image at all (or the wrapper isn't
+    the size we thought), and reading its chip_id would be reading garbage,
+    producing a confusing "wrong chip" refusal instead of the real problem."""
     with open(path, "rb") as f:
+        f.seek(offset)
         header = f.read(HEADER_LEN)
+    at = "" if offset == 0 else f" at offset {offset}"
     if len(header) < HEADER_LEN:
-        sys.exit(f"error: {what} is too short to be an ESP app image "
+        sys.exit(f"error: {what} is too short to be an ESP app image{at} "
                   f"({len(header)} bytes, need {HEADER_LEN}): {path}")
     if header[0] != IMAGE_MAGIC:
         sys.exit(f"error: {what} does not start with the ESP app image magic "
-                  f"byte ({header[0]:#04x}, expected {IMAGE_MAGIC:#04x}) -- "
+                  f"byte{at} ({header[0]:#04x}, expected {IMAGE_MAGIC:#04x}) -- "
                   f"this isn't an app image: {path}")
     return struct.unpack_from("<H", header, CHIP_ID_OFFSET)[0]
 
@@ -111,4 +119,45 @@ def require_target_chip(path, target, what):
             f"--target -- rebuild {what} for {target} (and check --build-dir "
             f"points at that build), or pass --target {got_name} if that's "
             f"what you actually meant to flash"
+        )
+
+
+def require_payload_chip(path, expect_chip, what, offset=0, staged_from=None):
+    """Refuse (sys.exit) if the ESP app image at `offset` in `path` was not
+    built for `expect_chip` (a chip name as spelled in CHIP_ID_NAME, e.g.
+    "esp32" or "esp32c6").
+
+    A SEPARATE guard from require_target_chip(), and deliberately so: this is
+    for a payload staged into a data partition, where the expected chip is
+    fixed by whatever reads that partition back and is UNRELATED to --target
+    (which only picks flash offsets). Those two answers are supposed to
+    differ, so they must not share one check -- a zone app payload is ESP32
+    on an esp32p4 master, and a coprocessor payload is ESP32-C6 on either.
+    The chip id itself comes out of CHIP_ID_NAME/TARGET_CHIP_ID above, i.e.
+    out of esp_app_format.h's esp_chip_id_t enum, not spelled at the call
+    site from memory.
+
+    `path` is what gets READ (the staged copy, so the check is over the exact
+    bytes about to be flashed); `staged_from` is the file the operator
+    actually named, and is what the message blames. Without it the refusal
+    would point at a scratch file in a build directory that the operator never
+    chose and cannot fix.
+
+    The message names the consumer, because the operator's next question on
+    a destructive staging path is "then what was I supposed to build?"."""
+    want_id = TARGET_CHIP_ID[expect_chip]
+    got_id = read_chip_id(path, what, offset)
+    if got_id != want_id:
+        got_name = CHIP_ID_NAME.get(got_id, f"unknown chip (chip_id {got_id:#06x})")
+        blamed = staged_from if staged_from else path
+        read_note = ("" if not staged_from else
+                     f"\n  (read at +{offset} inside the staged copy {path} -- "
+                     f"the exact bytes esptool would have written)")
+        sys.exit(
+            f"error: {what} was built for {got_name}, but this partition's "
+            f"payload must be an {expect_chip} image: {blamed}\n"
+            f"  refusing to stage it -- this is NOT a --target question "
+            f"(--target only picks the flash offset); the chip is fixed by "
+            f"what reads the partition back on the device. Rebuild it for "
+            f"{expect_chip} and pass that image instead.{read_note}"
         )

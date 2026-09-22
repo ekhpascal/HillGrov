@@ -4,7 +4,7 @@
 
 **Authority:** the system spec (`2026-08-31-hillgrow-system-design.md`) is binding. §11.10 retires the separate display node (§11.1) and absorbs it into the ESP32-P4 kit — this document is that absorbed work, and it lands as part of **Master v2**, not as a separate node. Where this document and the system spec disagree, the spec wins unless the point is listed under *Decisions*.
 
-**Hardware, proven on the bench 2026-09-18** (see `hillgrow-p4-spike/SPIKE-NOTES.md`): Waveshare ESP32-P4-WIFI6-Touch-LCD-7B, 1024×600 EK79007 over MIPI-DSI, GT911 capacitive touch, LVGL 9 via `waveshare/esp32_p4_wifi6_touch_lcd_7b` 3.0.1, panel up 283 ms after boot, ~30 MB PSRAM free.
+**Hardware, proven on the bench 2026-09-18** (see `docs/what_we_learned.md`, "2026-09-18 — Master v2 P4 panel bring-up: what the throwaway spike found" — the findings were promoted there out of the spike's own notes, and the spike directory is being deleted): Waveshare ESP32-P4-WIFI6-Touch-LCD-7B, 1024×600 EK79007 over MIPI-DSI, GT911 capacitive touch, LVGL 9 via `waveshare/esp32_p4_wifi6_touch_lcd_7b` 3.0.1, panel up 283 ms after boot, ~30 MB PSRAM free.
 
 ## Scope
 
