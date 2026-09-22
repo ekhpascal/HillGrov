@@ -880,9 +880,13 @@ No commit (no files changed). Report: image size, heap-min, both suite counts, t
 
 ---
 
-### Task 8: Ring and fleet OTA on the P4 with three zones
+### Task 8: Ring and fleet OTA on the P4 with two zones
 
 The spike proved enrolment and blame with a cut-down master. This repeats it with the real app, which also owns `fw_srv` and the fleet sequencer.
+
+**Re-scoped 2026-09-22 from three zones to two**, because the owner removed zone 3 from the rig. That is not a reduction in what this task proves — enrolment, the health ladder, blame and the fleet sequencer are all exercisable with two zones — but it **changes the expected blame verdict**, so read Step 3 carefully rather than assuming the three-zone wording still applies.
+
+Zone 3's `ztab` row does **not** disappear when the board is unplugged: the map is persisted (`node_mgr_enrol.c` calls `node_store_save()`, loading at `:33` via `node_store_load()`), and `nvs` at `0x10000`-`0x20000` is never written by `flash_all.py`, so the row survives both a reset and this plan's reflash. Expect zone 3 to appear OFFLINE with a blame line until it is explicitly retired with `CLEAR NODE 3 CONFIRM` (`components/master_cmds/master_cmds.c:326`, replying `OK NODE 3 CLEARED`). Retire it as the first action of Step 2 — the spike master could not, having no CLI, but the real app can.
 
 **Files:** none — bench task.
 
@@ -900,30 +904,57 @@ Ring: `P4 IO28 (TX) → first zone RX → ... → last zone TX → P4 IO29 (RX)`
 
 - [ ] **Step 2: Verify enrolment and that config survived**
 
-Expected: `GET NODES` shows all three ONLINE, and §4.4 reconciliation **PULLs** each zone's config
-rather than pushing defaults over it.
+Retire zone 3 first: `CLEAR NODE 3 CONFIRM`. Then expect `GET NODES` to show **both** remaining zones
+ONLINE, with §4.4 reconciliation **PULLing** each zone's config rather than pushing defaults over it.
 
-**Do not treat a low generation number as a defect by itself.** The master persists no zone config at
-all: `components/node_mgr/node_mgr_cfg.c` holds RAM arrays only, memset at init, and there are no NVS
-writes anywhere in `components/node_mgr/`. A freshly flashed P4 therefore has an empty node table and
-empty per-zone caches *by construction*, so the reconciler can only take the adopt branch, and the
-generation you read is whatever **the zone itself** holds. `Gen : 0` on a zone whose own NVS was wiped
-is the EXPECTED result, not a failure.
+**Do not treat a low generation number as a defect by itself.** Be precise about what the master does
+and does not keep, because the two halves differ:
+- the per-zone **config** cache is RAM-only — `components/node_mgr/node_mgr_cfg.c` holds `s_cfg` /
+  `s_hw` / `s_fresh`, memset at init, and nothing persists them;
+- the **ztab**, the MAC-to-zone-id map, IS persisted, via `node_store_save()` / `node_store_load()`
+  backed by `components/node_store/node_store_nvs.c`.
+
+(An earlier revision of this plan said there were "no NVS writes anywhere in `components/node_mgr/`".
+That was wrong — it came from grepping only for `nvs_set`/`hg_store_set` and missing
+`node_store_save()`. Identity persists; config does not.)
+
+So a freshly flashed P4 keeps the zone **ids** it already knew but has empty per-zone config caches
+*by construction*, meaning the reconciler can only take the adopt branch and the generation you read
+is whatever **the zone itself** holds. `Gen : 0` on a zone whose own NVS was wiped is the EXPECTED
+result, not a failure.
 
 The real defect signals are narrower, and these are what to stop on:
 - a generation that **dropped** on a zone whose NVS was never touched, or
 - `Gen : 0` on a zone whose own `GET CONFIG` still shows non-default fields — that means the master
   overwrote a zone that had config to keep.
 
-**Pre-step 0, before the P4 is flashed:** record `GET ID` and `GET CONFIG` on all three zone consoles
-plus the MAC-to-id map, and save them to a file. Without that baseline, "config survived" is
+**Pre-step 0, before the P4 is flashed:** record `GET ID` and `GET CONFIG` on **both** remaining zone
+consoles plus the MAC-to-id map, and save them to a file. Without that baseline, "config survived" is
 unfalsifiable — there is no master-side copy to compare against. That dump is also the only restore
 path for the hardware plane (pin map, soil dry/wet calibration, `pump_max_run_s` / `pump_max_daily_s`
 caps), which the master never stores and the web UI cannot write.
 
 - [ ] **Step 3: Verify blame on a held zone**
 
-Hold the middle zone in reset ~15 s. Expected: the zones upstream of it go DEGRADED (5 s) then OFFLINE (10 s) while the downstream one stays ONLINE; ring goes OPEN with a generic verdict, then refines to **`Z<n> dead or wire Z<n>->Z<m>`** naming the dead node and the wire to its **downstream** neighbour. A verdict naming the upstream neighbour or `->M` for a middle node means the master has the direction wrong.
+**With two zones there is no middle node, and the expected verdict is different from the three-zone
+case. Do not carry the old wording over.**
+
+First read `hops` off the running master to learn which zone is which: `hops` is
+`RING_TTL_INIT - ttl`, the number of forwards a heartbeat took, so **`hops == 0` is the zone wired to
+the master's RX** (last in the chain) and the higher value is the zone nearest the master's TX.
+
+Hold the zone with **`hops == 0`** in reset for ~15 s. Expected: it goes DEGRADED (5 s) then OFFLINE
+(10 s), the other zone stays ONLINE, the ring goes OPEN with a generic verdict, and that verdict then
+refines to **`Z<n> dead or wire Z<n>->M`** — naming the dead node and the wire to its downstream
+neighbour, which for the `hops == 0` zone genuinely **is** the master.
+
+`->M` is therefore the CORRECT answer here. The three-zone version of this step treated a `->M`
+verdict as evidence the master had the direction wrong; applied to a two-zone ring that guard would
+fail a perfectly healthy bench. What would still be wrong is a verdict naming the *upstream* zone, or
+`->Z<m>` pointing at a zone that is not downstream of the held one.
+
+Optionally repeat with the other zone held, which should blame it and name its downstream neighbour —
+the `hops == 0` zone — rather than the master.
 
 - [ ] **Step 4: Verify a fleet OTA end to end**
 
