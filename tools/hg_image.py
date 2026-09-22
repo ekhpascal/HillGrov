@@ -106,7 +106,7 @@ def require_target_chip(path, target, what):
         got_name = CHIP_ID_NAME.get(got_id, f"unknown chip (chip_id {got_id:#06x})")
         sys.exit(
             f"error: {what} was built for {got_name}, but --target {target} "
-            f"means this is going to a {target} board: {path}\n"
+            f"means this is going to an {target} board: {path}\n"
             f"  refusing to flash an image built for a different chip than "
             f"--target -- rebuild {what} for {target} (and check --build-dir "
             f"points at that build), or pass --target {got_name} if that's "
