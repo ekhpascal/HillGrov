@@ -85,7 +85,8 @@ Onboard and therefore no longer external: 7" touch display · RTC + coin cell ·
 | Streamer control UART TX | IO49 | → streamer RX; source/volume/DSP commands (future streamer project) |
 | Streamer control UART RX | IO50 | ← streamer TX |
 | Spare (streamer header) | IO51, IO52 | |
-| Local I/O pool | IO28–31 (carefree), IO2–5 (JTAG-shared — fine once USB-JTAG is the debug path), IO34/36 (strapping — use last, prefer inputs) | for 1-Wire DS18B20, HX711 ×2, presence, blind end-stops ×2, rescue button, status LED (≈8 of 10) |
+| Rescue button | IO34 → GND | bootloader: hold ≥10 s = rescue, 1–9 s = NVS erase — same contract as the ESP32. **Bench-verified 2026-09-22: IO34 is NOT a boot-mode strap** — the P4 boots normally with IO34 held low at reset (full ROM output, `SPI_FAST_FLASH_BOOT`, second stage runs), which retires the earlier "strapping, use last" caution below and means no pin change is needed. Defined independently in `bootloader_components/main/bootloader_start.c` (`HG_RESCUE_GPIO`) rather than included from `board.h`'s `HG_GPIO_RESCUE_BTN` — the bootloader subproject does not link the `board` component, so the two definitions (both `34`) are kept in sync by hand, per the comment at the P4 `#define` in each file |
+| Local I/O pool | IO28–31 (carefree), IO2–5 (JTAG-shared — fine once USB-JTAG is the debug path), IO36 (strapping — use last, prefer inputs) | for 1-Wire DS18B20, HX711 ×2, presence, blind end-stops ×2, status LED (≈7 of 10; rescue button is IO34, its own row above) |
 
 The DevKitC master tables above remain the SP3-bench reality until the migration sub-project executes.
 
