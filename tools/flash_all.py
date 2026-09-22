@@ -6,27 +6,49 @@ in one esptool call.
 Usage:
     python tools/flash_all.py --board zone|master --port COMx [--baud 460800]
 
-The rescue app (Task 16) is optional here: if rescue/build/hillgrow_rescue.bin
-does not exist yet, its slot is skipped with a warning instead of failing.
+The rescue app (Task 16) is optional here: with no --build-dir, if
+rescue/build/hillgrow_rescue.bin does not exist yet, its slot is skipped
+with a warning instead of failing. (Note that's <repo>/rescue/build, NOT
+<repo>/<board>/build -- rescue is its own app, built out of the top-level
+rescue/ directory regardless of which board you're flashing.)
 
 Must run under a python that has esptool installed -- either the IDF venv
 python (source C:\\esp\\v6.0.1\\esp-idf\\export.ps1 first) or any python
 with `pip install esptool`.
 
 --build-dir overrides the directory every one of the files above (bootloader,
-partition table, otadata, rescue, app) is read from (default:
-<repo>/<board>/build -- today's hard-coded path, unchanged unless you pass
-this). Needed whenever the binaries actually built for --target don't live in
-that default directory -- e.g. after building master for esp32p4 into a
-separate out-of-tree dir, --target esp32 with no --build-dir would silently
-read those P4 binaries out of master/build and still write them at the ESP32
-offsets.
+partition table, otadata, rescue, app) is read from (default: bootloader/
+partition-table/otadata/app come from <repo>/<board>/build, rescue comes
+from <repo>/rescue/build -- today's hard-coded paths, unchanged unless you
+pass this). Needed whenever the binaries actually built for --target don't
+live in those default directories -- e.g. after building master for esp32p4
+into a separate out-of-tree dir, --target esp32 with no --build-dir would
+silently read those P4 binaries out of master/build and still write them at
+the ESP32 offsets.
+
+IMPORTANT: when --build-dir IS given, it replaces rescue's default
+(<repo>/rescue/build) too -- rescue is then read from that SAME --build-dir,
+not from rescue/build. So `--target esp32p4 --build-dir master/build_p4`
+looks for hillgrow_rescue.bin directly inside master/build_p4, and skips
+the rescue slot (with the warning above) unless it's there. That is
+CURRENTLY EXPECTED for the P4 bench: no P4 rescue app is built anywhere
+today (rescue/sdkconfig.defaults pins CONFIG_IDF_TARGET="esp32" and there is
+no rescue/sdkconfig.defaults.esp32p4 override), so a P4 --build-dir flash
+always leaves the P4 factory slot unwritten until a P4 rescue build exists.
+
+Every image that will actually RUN on --target (bootloader, the board's app
+image, and rescue if present) is checked against --target by reading its
+own esp_image_header_t chip_id before it's flashed -- see
+tools/hg_image.py. On mismatch this refuses rather than flashing a
+right-offset, wrong-architecture image; partition-table.bin and the
+generated otadata image aren't app images and aren't checked.
 """
 import argparse
 import os
 import subprocess
 import sys
 
+import hg_image
 import hg_otadata
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -76,6 +98,8 @@ def require_file(path, what):
     if not os.path.isfile(path):
         sys.exit(f"error: {what} not found: {path}\n"
                  f"  (build {os.path.dirname(path)} first)")
+    if os.path.getsize(path) == 0:
+        sys.exit(f"error: {what} is zero bytes (empty/truncated build?): {path}")
     return path
 
 
@@ -117,6 +141,13 @@ def main():
     part_table_bin = require_file(os.path.join(bdir, "partition_table", "partition-table.bin"), "partition-table.bin")
     app_bin = require_file(os.path.join(bdir, f"hillgrow_{args.board}.bin"), f"hillgrow_{args.board}.bin")
 
+    # Both are real ESP app images that will actually RUN on --target --
+    # check them against it by reading their own header (see
+    # tools/hg_image.py). partition-table.bin is NOT an app image (no
+    # esp_image_header_t, nothing to check) and is left alone.
+    hg_image.require_target_chip(bootloader_bin, args.target, "bootloader.bin")
+    hg_image.require_target_chip(app_bin, args.target, f"hillgrow_{args.board}.bin")
+
     # Generate a valid otadata image selecting ota_0, rather than flashing
     # the stock all-0xFF ota_data_initial.bin (see tools/hg_otadata.py for
     # why that would boot factory/rescue instead once Task 16 lands).
@@ -130,6 +161,7 @@ def main():
 
     rescue_bin = os.path.join(build_dir("rescue", args.build_dir), "hillgrow_rescue.bin")
     if os.path.isfile(rescue_bin):
+        hg_image.require_target_chip(rescue_bin, args.target, "hillgrow_rescue.bin")
         write_flash_args += [hex(layout["rescue"]), rescue_bin]
     else:
         print(f"warning: rescue app not built yet ({rescue_bin} missing) -- skipping rescue slot")

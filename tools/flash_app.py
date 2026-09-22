@@ -21,6 +21,13 @@ for esp32p4 into a separate out-of-tree dir, `--target esp32` with no
 still write them at the ESP32 offsets. Not used by --app cpfw, which takes
 its image from --cp-image instead (see below).
 
+Every image that will actually RUN on --target (the rescue app, and the
+master/zone OTA app image) is checked against --target by reading its own
+esp_image_header_t chip_id before it's flashed -- see tools/hg_image.py.
+On mismatch this refuses rather than flashing a right-offset,
+wrong-architecture image. --app zonefw and --app cpfw are deliberately
+exempt from that check: see the next paragraph for why.
+
 --app zonefw and --app cpfw are different in kind from the app-slot cases
 (zone/master/rescue): neither flashes an app slot -- no otadata write,
 nothing boots from either one directly.
@@ -61,6 +68,7 @@ import struct
 import subprocess
 import sys
 
+import hg_image
 import hg_otadata
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -161,6 +169,8 @@ def require_file(path, what):
     if not os.path.isfile(path):
         sys.exit(f"error: {what} not found: {path}\n"
                  f"  (build {os.path.dirname(path)} first)")
+    if os.path.getsize(path) == 0:
+        sys.exit(f"error: {what} is zero bytes (empty/truncated build?): {path}")
     return path
 
 
@@ -217,6 +227,11 @@ def main():
         if not args.cp_image:
             parser.error("--app cpfw requires --cp-image PATH (see --help for where it comes from)")
         cp_bin = require_file(args.cp_image, "coprocessor image")
+        # No hg_image.require_target_chip() here on purpose: cp_bin is an
+        # ESP32-C6 radio image staged as a PAYLOAD into the master's cp_fw
+        # data partition, not something that runs on --target (the master
+        # chip). Checking it against --target would reject every legitimate
+        # --app cpfw call. See tools/hg_image.py's module docstring.
         cpfw_bin = build_cpfw_image(cp_bin, build_dir("master"))
         write_flash_args = [hex(offsets["cpfw"]), cpfw_bin]
     elif args.app == "zonefw":
@@ -225,15 +240,27 @@ def main():
         # --port/--baud below address the master board, not a zone.
         zone_bin = require_file(os.path.join(build_dir("zone", args.build_dir), "hillgrow_zone.bin"),
                                  "hillgrow_zone.bin (build zone first)")
+        # No hg_image.require_target_chip() here either: zone_bin is a
+        # ZONE app image staged as a PAYLOAD into the master's zone_fw data
+        # partition -- always ESP32, regardless of the master's --target.
+        # Same reasoning as --app cpfw above.
         zonefw_bin = build_zonefw_image(zone_bin, build_dir("master"))
         write_flash_args = [hex(offsets["zonefw"]), zonefw_bin]
     elif args.app == "rescue":
         bdir = build_dir(args.app, args.build_dir)
         app_bin = require_file(os.path.join(bdir, "hillgrow_rescue.bin"), "rescue app binary")
+        # This IS an image that runs on --target -- the rescue app boots
+        # straight from the factory slot on whichever chip it's flashed to.
+        # See tools/hg_image.py: this is the specific hole the guard exists
+        # to close (rescue/build/hillgrow_rescue.bin is only ever built for
+        # esp32 today; --target esp32p4 must refuse it, not silently write
+        # an xtensa image into the P4 factory slot).
+        hg_image.require_target_chip(app_bin, args.target, "rescue app binary")
         write_flash_args = [hex(offsets["rescue"]), app_bin]
     else:
         bdir = build_dir(args.app, args.build_dir)
         app_bin = require_file(os.path.join(bdir, f"hillgrow_{args.app}.bin"), f"hillgrow_{args.app}.bin")
+        hg_image.require_target_chip(app_bin, args.target, f"hillgrow_{args.app}.bin")
         # Generate a valid otadata image selecting this app's ota_0 slot,
         # rather than flashing the stock all-0xFF ota_data_initial.bin (see
         # tools/hg_otadata.py for why that would boot factory/rescue instead).
