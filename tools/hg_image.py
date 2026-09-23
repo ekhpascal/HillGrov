@@ -77,27 +77,53 @@ CHIP_ID_NAME = {
 TARGET_CHIP_ID = {name: chip_id for chip_id, name in CHIP_ID_NAME.items()}
 
 
-def read_chip_id(path, what, offset=0):
+def _blame(path, offset, staged_from):
+    """Which file a refusal should NAME, plus the note that says where the
+    bytes were actually read from.
+
+    `path` is always what gets read. When it is a staged scratch copy (built
+    under master/build by flash_app.py's build_*_image()), `staged_from` is the
+    file the operator actually passed, and that is what the message must blame:
+    a refusal pointing at a scratch file in a build directory names something
+    the operator never chose and cannot fix. Used by every sys.exit() in this
+    module that can see a staged path, so the two cannot disagree about which
+    file is the operator's."""
+    if not staged_from:
+        return path, ""
+    return staged_from, (f"\n  (read at +{offset} inside the staged copy {path} -- "
+                         f"the exact bytes esptool would have written)")
+
+
+def read_chip_id(path, what, offset=0, staged_from=None):
     """Return the little-endian chip_id at +12 of the esp_image_header_t that
     starts at `offset` in `path`. offset defaults to 0 (a bare app image, as
     flashed); pass flash_app.py's HGFW_HDR_LEN to read the INNER header of a
     staged HGFW payload, whose 16-byte wrapper sits ahead of the real image.
-    Exits (sys.exit) with a message naming `what` and `path` if there aren't
-    HEADER_LEN bytes at `offset` or those bytes don't start with the ESP image
-    magic byte -- such a file isn't an app image at all (or the wrapper isn't
-    the size we thought), and reading its chip_id would be reading garbage,
-    producing a confusing "wrong chip" refusal instead of the real problem."""
+    Exits (sys.exit) with a message naming `what` and the operator's file if
+    there aren't HEADER_LEN bytes at `offset` or those bytes don't start with
+    the ESP image magic byte -- such a file isn't an app image at all (or the
+    wrapper isn't the size we thought), and reading its chip_id would be
+    reading garbage, producing a confusing "wrong chip" refusal instead of the
+    real problem.
+
+    `staged_from` is optional and means the same thing it does in
+    require_payload_chip(): the file the operator named, when `path` is the
+    staged copy read on its behalf. Both exits below go through _blame(), so
+    they name that file rather than the scratch copy -- they became reachable
+    with a staged path when the payload check was added, and blaming `path`
+    there was the exact confusion `staged_from` was introduced to remove."""
     with open(path, "rb") as f:
         f.seek(offset)
         header = f.read(HEADER_LEN)
     at = "" if offset == 0 else f" at offset {offset}"
+    blamed, read_note = _blame(path, offset, staged_from)
     if len(header) < HEADER_LEN:
         sys.exit(f"error: {what} is too short to be an ESP app image{at} "
-                  f"({len(header)} bytes, need {HEADER_LEN}): {path}")
+                  f"({len(header)} bytes, need {HEADER_LEN}): {blamed}{read_note}")
     if header[0] != IMAGE_MAGIC:
         sys.exit(f"error: {what} does not start with the ESP app image magic "
                   f"byte{at} ({header[0]:#04x}, expected {IMAGE_MAGIC:#04x}) -- "
-                  f"this isn't an app image: {path}")
+                  f"this isn't an app image: {blamed}{read_note}")
     return struct.unpack_from("<H", header, CHIP_ID_OFFSET)[0]
 
 
@@ -139,20 +165,19 @@ def require_payload_chip(path, expect_chip, what, offset=0, staged_from=None):
 
     `path` is what gets READ (the staged copy, so the check is over the exact
     bytes about to be flashed); `staged_from` is the file the operator
-    actually named, and is what the message blames. Without it the refusal
-    would point at a scratch file in a build directory that the operator never
-    chose and cannot fix.
+    actually named, and is what the message blames -- see _blame(). Without it
+    the refusal would point at a scratch file in a build directory that the
+    operator never chose and cannot fix. It is passed down into read_chip_id()
+    as well, so the too-short and bad-magic refusals blame the same file this
+    one does.
 
     The message names the consumer, because the operator's next question on
     a destructive staging path is "then what was I supposed to build?"."""
     want_id = TARGET_CHIP_ID[expect_chip]
-    got_id = read_chip_id(path, what, offset)
+    got_id = read_chip_id(path, what, offset, staged_from)
     if got_id != want_id:
         got_name = CHIP_ID_NAME.get(got_id, f"unknown chip (chip_id {got_id:#06x})")
-        blamed = staged_from if staged_from else path
-        read_note = ("" if not staged_from else
-                     f"\n  (read at +{offset} inside the staged copy {path} -- "
-                     f"the exact bytes esptool would have written)")
+        blamed, read_note = _blame(path, offset, staged_from)
         sys.exit(
             f"error: {what} was built for {got_name}, but this partition's "
             f"payload must be an {expect_chip} image: {blamed}\n"

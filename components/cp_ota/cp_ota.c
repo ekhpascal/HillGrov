@@ -284,11 +284,11 @@ int cp_ota_sync(void) {
     /* eh_host_cp_ota_activate() sets the C6's boot partition then reboots it
      * on its own timer (CP_OTA_ASSUMED_CP_REBOOT_TICKS above, ~2000 ms at the
      * tick rate coproc/sdkconfig.defaults pins), inside the host's 5000 ms
-     * RPC wait -- so
-     * the reply routinely never arrives and this call comes back ESP_FAIL
-     * with esp_hosted logging "no response". Log either outcome; NEITHER is
-     * proof, per cp_ota.h -- eh_host_cp_ota_end() above only confirmed the
-     * CP accepted and stored the image, not that it will boot into it. */
+     * RPC wait -- so the reply routinely never arrives and this call comes
+     * back ESP_FAIL with esp_hosted logging "no response". Log either
+     * outcome; NEITHER is proof, per cp_ota.h -- eh_host_cp_ota_end() above
+     * only confirmed the CP accepted and stored the image, not that it will
+     * boot into it. */
     rc = eh_host_cp_ota_activate();
     if (rc != ESP_OK)
         ESP_LOGW(TAG, "eh_host_cp_ota_activate: %s (expected -- the C6 reboots inside "

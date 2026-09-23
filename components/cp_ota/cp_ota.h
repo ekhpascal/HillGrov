@@ -128,10 +128,19 @@ int cp_ota_parse_header(const uint8_t hdr[CP_OTA_HDR_LEN], uint32_t part_size,
  * unconfigured state, and nothing re-applies them. master/main/app_main.c's
  * cp_ota_restart_for_new_radio() restarts the master for that one return
  * value, which is loop-safe *because* it is gated on the confirmed case
- * (cp_ota_needed() returns 0 next boot, so the update cannot repeat) and is
- * additionally suppressed while the running slot is PENDING_VERIFY. That
+ * (cp_ota_needed() returns 0 next boot, so the update cannot repeat). That
  * narrow supersession of the never-auto-reboot rule is argued in full at
  * that function; the rule still holds here and for every other return path.
+ *
+ * The caller also does NOT CALL THIS AT ALL while its own running slot is
+ * ESP_OTA_IMG_PENDING_VERIFY (re-review R1). That is not a property of this
+ * function and nothing here depends on it, but a second call site must
+ * inherit it: a push deliberately reboots the C6, and with
+ * CONFIG_ESP_HOSTED_HOST_TRANSPORT_RESTART_ON_FAILURE=y (esp_hosted's own
+ * default) an SDIO failure during that outage calls abort() on the HOST,
+ * which on a trial boot retires the master's own image. The gate, the
+ * reasoning and the operator-facing log all live at the call site in
+ * app_main.c.
  *
  * ESP32 master build: stub, always returns 0. The ESP32 master's Wi-Fi is
  * on-die -- it has no co-processor to update. The real implementation is

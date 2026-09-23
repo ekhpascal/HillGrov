@@ -29,6 +29,47 @@ extern const cmd_entry_t *master_table(int *n);
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 static uint8_t  master_id_fn(void) { return 0; }   /* RING_ID_MASTER -- the master's ring id never changes */
 
+/* Is the image this master is running still on OTA trial -- i.e. is the
+ * running slot ESP_OTA_IMG_PENDING_VERIFY, the state the bootloader hands an
+ * OTA-updated app before it self-confirms?
+ *
+ * ONE implementation, deliberately: it is read both by the co-processor-OTA
+ * gate at the end of app_main() (which is what must not run during a trial)
+ * and by cp_ota_restart_for_new_radio()'s own defence-in-depth check, and two
+ * copies of this test would eventually disagree.
+ *
+ * This is the same query ota_trial_start() itself uses to decide whether a
+ * trial is running at all (components/ota_trial/ota_trial.c), so the two agree
+ * by construction rather than by coincidence. ota_trial exposes no read-only
+ * predicate to call instead, and ota_trial_confirm() is emphatically NOT one:
+ * it *confirms* the trial (operator override) rather than reporting it, so
+ * calling it here would short-circuit the very dwell period this protects.
+ *
+ * Every state the running slot can actually be observed in, and why "not on
+ * trial" is the safe answer for all the others:
+ *   PENDING_VERIFY  the trial -- the one state that must gate
+ *   VALID           the trial already passed; there is nothing left to protect
+ *   UNDEFINED       the normal bench state, what tools/hg_otadata.py writes
+ *   NEW             unreachable at runtime: the bootloader rewrites NEW ->
+ *                   PENDING_VERIFY before it hands over
+ *   factory / any non-OTA running partition (the rescue app, or a board booted
+ *                   from factory) -- esp_ota_get_state_partition() returns
+ *                   ESP_ERR_NOT_SUPPORTED, the "== ESP_OK" conjunct fails and
+ *                   this reports 0. Correct: the bootloader's rollback logic
+ *                   only ever inspects otadata entries for OTA slots, so a
+ *                   factory boot has no unconfirmed image to vote against.
+ * A query that fails for any other reason lands in the same place, and that is
+ * the safe direction rather than a shrug: reporting "no trial" only re-enables
+ * work that is unconditionally fine whenever there really is no trial, which
+ * is what every failing case above actually means. `state` is pre-initialised
+ * but never read after a failed call (short-circuit &&). */
+static int running_slot_on_ota_trial(void) {
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
+    return running && esp_ota_get_state_partition(running, &state) == ESP_OK &&
+           state == ESP_OTA_IMG_PENDING_VERIFY;
+}
+
 /* Final-review F3: the ONE case where the master deliberately reboots itself
  * after a co-processor OTA. cp_ota_sync() returns 1 only when it re-read the
  * C6's reported version after the C6 rebooted into the new image and
@@ -58,21 +99,35 @@ static uint8_t  master_id_fn(void) { return 0; }   /* RING_ID_MASTER -- the mast
  * ota_trial only calls esp_ota_mark_app_valid_cancel_rollback() from its 1 s
  * timer once the dwell window has elapsed (TRIAL_BENCH_WINDOW_MS is 60 s --
  * longer than a whole cp_ota_sync() push). Restarting a PENDING_VERIFY slot
- * hands the bootloader a still-unconfirmed image and it rolls a demonstrably
- * healthy master BACK, which is strictly worse than the missing AP this
- * reboot exists to fix -- and the master-self-OTA-plus-new-radio boot is
- * precisely the case the review flagged as the natural one. So on a trial
- * boot this logs and returns: the trial confirms on its own timer and the
- * operator reboots. */
+ * does not merely re-run the trial: the bootloader rewrites EVERY
+ * PENDING_VERIFY otadata entry to ESP_OTA_IMG_ABORTED before it selects a
+ * partition, and an ABORTED slot is never booted again until a fresh OTA
+ * rewrites otadata -- so a demonstrably healthy master image is retired, not
+ * just bounced.
+ *
+ * That check now lives at the CALL SITE as well, above cp_ota_sync() itself
+ * (R1 -- see the block at the call site for why gating the push and not the
+ * restart is the correct placement). The copy below is therefore DEFENCE IN
+ * DEPTH and is unreachable through today's only call path: PENDING_VERIFY can
+ * only be entered at boot, so it cannot appear between that gate and this
+ * function. It is kept rather than deleted because cp_ota_sync() has exactly
+ * one caller *today* and the obvious next feature -- an operator-triggered CP
+ * update from the console or the web UI -- would add a second one that has no
+ * reason to know any of this. Both tests read running_slot_on_ota_trial()
+ * above, so a future second caller inherits the guard and the two can never
+ * drift. */
 static void cp_ota_restart_for_new_radio(void) {
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
-    if (running && esp_ota_get_state_partition(running, &state) == ESP_OK &&
-        state == ESP_OTA_IMG_PENDING_VERIFY) {
+    if (running_slot_on_ota_trial()) {
         ESP_LOGE(TAG, "co-processor updated, but this boot is still an OTA trial "
-                      "(PENDING_VERIFY) -- NOT restarting, because that would roll this "
-                      "master image back. Wi-Fi/web stay down for this boot; reboot the "
-                      "master once TRIAL PASS is reported");
+                      "(PENDING_VERIFY) -- NOT restarting, because that would retire "
+                      "this master image (the bootloader marks a PENDING_VERIFY slot "
+                      "ABORTED and never boots it again). Wi-Fi/web stay down for this "
+                      "boot. To recover WITHOUT losing this image, issue SET OTA CONFIRM "
+                      "on this console and then reboot -- that marks the slot valid "
+                      "within a second whatever the trial criteria say, which is the one "
+                      "action that always works here. Do NOT wait for TRIAL PASS: if the "
+                      "radio's old firmware is what kept the AP down, drivers_ok was "
+                      "never latched this boot and TRIAL PASS can never be reported");
         return;
     }
     ESP_LOGW(TAG, "co-processor firmware was updated and confirmed -- restarting the "
@@ -207,25 +262,103 @@ void app_main(void) {
      *    ring on principle.
      *  - LAST of everything (final-review F3): a *successful* CP OTA reboots
      *    the C6, i.e. the whole radio, underneath a live AP, httpd, mDNS and
-     *    SNTP. With this call anywhere earlier, two things straddled that
-     *    teardown. (1) The PENDING_VERIFY trial's drivers_ok criterion was
-     *    latched at http_srv_start() and only *applied* after cp_ota_sync()
-     *    had torn the radio down, so an image could self-confirm on an
-     *    observation of a stack that no longer existed. (2) NTF_BOOT -- the
-     *    first NOTIFY of the boot by design -- sat behind up to ~45 s of
-     *    cp_ota_sync() AND behind the radio dropping, so the web alarm view
-     *    could miss it entirely. Running last removes the interleaving
-     *    instead of reasoning about it: the trial judges a stack nothing has
-     *    torn down, and the boot NOTIFY is out before the radio can go.
+     *    SNTP. With this call anywhere earlier, NTF_BOOT -- the first NOTIFY
+     *    of the boot by design -- sat behind up to ~45 s of cp_ota_sync() AND
+     *    behind the radio dropping, so the web alarm view could miss it
+     *    entirely. Running last puts the boot NOTIFY out before the radio can
+     *    go, which is worth having on its own.
+     *
+     * WHY THE WHOLE CALL IS GATED ON THE OTA TRIAL (R1). This SUPERSEDES the
+     * previous round's argument, which gated only the restart inside
+     * cp_ota_restart_for_new_radio(); do not "simplify" it back to that.
+     *
+     * The previous round was right that a master restart must be suppressed
+     * while the running slot is PENDING_VERIFY -- restarting then retires the
+     * slot (ABORTED, never booted again), not merely bounces the trial. But
+     * that guards the one door THIS translation unit owns. esp_hosted owns a
+     * second door into the same room and it is open by its own default:
+     * CONFIG_ESP_HOSTED_HOST_TRANSPORT_RESTART_ON_FAILURE=y, which nothing in
+     * master/sdkconfig.defaults.esp32p4 pins shut. On an unrecoverable SDIO
+     * failure the transport calls eh_host_port_restart_host(), and that
+     * function is a bare abort() -- a panic reset, deliberately not
+     * esp_restart() (esp_hosted 3.0.7,
+     * port/os/idf/src/eh_host_port_power.c). A CP push DELIBERATELY reboots
+     * the C6 mid-session, i.e. deliberately creates the very SDIO outage that
+     * fires it, while the AP, httpd, mDNS and SNTP started above are still
+     * driving host->C6 traffic across that link. On a trial boot that panic
+     * is a crash before mark-valid: exactly the same rollback vote the
+     * suppression exists to prevent, cast through a path no check in app_main
+     * can see or veto.
+     *
+     * So the gate belongs above the PUSH, not above the restart. During a
+     * trial the radio is then never torn down at all, so neither door can be
+     * reached: not this function's esp_restart(), and not esp_hosted's
+     * abort(). (That closes the doors a CP OTA opens, which is what this is
+     * about. A genuine crash or TWDT reboot in unrelated code is still a
+     * rollback vote, exactly as ota_trial.h documents -- the trial's whole
+     * point is that it should be.)
+     *
+     * Skipping the push is safe, not a problem deferred, and THAT is what
+     * makes a skip the right answer rather than something to force through:
+     * the push is version-gated and idempotent, and this gate OPENS BY
+     * ITSELF. A passed trial marks the slot VALID, so the very next boot
+     * performs the update with no operator action at all. The log below says
+     * so out loud, because an operator reading only the console must not
+     * conclude the radio needs rescuing. The skip also costs nothing the
+     * previous round did not already cost: suppressing the restart left the
+     * radio's freshly-pushed firmware bound to nothing for that boot anyway,
+     * whereas deferring the push leaves the radio UNCHANGED and Wi-Fi/web up
+     * for the whole trial. It matches IDF's own convention, too --
+     * esp_ota_begin() refuses to start an update while the running app is
+     * PENDING_VERIFY (ESP_ERR_OTA_ROLLBACK_INVALID_STATE).
+     *
+     * And it is what finally makes the drivers_ok claim true rather than
+     * merely nearly true (final-review compounding effect (1)). Moving this
+     * call last fixed the ORDER OF THE LATCH -- ota_trial_drivers_ok() above
+     * now records a stack that existed when it was observed -- but not the
+     * verdict: ota_trial renders that from its 1 Hz timer, which on a bench
+     * trial cannot return TRIAL_PASS before start + TRIAL_BENCH_WINDOW_MS
+     * (60 s), while a push starts at ~T+2-5 s and runs 15-45 s. So with the
+     * push allowed the radio went down at ~T+10-50 s and the mark-valid still
+     * landed at ~T+60 s, AFTER the teardown. Now that no push can run during
+     * a trial there is no teardown for the verdict to land after, so the trial
+     * really does judge a stack this boot sequence has not torn down. (Stated
+     * that precisely on purpose: an operator can still restart the radio out
+     * from under a trial with a console SET WIFI, and the claim this replaces
+     * was flagged for asserting more than the code delivered.)
      *
      * cp_ota_sync() logs its own outcome at the right level for each case
      * (INFO/WARN/ERROR) -- deliberately no summary log here: an earlier
      * version of this line always logged "up to date" at WARN, including on
      * the ESP32 master (whose cp_ota_sync() is a stub that always returns 0),
      * which was false every single boot on hardware that has no co-processor
-     * at all. Return 1 (pushed AND confirmed) is the one outcome that needs
-     * something from this function -- see cp_ota_restart_for_new_radio(). */
-    if (cp_ota_sync() == 1) cp_ota_restart_for_new_radio();
+     * at all. The skip log below is guarded on CONFIG_IDF_TARGET_ESP32P4 for
+     * exactly that reason: the ESP32 master has no co-processor and no cp_fw
+     * partition at all (master/partitions.csv), so there the line would be a
+     * new instance of that same false claim, on every OTA-trial boot. The
+     * guard is on the LOG and not on the branch deliberately -- an #if around
+     * the else-if would leave cp_ota_restart_for_new_radio() unreferenced on
+     * the ESP32 build, i.e. an unused-static-function warning, and skipping a
+     * stub that returns 0 is behaviourally identical to calling it.
+     *
+     * Return 1 (pushed AND confirmed) is the one outcome that needs something
+     * from this function -- see cp_ota_restart_for_new_radio(). */
+    if (running_slot_on_ota_trial()) {
+#if CONFIG_IDF_TARGET_ESP32P4
+        ESP_LOGW(TAG, "this boot is an OTA trial (PENDING_VERIFY) -- SKIPPING the "
+                      "co-processor firmware check for this boot, so a CP push cannot "
+                      "tear the radio down mid-trial. The radio was NOT updated; whether "
+                      "it even needed updating is part of what was skipped. Wi-Fi/web "
+                      "stay up on the firmware it already has. Nothing to do by hand: "
+                      "this is retried AUTOMATICALLY on the next boot, because a passed "
+                      "trial marks this slot VALID and the gate then opens. If the trial "
+                      "cannot pass because the radio's OLD firmware is what keeps the AP "
+                      "down, issue SET OTA CONFIRM on this console and reboot -- the slot "
+                      "is VALID from then on and that boot performs the update");
+#endif
+    } else if (cp_ota_sync() == 1) {
+        cp_ota_restart_for_new_radio();
+    }
 
     vTaskDelete(NULL);
 }
