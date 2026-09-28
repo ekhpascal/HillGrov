@@ -2,8 +2,9 @@
 """HillGrow SP4 web API bench suite (stdlib only: urllib, json, http.cookiejar,
 threading, argparse). Exercises the master's HTTP API end to end: login/
 lockout, /api/schema, /api/state, a config round trip on a zone, firmware
-uploads (master OTA + zone image + fleet update), a Wi-Fi scan, and an
-optional long soak.
+uploads (master OTA + zone image + fleet update), a Wi-Fi scan, the
+master-config write paths (MCFG: zone-0 PUT, /api/wifi, /api/password), and
+an optional long soak.
 
 Usage:
     python tools/web_test.py 192.168.7.7 --password hillgrow1 \\
@@ -25,6 +26,7 @@ lossy; every SP4 task report on this rig documents repeated full Wi-Fi
 drops, so retries are load-bearing here, not decoration.
 """
 import argparse
+import hashlib
 import http.client
 import io
 import json
@@ -226,6 +228,55 @@ def config_problems(doc, zone):
         if "hw" not in doc or "cfg" not in doc:
             p.append("missing hw/cfg")
     return p
+
+# The MCFG suite changes the web password to this and back. Appended, never
+# substituted, so it is always a different password of legal length 8..63
+# (web_auth.h WA_PW_MIN/WA_PW_MAX): a real password is at least 8 chars.
+MCFG_TEMP_SUFFIX = "_mcfgT"
+
+def mcfg_doc_problems(doc, secrets):
+    """GET /api/config?zone=0&secrets=0|1: hg_json_export_mcfg's shape
+    (hg_json.h:46-50). With secrets=False both secret keys must be ABSENT --
+    the exporter omits them, it never blanks them -- and with secrets=True
+    both must be present."""
+    if not isinstance(doc, dict):
+        return ["not a JSON object"]
+    p = []
+    want = {"WIFI": ("STA_SSID", "AP_SSID"), "TIME": ("TZ", "NTP"), "SYS": ("HOSTNAME",)}
+    for group, keys in want.items():
+        g = doc.get(group)
+        if not isinstance(g, dict):
+            p.append(f"missing group {group}")
+            continue
+        for k in keys:
+            if k not in g:
+                p.append(f"{group}.{k} missing")
+    wifi = doc.get("WIFI") if isinstance(doc.get("WIFI"), dict) else {}
+    for k in ("STA_PASS", "AP_PASS"):
+        if secrets and k not in wifi:
+            p.append(f"WIFI.{k} missing with secrets=1")
+        if not secrets and k in wifi:
+            p.append(f"WIFI.{k} present with secrets=0 (secret leaked)")
+    return p
+
+def mcfg_temp_password(password):
+    """The MCFG suite's temporary web password: 8..63 chars, never equal to
+    `password` (a 61-char password that already ends in the suffix gets a
+    different one)."""
+    t = password[:55] + MCFG_TEMP_SUFFIX
+    if t == password:
+        t = password[:55] + "_mcfgU"
+    return t
+
+def secret_digest(doc, key):
+    """SHA-256 hex of WIFI.<key> in a zone-0 document, or None when absent.
+    Lets a check compare a secret before/after without ever printing it."""
+    if not isinstance(doc, dict):
+        return None
+    v = (doc.get("WIFI") or {}).get(key) if isinstance(doc.get("WIFI"), dict) else None
+    if not isinstance(v, str):
+        return None
+    return hashlib.sha256(v.encode("utf-8")).hexdigest()
 
 def parse_heap_min(text):
     """master/main/app_if_master.c's GET STATUS append: '  Heap min : %u' (bytes)."""
@@ -562,6 +613,134 @@ def suite_wifi(api, results):
         check(results, "WIFI: entries carry ssid/rssi/auth",
               all(k in doc[0] for k in ("ssid", "rssi", "auth")), doc[0])
 
+def mcfg_restore_password(api, ip, temp, password, timeout):
+    """Puts the web password back from `temp` to `password`. First through
+    `api` (which holds the fresh cookie the change minted), then through fresh
+    clients, because the change's own response may have been lost on this
+    lossy AP link. A login with `temp` failing while one with `password`
+    succeeds means the change never landed (or an earlier attempt already
+    restored it) -- that is also a restored state. True once restored."""
+    try:
+        s, _, _ = post_json(api, "/api/password", {"old": temp, "new": password}, retries=1)
+        if s == 204:
+            return True
+    except Exception:
+        pass
+    for _ in range(4):
+        try:
+            c = ApiClient(ip, timeout=timeout)
+            if c.login(temp, retries=3, retry_delay=2.0):
+                s, _, _ = post_json(c, "/api/password", {"old": temp, "new": password}, retries=1)
+                if s == 204:
+                    return True
+            elif ApiClient(ip, timeout=timeout).login(password, retries=3, retry_delay=2.0):
+                return True
+        except Exception:
+            pass
+        time.sleep(3.0)
+    return False
+
+def suite_mcfg(api, results, ip, password, timeout=10.0):
+    """The master-config write paths the panel plan moves onto panel_svc:
+    PUT /api/config?zone=0 (cfg_put_zone0), POST /api/wifi and POST
+    /api/password. Every check describes TODAY's firmware, so this suite must
+    pass both before and after the move. Runs just before LOGIN: it changes
+    the web password and restores it, which logs every other web session out
+    (phones included) and clears MCFG_F_WEB_DEFAULT for good."""
+    # 1. shape, secrets omitted
+    s, doc0, body = get_json(api, "/api/config?zone=0&secrets=0", retries=3, retry_delay=1.5)
+    check(results, "MCFG: GET zone 0 secrets=0 -> 200", s == 200, s)
+    if s != 200 or doc0 is None:
+        return
+    probs = mcfg_doc_problems(doc0, False)
+    check(results, "MCFG: zone 0 document shape, secrets omitted", not probs, probs)
+    orig_ntp = (doc0.get("TIME") or {}).get("NTP")
+
+    s1, docs1, _ = get_json(api, "/api/config?zone=0&secrets=1", retries=3, retry_delay=1.5)
+    check(results, "MCFG: GET zone 0 secrets=1 -> 200 with both secrets",
+          s1 == 200 and not mcfg_doc_problems(docs1, True), s1)
+    digest_before = secret_digest(docs1, "STA_PASS") if s1 == 200 else None
+
+    # 2. NTP round trip (also the "PUT that omits STA_PASS" for check 5)
+    def ntp_is(v):
+        s_, d_, _ = get_json(api, "/api/config?zone=0&secrets=0", timeout=5.0, retries=3, retry_delay=2.0)
+        return s_ == 200 and ((d_ or {}).get("TIME") or {}).get("NTP") == v
+
+    new_ntp = "time.google.com" if orig_ntp != "time.google.com" else "pool.ntp.org"
+    s, d, b = put_json(api, "/api/config?zone=0", {"TIME": {"NTP": new_ntp}}, retries=4, retry_delay=3.0)
+    check(results, f"MCFG: PUT TIME.NTP={new_ntp} -> 200 ok", s == 200 and bool(d and d.get("ok")), (s, b[:200]))
+    check(results, "MCFG: GET shows the new NTP (STA may re-join meanwhile)",
+          poll_until(lambda: ntp_is(new_ntp), 30.0, 2.0), "")
+
+    # 5. the omitted secret survived
+    s2, docs2, _ = get_json(api, "/api/config?zone=0&secrets=1", timeout=5.0, retries=4, retry_delay=2.0)
+    digest_after = secret_digest(docs2, "STA_PASS") if s2 == 200 else None
+    same = digest_before is not None and digest_before == digest_after
+    check(results, "MCFG: STA_PASS unchanged by a PUT that omits it (sha256 compared, never printed)",
+          same, "digests equal" if same else "digests differ or unreadable")
+
+    if orig_ntp:
+        s, d, b = put_json(api, "/api/config?zone=0", {"TIME": {"NTP": orig_ntp}}, retries=4, retry_delay=3.0)
+        check(results, "MCFG: restore the original NTP -> 200", s == 200, (s, b[:200]))
+        check(results, "MCFG: GET shows the original NTP again", poll_until(lambda: ntp_is(orig_ntp), 30.0, 2.0), "")
+
+    # 3. a validation refusal names the field
+    s, d, b = put_json(api, "/api/config?zone=0", {"SYS": {"HOSTNAME": "Bad Name"}}, retries=3, retry_delay=1.5)
+    code = (d or {}).get("error") if isinstance(d, dict) else None
+    path = (d or {}).get("path") if isinstance(d, dict) else None
+    check(results, "MCFG: PUT SYS.HOSTNAME='Bad Name' -> 400 INVALID_FIELD|VALIDATION path SYS.HOSTNAME",
+          s == 400 and code in ("INVALID_FIELD", "VALIDATION") and path == "SYS.HOSTNAME", (s, b[:200]))
+
+    # 4. malformed body
+    s, b = api.request("PUT", "/api/config?zone=0", data=b"{not json",
+                       headers={"Content-Type": "application/json"}, retries=3, retry_delay=1.5)
+    try:
+        d = json.loads(b) if b else None
+    except ValueError:
+        d = None
+    check(results, "MCFG: PUT zone 0 malformed body -> 400 BAD_JSON",
+          s == 400 and isinstance(d, dict) and d.get("error") == "BAD_JSON", (s, b[:200]))
+
+    # 6. /api/wifi shape refusals (nothing is applied on either)
+    s, d, b = post_json(api, "/api/wifi", {"sta": {"ssid": "x"}}, retries=3, retry_delay=1.5)
+    check(results, "MCFG: POST /api/wifi sta without pass -> 400 INVALID",
+          s == 400 and isinstance(d, dict) and d.get("error") == "INVALID", (s, b[:200]))
+    s, d, b = post_json(api, "/api/wifi", {"sta": {"ssid": "x", "pass": ""}, "ap": {"ssid": "y", "pass": "yyyyyyyy"}},
+                        retries=3, retry_delay=1.5)
+    check(results, "MCFG: POST /api/wifi with both sta and ap -> 400 INVALID",
+          s == 400 and isinstance(d, dict) and d.get("error") == "INVALID", (s, b[:200]))
+
+    # 7. wrong old password
+    s, d, b = post_json(api, "/api/password", {"old": password + "-wrong", "new": "whatever12"},
+                        retries=3, retry_delay=1.5)
+    check(results, "MCFG: POST /api/password with a wrong old password -> 403 BAD_PASSWORD",
+          s == 403 and isinstance(d, dict) and d.get("error") == "BAD_PASSWORD", (s, b[:200]))
+
+    # 8. a real change drops every other session; always restored
+    other = ApiClient(ip, timeout=timeout)
+    other_ok = other.login(password, retries=4, retry_delay=2.0)
+    check(results, "MCFG: a second client logs in before the change", other_ok, "")
+    temp = mcfg_temp_password(password)
+    attempted = False
+    try:
+        attempted = True
+        # retries=1: a transport retry after a lost 204 would resend old=password,
+        # which is by then wrong -- the finally below restores either way.
+        s, d, b = post_json(api, "/api/password", {"old": password, "new": temp}, retries=1)
+        check(results, "MCFG: POST /api/password to a temporary password -> 204", s == 204, (s, b[:200]))
+        if s == 204 and other_ok:
+            s_o, _ = other.request("GET", "/api/state", retries=3, retry_delay=1.5)
+            check(results, "MCFG: the other client's session was dropped -> 401", s_o == 401, s_o)
+            s_me, _ = api.request("GET", "/api/state", retries=3, retry_delay=1.5)
+            check(results, "MCFG: the changing client holds a fresh cookie -> 200", s_me == 200, s_me)
+    finally:
+        if attempted:
+            restored = mcfg_restore_password(api, ip, temp, password, timeout)
+            check(results, "MCFG: web password restored", restored,
+                  "" if restored else "RESTORE FAILED: the web password is --password + '_mcfgT'; "
+                                      "restore it with the console: SET WEB PASSWORD <password>")
+            api.login(password, retries=4, retry_delay=2.0)
+
 def login_raw(api, password):
     return api.request("POST", "/api/login", data=json.dumps({"password": password}).encode(),
                         headers={"Content-Type": "application/json"}, retries=3, retry_delay=1.0)
@@ -841,10 +1020,40 @@ def selftest():
            fleet_update_succeeded(None, reset_after) is False
            and fleet_update_succeeded(same_ver_before, None) is False)
 
+    # (i) MCFG pure helpers: the zone-0 document shape with and without
+    # secrets (hg_json_export_mcfg OMITS the two secret keys, it never blanks
+    # them), the temporary-password rule, and the never-printed secret digest.
+    stripped = json.loads(json.dumps(FIXTURE_CONFIG0))
+    del stripped["WIFI"]["STA_PASS"]
+    del stripped["WIFI"]["AP_PASS"]
+    expect("i: zone0 without secrets passes secrets=0", mcfg_doc_problems(stripped, False) == [])
+    expect("i: zone0 with secrets passes secrets=1", mcfg_doc_problems(FIXTURE_CONFIG0, True) == [])
+    expect("i: a secret present under secrets=0 is flagged", mcfg_doc_problems(FIXTURE_CONFIG0, False) != [])
+    expect("i: a secret missing under secrets=1 is flagged", mcfg_doc_problems(stripped, True) != [])
+    bad8 = json.loads(json.dumps(stripped)); del bad8["SYS"]
+    expect("i: zone0 missing SYS flagged", mcfg_doc_problems(bad8, False) != [])
+    bad9 = json.loads(json.dumps(stripped)); del bad9["TIME"]["NTP"]
+    expect("i: zone0 missing TIME.NTP flagged", mcfg_doc_problems(bad9, False) != [])
+    expect("i: not-an-object flagged", mcfg_doc_problems([], False) != [])
+    expect("i: temp password for hillgrow1", mcfg_temp_password("hillgrow1") == "hillgrow1_mcfgT")
+    long_pw = "p" * 63
+    t = mcfg_temp_password(long_pw)
+    expect("i: temp password of a 63-char password stays 8..63 and differs", 8 <= len(t) <= 63 and t != long_pw)
+    tricky = "q" * 55 + MCFG_TEMP_SUFFIX
+    expect("i: temp password never equals the real one", mcfg_temp_password(tricky) != tricky)
+    d1 = secret_digest({"WIFI": {"STA_PASS": "housepass1"}}, "STA_PASS")
+    expect("i: secret digest is stable",
+           d1 == secret_digest({"WIFI": {"STA_PASS": "housepass1"}}, "STA_PASS"))
+    expect("i: secret digest never contains the secret", d1 is not None and "housepass1" not in d1)
+    expect("i: secret digest differs for a different secret",
+           d1 != secret_digest({"WIFI": {"STA_PASS": "housepass2"}}, "STA_PASS"))
+    expect("i: digest of a missing secret is None", secret_digest({"WIFI": {}}, "STA_PASS") is None)
+    expect("i: digest of a non-document is None", secret_digest(None, "STA_PASS") is None)
+
     if fails:
         print("SELFTEST FAIL:", ", ".join(fails))
         return 1
-    print("SELFTEST OK (8 assertion groups)")
+    print("SELFTEST OK (9 assertion groups)")
     return 0
 
 # ---- main ---------------------------------------------------------------
@@ -874,6 +1083,7 @@ def run_standard(args, results):
         ("CONFIG", suite_config, (api, results, args.config_zone)),
         ("UPLOADS", suite_uploads, (api, results, args.master_bin, args.zone_bin, args.fleet)),
         ("WIFI", suite_wifi, (api, results)),
+        ("MCFG", suite_mcfg, (api, results, args.ip, args.password, args.timeout)),
         ("LOGIN", suite_login, (args.ip, args.password, results, args.timeout)),
     ):
         if wanted is not None and name not in wanted:
@@ -892,7 +1102,7 @@ def main():
     ap.add_argument("--fleet", type=int, metavar="ZONE", help="zone id for the fleet-update check")
     ap.add_argument("--config-zone", type=int, default=2, help="zone id for the config suite (default 2)")
     ap.add_argument("--only", metavar="SUITE[,SUITE...]",
-                     help="run only these standard suites (schema,state,config,uploads,wifi,login); "
+                     help="run only these standard suites (schema,state,config,uploads,wifi,mcfg,login); "
                           "default: all. Ignored with --soak.")
     ap.add_argument("--soak", type=int, default=0, metavar="SECONDS",
                      help="run ONLY the soak suite for this many seconds instead of the standard suites")
