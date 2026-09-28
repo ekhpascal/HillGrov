@@ -4,9 +4,6 @@
  * document). Not part of the public API -- alarm_mgr.h only. */
 #include "alarm_mgr.h"
 
-#define AM_ACTIVE_MAX 16
-#define AM_KEY_MAX    16   /* "<TYPE> <node>": longest type name (ALARM/WATER/LIGHT) is 5 + ' ' + up to 3 digits */
-
 typedef struct {
     char     key[AM_KEY_MAX];
     char     text[72];

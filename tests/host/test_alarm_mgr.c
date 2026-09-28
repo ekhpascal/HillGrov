@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "unity.h"
 #include "alarm_mgr.h"
 #include "fake_clock.h"
@@ -9,7 +10,10 @@ void setUp(void) {
     fake_clock_set(100);
     alarm_mgr_init(fake_clock_now);
 }
-void tearDown(void) {}
+void tearDown(void) {
+    alarm_mgr_set_lock(NULL, NULL);   /* the hooks are process-wide: never leak one test's into the next */
+    cJSON_InitHooks(NULL);
+}
 
 /* The real SP3 bench sequence from the brief: active count walks 1,2,2,1,0;
  * 5 events recorded; JSON parses with events[0] (newest) == "RING 0 CLOSED". */
@@ -240,6 +244,90 @@ static void test_long_line_truncated_safely(void) {
     cJSON_Delete(root);
 }
 
+/* ---- panel plan Task 15: lock hooks + the struct snapshot ---- */
+
+static int s_lock_n, s_unlock_n, s_depth, s_max_depth, s_malloc_held;
+static void fake_lock(void)   { s_lock_n++; s_depth++; if (s_depth > s_max_depth) s_max_depth = s_depth; }
+static void fake_unlock(void) { s_unlock_n++; s_depth--; }
+static void *count_malloc(size_t n) { if (s_depth > 0) s_malloc_held++; return malloc(n); }
+static void count_free(void *p) { free(p); }
+static void hooks_reset(void) { s_lock_n = s_unlock_n = s_depth = s_max_depth = s_malloc_held = 0; }
+
+/* The struct snapshot says exactly what /api/alarms says: same active set in
+   the same order, same events newest first, same total -- after the ring has
+   wrapped (70 events into 64 slots). */
+static void test_copy_matches_json_after_the_ring_wraps(void) {
+    char line[64];
+    for (int i = 0; i < 70; i++) {
+        fake_clock_set(100 + (uint32_t)i);
+        snprintf(line, sizeof line, "NOTIFY NODE %d %s\n", 1 + (i % 3), (i % 2) ? "DEGRADED" : "ONLINE");
+        alarm_mgr_sink(NULL, line);
+    }
+    static am_snapshot_t snap;
+    alarm_mgr_copy(&snap);
+    TEST_ASSERT_EQUAL_UINT32(70, snap.total);
+    TEST_ASSERT_EQUAL_INT(AM_EVENTS, snap.n_events);
+    TEST_ASSERT_EQUAL_STRING("NODE 1 DEGRADED", snap.events[0].text);   /* i = 69, the newest */
+    TEST_ASSERT_EQUAL_INT(2, snap.n_active);                            /* NODE 1 and NODE 2 end DEGRADED, NODE 3 ONLINE */
+
+    static char buf[8192];
+    TEST_ASSERT_GREATER_THAN_INT(0, alarm_mgr_json(buf, sizeof buf));
+    cJSON *root = cJSON_Parse(buf);
+    TEST_ASSERT_NOT_NULL(root);
+    cJSON *events = cJSON_GetObjectItem(root, "events");
+    TEST_ASSERT_EQUAL_INT(snap.n_events, cJSON_GetArraySize(events));
+    for (int i = 0; i < snap.n_events; i++) {
+        cJSON *e = cJSON_GetArrayItem(events, i);
+        TEST_ASSERT_EQUAL_STRING(snap.events[i].text, cJSON_GetObjectItem(e, "text")->valuestring);
+        TEST_ASSERT_EQUAL_UINT32(snap.events[i].at_s, (uint32_t)cJSON_GetObjectItem(e, "at_s")->valuedouble);
+    }
+    cJSON *active = cJSON_GetObjectItem(root, "active");
+    TEST_ASSERT_EQUAL_INT(snap.n_active, cJSON_GetArraySize(active));
+    for (int i = 0; i < snap.n_active; i++) {
+        cJSON *a = cJSON_GetArrayItem(active, i);
+        TEST_ASSERT_EQUAL_STRING(snap.active[i].key, cJSON_GetObjectItem(a, "key")->valuestring);
+        TEST_ASSERT_EQUAL_STRING(snap.active[i].text, cJSON_GetObjectItem(a, "text")->valuestring);
+        TEST_ASSERT_EQUAL_UINT32(snap.active[i].since_s, (uint32_t)cJSON_GetObjectItem(a, "since_s")->valuedouble);
+    }
+    TEST_ASSERT_EQUAL_INT((int)snap.total, alarm_mgr_total());
+    cJSON_Delete(root);
+}
+
+/* Every entry point takes the injected lock exactly once, never nested, and
+   always releases it; a malformed line is rejected before any lock. */
+static void test_lock_hooks_balance_on_every_entry_point(void) {
+    hooks_reset();
+    alarm_mgr_set_lock(fake_lock, fake_unlock);
+    alarm_mgr_sink(NULL, "NOTIFY NODE 2 DEGRADED\n");
+    (void)alarm_mgr_active_count();
+    (void)alarm_mgr_total();
+    static am_snapshot_t snap;
+    alarm_mgr_copy(&snap);
+    static char buf[4096];
+    (void)alarm_mgr_json(buf, sizeof buf);
+    alarm_mgr_sink(NULL, "NOTIFY BOOT 0 0.5.0 POWERON\n");   /* event-only: still one locked mutation */
+    alarm_mgr_sink(NULL, "garbage");                          /* malformed: no lock at all */
+    TEST_ASSERT_EQUAL_INT(6, s_lock_n);                       /* sink, count, total, copy, json (its copy), sink */
+    TEST_ASSERT_EQUAL_INT(s_lock_n, s_unlock_n);
+    TEST_ASSERT_EQUAL_INT(1, s_max_depth);
+    TEST_ASSERT_EQUAL_INT(0, s_depth);
+}
+
+/* The lock covers the copy only: every cJSON allocation during
+   alarm_mgr_json happens with no lock held. */
+static void test_json_formats_outside_the_lock(void) {
+    alarm_mgr_sink(NULL, "NOTIFY NODE 2 DEGRADED\n");
+    alarm_mgr_sink(NULL, "NOTIFY RING 0 OPEN Z2 dead or wire Z2->Z1\n");
+    hooks_reset();
+    alarm_mgr_set_lock(fake_lock, fake_unlock);
+    cJSON_Hooks h = { count_malloc, count_free };
+    cJSON_InitHooks(&h);
+    static char buf[4096];
+    TEST_ASSERT_GREATER_THAN_INT(0, alarm_mgr_json(buf, sizeof buf));
+    TEST_ASSERT_EQUAL_INT(1, s_lock_n);
+    TEST_ASSERT_EQUAL_INT(0, s_malloc_held);
+}
+
 int main(void) { UNITY_BEGIN();
     RUN_TEST(test_bench_sequence_active_set_and_events);
     RUN_TEST(test_active_json_shape_and_since_s);
@@ -255,4 +343,7 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_fw_zone_nonnumeric_falls_back_to_plain_rule);
     RUN_TEST(test_node_over_255_ignored);
     RUN_TEST(test_long_line_truncated_safely);
+    RUN_TEST(test_copy_matches_json_after_the_ring_wraps);
+    RUN_TEST(test_lock_hooks_balance_on_every_entry_point);
+    RUN_TEST(test_json_formats_outside_the_lock);
     return UNITY_END(); }

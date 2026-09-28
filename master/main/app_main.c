@@ -32,6 +32,14 @@ extern const cmd_entry_t *master_table(int *n);
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 static uint8_t  master_id_fn(void) { return 0; }   /* RING_ID_MASTER -- the master's ring id never changes */
 
+/* alarm_mgr's lock (panel plan Task 15): its sink runs inline in whichever
+ * task emits a NOTIFY -- sometimes inside node_mgr's own lock -- while httpd
+ * and the panel poller read it. A spinlock, because the critical sections are
+ * a few copies long and a sink must never block. */
+static portMUX_TYPE s_am_mux = portMUX_INITIALIZER_UNLOCKED;
+static void am_lock(void)   { portENTER_CRITICAL(&s_am_mux); }
+static void am_unlock(void) { portEXIT_CRITICAL(&s_am_mux); }
+
 /* Is the image this master is running still on OTA trial -- i.e. is the
  * running slot ESP_OTA_IMG_PENDING_VERIFY, the state the bootloader hands an
  * OTA-updated app before it self-confirms?
@@ -148,6 +156,7 @@ void app_main(void) {
      * registered before anything can emit -- the very first NOTIFY line of the
      * boot (NTF_BOOT, at the end of this function) belongs in the ring too. */
     alarm_mgr_init(hg_app_uptime_s);
+    alarm_mgr_set_lock(am_lock, am_unlock);   /* before the sink is registered below: nothing can emit yet */
     if (notify_add_sink(alarm_mgr_sink, NULL, NTF_MASK_ALL) < 0)
         ESP_LOGE(TAG, "alarm sink registration failed -- /api/alarms will stay empty");
     cmd_common_init(&APP_IF_MASTER);

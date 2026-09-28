@@ -9,6 +9,16 @@ uint32_t     am_total;
 am_active_t am_active[AM_ACTIVE_MAX];
 
 static uint32_t (*s_now_s)(void);
+static void (*s_lock)(void);
+static void (*s_unlock)(void);
+
+static void am_lock(void)   { if (s_lock) s_lock(); }
+static void am_unlock(void) { if (s_unlock) s_unlock(); }
+
+void alarm_mgr_set_lock(void (*lock)(void), void (*unlock)(void)) {
+    s_lock = lock;
+    s_unlock = unlock;
+}
 
 /* Active-set vocabulary (brief, verbatim): a line becomes active when its
  * first word after the node is one of these, or starts with a "W_"/"F_"
@@ -152,13 +162,13 @@ void alarm_mgr_sink(void *ctx, const char *line) {
     const char *rest = (*p == ' ') ? p + 1 : p;
 
     uint32_t now = s_now_s ? s_now_s() : 0;
-    am_event_t *ev = &am_ring[am_total % AM_EVENTS];
-    ev->at_s = now;
-    ev->type = (uint8_t)type;
-    ev->node = node;
-    bcopy_trunc(ev->text, sizeof ev->text, text_start, strlen(text_start));
-    am_total++;
+    char text[72];
+    bcopy_trunc(text, sizeof text, text_start, strlen(text_start));
 
+    /* Decide the active-set effect BEFORE taking the lock: parsing is the slow
+     * part, and the lock must cover the mutations only. */
+    int  action = 0;                   /* 0 none, 1 upsert, 2 clear */
+    char key[AM_KEY_MAX] = "";
     if (type != NTF_BOOT && type != NTF_CMD && type != NTF_WIFI) {
         /* Fleet FW lines (and only FW -- see node_mgr_fleet.c) nest a
          * per-zone status after "ZONE <n>" (e.g. "ZONE 2 UPDATING"): peel
@@ -192,19 +202,54 @@ void alarm_mgr_sink(void *ctx, const char *line) {
             }
         }
 
-        char key[AM_KEY_MAX];
         snprintf(key, sizeof key, "%s %u", notify_type_name(type), (unsigned)key_node);
-        if (is_activate_word(state_word, state_len))
-            active_upsert(key, ev->text, now);
-        else if (is_clear_word(state_word, state_len))
-            active_clear(key);
+        if (is_activate_word(state_word, state_len))   action = 1;
+        else if (is_clear_word(state_word, state_len)) action = 2;
     }
+
+    am_lock();
+    am_event_t *ev = &am_ring[am_total % AM_EVENTS];
+    ev->at_s = now;
+    ev->type = (uint8_t)type;
+    ev->node = node;
+    memcpy(ev->text, text, sizeof ev->text);
+    am_total++;
+    if (action == 1)      active_upsert(key, text, now);
+    else if (action == 2) active_clear(key);
+    am_unlock();
 }
 
 int alarm_mgr_active_count(void) {
     int c = 0;
+    am_lock();
     for (int i = 0; i < AM_ACTIVE_MAX; i++) if (am_active[i].used) c++;
+    am_unlock();
     return c;
 }
 
-int alarm_mgr_total(void) { return (int)am_total; }
+int alarm_mgr_total(void) {
+    am_lock();
+    uint32_t t = am_total;
+    am_unlock();
+    return (int)t;
+}
+
+void alarm_mgr_copy(am_snapshot_t *out) {
+    if (!out) return;
+    memset(out, 0, sizeof *out);   /* outside the lock */
+    am_lock();
+    int k = 0;
+    for (int i = 0; i < AM_ACTIVE_MAX; i++) {
+        if (!am_active[i].used) continue;
+        memcpy(out->active[k].key, am_active[i].key, sizeof out->active[k].key);
+        memcpy(out->active[k].text, am_active[i].text, sizeof out->active[k].text);
+        out->active[k].since_s = am_active[i].since_s;
+        k++;
+    }
+    out->n_active = k;
+    uint32_t kept = am_total < AM_EVENTS ? am_total : AM_EVENTS;
+    for (uint32_t i = 0; i < kept; i++) out->events[i] = am_ring[(am_total - 1 - i) % AM_EVENTS];   /* newest first */
+    out->n_events = (int)kept;
+    out->total = am_total;
+    am_unlock();
+}
