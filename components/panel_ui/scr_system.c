@@ -60,8 +60,9 @@ static void sys_build(lv_obj_t *content, int arg) {
     lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
     lv_obj_t *tabs = pnl_kit_row(content);
     for (int k = 0; k < PNL_SYS_SEC_COUNT; k++) {
+        /* not LV_OBJ_FLAG_CHECKABLE: LVGL toggles CHECKED on RELEASED for a checkable object, so re-tapping the active
+         * tab (tab_click ignores it) would clear its highlight; open_section() owns the CHECKED state alone */
         s_tab[k] = pnl_kit_button(tabs, SYS_ROWS[k].title, tab_click, (void *)(intptr_t)k);
-        lv_obj_add_flag(s_tab[k], LV_OBJ_FLAG_CHECKABLE);
     }
     s_body = lv_obj_create(content);
     lv_obj_set_width(s_body, LV_PCT(100));
