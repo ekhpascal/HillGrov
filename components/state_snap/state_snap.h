@@ -32,6 +32,11 @@ typedef struct {
 
 typedef int (*snap_write_fn)(void *ctx, const char *buf, size_t n);   /* 0 ok / -1 abort */
 
+/* The web's vocabulary (map-parity A12), shared with the panel. Pure.
+ * Anything unknown is "EMPTY" / "IDLE", exactly what the JSON has always said. */
+const char *state_snap_health_name(node_health_t h);   /* "ONLINE" "DEGRADED" "OFFLINE" "UPDATING" "EMPTY" */
+const char *state_snap_ring_state_name(ring_state_t s);/* "OK" "OPEN" "IDLE" */
+
 /* Streaming /api/state JSON writer: {"master":{...},"nodes":[...],"ring":{...}}.
  * Pure: never allocates, no IDF headers. Every w() call carries at most
  * 1024 bytes of buf (a fresh 1 KB scratch is snprintf'd per JSON segment --

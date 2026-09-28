@@ -344,6 +344,21 @@ static void test_master_block_worst_case_size_fits(void) {
     cJSON_Delete(root);
 }
 
+/* Panel plan Task 10: the two vocabulary helpers are public now (the panel
+ * shows the same words), and ss_node/ss_ring use them -- the JSON is unchanged. */
+static void test_health_and_ring_state_names(void) {
+    TEST_ASSERT_EQUAL_STRING("ONLINE",   state_snap_health_name(NODE_H_ONLINE));
+    TEST_ASSERT_EQUAL_STRING("DEGRADED", state_snap_health_name(NODE_H_DEGRADED));
+    TEST_ASSERT_EQUAL_STRING("OFFLINE",  state_snap_health_name(NODE_H_OFFLINE));
+    TEST_ASSERT_EQUAL_STRING("UPDATING", state_snap_health_name(NODE_H_UPDATING));
+    TEST_ASSERT_EQUAL_STRING("EMPTY",    state_snap_health_name(NODE_H_EMPTY));
+    TEST_ASSERT_EQUAL_STRING("EMPTY",    state_snap_health_name((node_health_t)99));
+    TEST_ASSERT_EQUAL_STRING("OK",   state_snap_ring_state_name(RING_ST_OK));
+    TEST_ASSERT_EQUAL_STRING("OPEN", state_snap_ring_state_name(RING_ST_OPEN));
+    TEST_ASSERT_EQUAL_STRING("IDLE", state_snap_ring_state_name(RING_ST_IDLE));
+    TEST_ASSERT_EQUAL_STRING("IDLE", state_snap_ring_state_name((ring_state_t)9));
+}
+
 int main(void) { UNITY_BEGIN();
     RUN_TEST(test_two_node_snapshot_shapes_and_values);
     RUN_TEST(test_escaping_and_max_size_node_fits);
@@ -351,4 +366,5 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_hb_age_s_survives_ms_wraparound);
     RUN_TEST(test_hb_age_s_never_heard_row_is_plain_now_ms);
     RUN_TEST(test_master_block_worst_case_size_fits);
+    RUN_TEST(test_health_and_ring_state_names);
     return UNITY_END(); }

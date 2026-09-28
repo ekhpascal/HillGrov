@@ -126,3 +126,9 @@ hg_test(test_pnl_touch ${COMP}/panel_ui/pnl_touch.c)
 # publication. psvc_state.c itself is IDF glue (node_mgr, wifi_mgr, heap).
 hg_test(test_psvc_state ${COMP}/panel_svc/psvc_state_conv.c ${COMP}/panel_svc/psvc_fw.c ${COMP}/state_snap/state_snap.c)
 target_link_libraries(test_psvc_state cjson_host)
+
+# Task 10: pure presentation helpers (time, formatting, home-screen maths).
+# No lvgl.h / bsp / esp_* / freertos header, same "pure files" rule as pnl_touch.c.
+hg_test(test_pnl_time ${COMP}/panel_ui/pnl_time.c)
+hg_test(test_pnl_fmt  ${COMP}/panel_ui/pnl_fmt.c ${COMP}/panel_ui/pnl_time.c)
+hg_test(test_pnl_home ${COMP}/panel_ui/pnl_home.c ${COMP}/panel_ui/pnl_time.c ${COMP}/hg_cfg/hg_cfg_defaults.c)

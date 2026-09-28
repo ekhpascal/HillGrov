@@ -52,7 +52,7 @@ static int jstr(char *buf, size_t cap, size_t *off, const char *s) {
     return (*off < cap) ? 0 : -1;
 }
 
-static const char *health_name(node_health_t h) {   /* mirrors master_cmds.c's health_name() */
+const char *state_snap_health_name(node_health_t h) {   /* mirrors master_cmds.c's health_name() */
     switch (h) {
     case NODE_H_ONLINE:   return "ONLINE";
     case NODE_H_DEGRADED: return "DEGRADED";
@@ -60,6 +60,10 @@ static const char *health_name(node_health_t h) {   /* mirrors master_cmds.c's h
     case NODE_H_UPDATING: return "UPDATING";
     default:              return "EMPTY";
     }
+}
+
+const char *state_snap_ring_state_name(ring_state_t s) {
+    return s == RING_ST_OPEN ? "OPEN" : s == RING_ST_OK ? "OK" : "IDLE";
 }
 
 static int ss_master(char *buf, size_t cap, size_t *off, const snap_master_t *m) {
@@ -122,7 +126,7 @@ static int ss_node(char *buf, size_t cap, size_t *off, const hg_node_t *nd, uint
     if (fmt(buf, cap, off, "\"id\":%u,", (unsigned)nd->id)) return -1;
     if (raw(buf, cap, off, "\"name\":") || jstr(buf, cap, off, nd->name)) return -1;
     if (raw(buf, cap, off, ",\"mac\":") || jstr(buf, cap, off, mac)) return -1;
-    if (raw(buf, cap, off, ",\"health\":") || jstr(buf, cap, off, health_name(nd->health))) return -1;
+    if (raw(buf, cap, off, ",\"health\":") || jstr(buf, cap, off, state_snap_health_name(nd->health))) return -1;
     if (raw(buf, cap, off, ",\"fw\":") || jstr(buf, cap, off, fw)) return -1;
     if (fmt(buf, cap, off, ",\"gen\":%u,\"hops\":%u,\"link\":%u,\"link_stale\":%s,",
             (unsigned)nd->hb.cfg_gen, (unsigned)nd->hops, (unsigned)nd->link_flags,
@@ -147,7 +151,7 @@ static int ss_node(char *buf, size_t cap, size_t *off, const hg_node_t *nd, uint
 }
 
 static int ss_ring(char *buf, size_t cap, size_t *off, const ring_status_t *rs) {
-    const char *state = rs->state == RING_ST_OPEN ? "OPEN" : rs->state == RING_ST_OK ? "OK" : "IDLE";
+    const char *state = state_snap_ring_state_name(rs->state);
     if (raw(buf, cap, off, "{")) return -1;
     if (raw(buf, cap, off, "\"state\":") || jstr(buf, cap, off, state)) return -1;
     if (fmt(buf, cap, off, ",\"size\":%u,\"online\":%u,",
