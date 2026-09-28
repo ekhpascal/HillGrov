@@ -81,7 +81,13 @@ static void tz_run(pnl_job_t *j) { j->rc = psvc_tz_set((const char *)j->arg, PSV
 
 static void tz_done(pnl_job_t *j) {
     s_tz_busy = 0;
-    if (j->rc == PSVC_OK) { s_tz_dirty = 0; pnl_poll_kick(); }   /* the new offset reaches "Now" at once */
+    if (j->rc == PSVC_OK) {
+        /* j->arg is the TZ that was submitted (tz_set_click's zero-padded 48 B copy; the pool wipes it only after this
+         * returns). A draft edited while the Set TZ was in flight is newer than what was saved: it stays dirty, so the
+         * next build keeps it instead of re-reading the config over it. */
+        if (strncmp((const char *)j->arg, s_tz, sizeof s_tz) == 0) s_tz_dirty = 0;
+        pnl_poll_kick();                                          /* the new offset reaches "Now" at once */
+    }
     pnl_msg(PNL_CTX_TZ, j->rc, NULL, s_tz_last, sizeof s_tz_last);
     s_tz_err = j->rc != PSVC_OK;
     pnl_kit_msg_set(s_tz_msg, s_tz_last, s_tz_err ? PNL_KIT_ERR : PNL_KIT_OK);   /* NULL-safe */
@@ -111,8 +117,10 @@ static void clk_run(pnl_job_t *j) { j->irc = pnl_cmd_run((const char *)j->arg, (
 
 static void clk_done(pnl_job_t *j) {
     s_clk_busy = 0;
-    memcpy(s_clk_last, j->out, sizeof s_clk_last);   /* the reply, verbatim; pnl_cmd_run NUL-terminates within out */
+    memcpy(s_clk_last, j->out, sizeof s_clk_last);   /* the reply; pnl_cmd_run NUL-terminates within out */
     s_clk_last[sizeof s_clk_last - 1] = '\0';
+    size_t n = strlen(s_clk_last);                   /* cmd_okf ends the line with '\n': no blank line under the label */
+    while (n && (s_clk_last[n - 1] == '\n' || s_clk_last[n - 1] == '\r')) s_clk_last[--n] = '\0';
     s_clk_err = j->irc != 0;
     if (!s_clk_err) pnl_poll_kick();                 /* "Now" shows the new clock at once */
     pnl_kit_msg_set(s_clk_msg, s_clk_last, s_clk_err ? PNL_KIT_ERR : PNL_KIT_OK);   /* NULL-safe */
