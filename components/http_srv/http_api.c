@@ -1,19 +1,14 @@
 #include <stdio.h>
 #include <string.h>
 #include "esp_log.h"
-#include "esp_system.h"
-#include "esp_timer.h"
-#include "esp_app_desc.h"
 #include "cJSON.h"
 #include "state_snap.h"
 #include "hg_json.h"
 #include "alarm_mgr.h"
 #include "wifi_mgr.h"
-#include "node_mgr.h"
-#include "app_if_common.h"
-#include "mcfg_store.h"
 #include "master_cmds.h"   /* net_ops_t -- a component header, safe to include */
 #include "psvc_net.h"   /* master_net_ops(), psvc_wifi_scan() -- components/panel_svc */
+#include "psvc_state.h"
 #include "http_srv_internal.h"
 
 static const char *TAG = "http_api";
@@ -51,96 +46,17 @@ static int chunk_writer(void *ctx, const char *buf, size_t n) {
 }
 
 esp_err_t h_state(httpd_req_t *req) {
+    /* The gather is panel_svc's (panel plan Task 9): the panel's poller runs
+     * the same psvc_state_fill(). ~1.9 KB, so static -- httpd serves every
+     * socket from ONE task, and h_state can never run twice at once. */
+    static psvc_state_t s;
+    psvc_state_fill(&s, PSVC_FILL_ALL);
     snap_master_t m;
-    memset(&m, 0, sizeof m);
-
-    m.version     = esp_app_get_description()->version;
-    m.uptime_s    = hg_app_uptime_s();
-    m.heap_min_kb = esp_get_minimum_free_heap_size() / 1024;
-
-    /* hg_app_time_get_noted's fixed "YYYY-MM-DD HH:MM:SS <SRC> <age_s>" shape
-     * (app_if_common.c): the first 19 chars go verbatim into m.time, the next
-     * whitespace-delimited token is the source. m.time_src is a const char*
-     * into this stack buffer, which lives for the rest of this call -- long
-     * enough to be read once by state_snap_write() below. */
-    char tbuf[48];
-    char time_src_buf[8] = "";
-    hg_app_time_get_noted(tbuf, sizeof tbuf);
-    size_t tlen = strlen(tbuf);
-    /* Bounded memcpy rather than snprintf("%s", ...): tbuf can (defensively)
-     * hold more than m.time's 19+NUL capacity, and GCC's format-truncation
-     * check cannot see that the normal-case branch below never does -- a
-     * plain memcpy of a runtime-computed, always-in-range length sidesteps
-     * that check outright instead of arguing with it. */
-    size_t tcopy = tlen < 19 ? tlen : 19;
-    memcpy(m.time, tbuf, tcopy);
-    m.time[tcopy] = '\0';
-    if (tlen >= 19) sscanf(tbuf + 19, " %7s", time_src_buf);
-    m.time_src = time_src_buf;
-
-    wifi_status_t w;
-    memset(&w, 0, sizeof w);
-    wifi_mgr_status(&w);
-    m.sta.up = w.sta_up;
-    snprintf(m.sta.ip, sizeof m.sta.ip, "%s", w.sta_ip);
-    snprintf(m.sta.ssid, sizeof m.sta.ssid, "%s", w.sta_ssid);
-    m.sta.rssi = w.rssi;
-    snprintf(m.sta.reason, sizeof m.sta.reason, "%s", w.sta_reason);
-    snprintf(m.ap.ssid, sizeof m.ap.ssid, "%s", w.ap_ssid);
-    m.ap.clients = w.ap_clients;
-    snprintf(m.ap.ip, sizeof m.ap.ip, "%s", w.ap_ip);
-
-    /* hg_app_fw_info's fixed "<version> <slot> <state> <other>" shape
-     * (app_if_common.c): version duplicates m.version above (skipped here),
-     * "other" is always the literal "NONE" on a master (no second-slot
-     * concept), kept as a distinct token anyway to match the shared format. */
-    char fwbuf[96];
-    char fw_slot[16] = "", fw_state[16] = "", fw_other[16] = "";
-    hg_app_fw_info(fwbuf, sizeof fwbuf);
-    sscanf(fwbuf, "%*s %15s %15s %15s", fw_slot, fw_state, fw_other);
-    m.fw.slot  = fw_slot;
-    m.fw.state = fw_state;
-    m.fw.other = fw_other;
-
-    const char *upload_kind = "";
-    uint8_t     upload_pct  = 0;
-    http_upload_progress(&upload_kind, &upload_pct);   /* Task 13 fills this in */
-    m.fw.upload_kind = upload_kind;
-    m.fw.upload_pct  = upload_pct;
-
-    char fleet_buf[32];
-    node_mgr_fw_status(fleet_buf, sizeof fleet_buf);
-    m.fleet_line = fleet_buf;
-
-    m.alarms_active = alarm_mgr_active_count();
-    m.alarms_total  = alarm_mgr_total();
-
-    uint8_t flags = mcfg_get()->flags;
-    m.web_default = (flags & MCFG_F_WEB_DEFAULT) ? 1 : 0;
-    m.ap_default  = (flags & MCFG_F_AP_DEFAULT)  ? 1 : 0;
-
-    m.cmd_quarantined = http_cmd_quarantined();
-
-    /* Node table copy under node_mgr's own lock (node_mgr_get), one slot at a
-     * time -- node_mgr_get leaves *out untouched on an empty/unused slot, so
-     * the memset above is load-bearing, not decorative. */
-    hg_node_t tab[HG_MAX_ZONES];
-    memset(tab, 0, sizeof tab);
-    for (int i = 0; i < HG_MAX_ZONES; i++) (void)node_mgr_get(i, &tab[i]);
-
-    uint8_t cfg_sync_failed[HG_MAX_ZONES];
-    for (int i = 0; i < HG_MAX_ZONES; i++)
-        cfg_sync_failed[i] = (uint8_t)node_mgr_cfg_sync_failed((uint8_t)(i + 1));
-
-    ring_status_t rs;
-    memset(&rs, 0, sizeof rs);
-    node_mgr_ring_status(&rs);
+    psvc_state_to_snap(&s, &m);   /* m points into s, which outlives the write below */
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);   /* same clock as node_mgr's last_hb_ms */
-    int rc = state_snap_write(&m, tab, HG_MAX_ZONES, &rs, cfg_sync_failed, now_ms, chunk_writer, req);
+    int rc = state_snap_write(&m, s.node, HG_MAX_ZONES, &s.ring, s.cfg_sync_failed, s.now_ms, chunk_writer, req);
     if (rc != 0) return ESP_FAIL;   /* a chunk send already failed; nothing more to send */
 
     httpd_resp_send_chunk(req, NULL, 0);

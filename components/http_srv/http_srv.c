@@ -5,6 +5,7 @@
 #include "esp_task_wdt.h"
 #include "fw_srv.h"
 #include "node_mgr.h"
+#include "psvc_state.h"
 #include "http_srv_internal.h"
 
 static const char *TAG = "http_srv";
@@ -304,6 +305,9 @@ int http_srv_start(const cmd_core_t *core) {
     if (http_auth_init() != 0)
         ESP_LOGE(TAG, "web auth unavailable -- every login will fail");
     if (http_cmd_init() != 0) return -1;   /* no /api/cmd without its session claim */
+    /* The web's degraded-slot count reaches the shared state gather (and so
+     * the panel) through this hook: panel_ui never requires http_srv. */
+    psvc_state_set_web_quarantine_fn(http_cmd_quarantined);
     /* The other half of upload/fleet exclusivity: from here the sequencer
      * refuses to start while a browser upload holds the flash (node_mgr.h). */
     node_mgr_set_fw_gate(http_upload_busy);

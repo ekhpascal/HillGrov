@@ -26,20 +26,9 @@ extern "C" {
  *     costs nothing.
  */
 
-/* /api/state's view of an upload in flight (http_api.c -> snap_master_t.fw).
- * *kind is "" when nothing is uploading, else "master"/"zone" -- a pointer to
- * a string literal, so it stays valid however the upload ends. *pct is
- * 0..100. Both out-params are always written. Returns 1 while an upload is in
- * flight, 0 otherwise.
- *
- * Lock-free by construction (two word-sized stores on the httpd task, two
- * loads on the reader) because the reader may be any task. In THIS build the
- * reader is h_state on the single httpd task, i.e. the same task that runs
- * the upload, so /api/state cannot actually be served while a body is
- * streaming -- the browser gets its progress from XHR's own upload events.
- * The published value is what a future multi-worker httpd, or any other
- * caller, would need. */
-int http_upload_progress(const char **kind, uint8_t *pct);
+/* Upload progress is published through panel_svc (psvc_fw.h:
+ * psvc_fw_progress_set() by the installer, psvc_fw_progress() by /api/state
+ * and the panel), so every face reads ONE value. */
 
 /* ---- one upload target ----
  * ready() runs first, and ONLY once this upload owns the exclusivity claim --

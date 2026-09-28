@@ -120,3 +120,9 @@ target_link_libraries(test_psvc_zcfg cjson_host)
 # panel_ui's PURE helpers only (panel plan Global Constraints, "Pure files"):
 # they include no lvgl.h / bsp / esp_* / freertos header, so they compile here.
 hg_test(test_pnl_touch ${COMP}/panel_ui/pnl_touch.c)
+
+# psvc_state_conv.c (pure: the snap_master_t conversion and h_state's two text
+# parsers) against the REAL state_snap writer; psvc_fw.c's progress
+# publication. psvc_state.c itself is IDF glue (node_mgr, wifi_mgr, heap).
+hg_test(test_psvc_state ${COMP}/panel_svc/psvc_state_conv.c ${COMP}/panel_svc/psvc_fw.c ${COMP}/state_snap/state_snap.c)
+target_link_libraries(test_psvc_state cjson_host)

@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "node_mgr.h"
 #include "http_upload.h"
+#include "psvc_fw.h"   /* progress lives in panel_svc: /api/state and the panel read one value */
 #include "http_srv_internal.h"
 
 static const char *TAG = "http_upload";
@@ -71,23 +72,6 @@ int http_upload_busy(void) {
  * "no". This also makes the loops below correct if esp_task_wdt_add() failed. */
 static void wdt_kick(void) {
     if (esp_task_wdt_status(NULL) == ESP_OK) esp_task_wdt_reset();
-}
-
-/* ---- progress (see http_upload.h for why this is lock-free) ---- */
-static const char *volatile s_kind = "";
-static volatile uint32_t    s_pct;
-
-static void progress(const char *kind, uint32_t pct) {
-    s_pct  = pct;
-    s_kind = kind;   /* published last: a reader never sees a kind without a pct */
-}
-
-int http_upload_progress(const char **kind, uint8_t *pct) {
-    const char *k = s_kind;
-    uint32_t    p = s_pct;
-    if (kind) *kind = k ? k : "";
-    if (pct)  *pct  = (uint8_t)(p > 100 ? 100 : p);
-    return (k && *k) ? 1 : 0;
 }
 
 /* ---- the shared upload path ---- */
@@ -226,7 +210,7 @@ static esp_err_t fw_upload(httpd_req_t *req, const char *kind, const char *want_
     }
 
     ESP_LOGW(TAG, "%s upload starting: %u B", kind, (unsigned)req->content_len);
-    progress(kind, 0);
+    psvc_fw_progress_set(kind, 0);
     /* The httpd task is not TWDT-subscribed by default. If this fails, every
      * wdt_kick() below is a silent no-op and the loop simply runs unwatched
      * rather than logging an error per 4 KB block. */
@@ -255,7 +239,7 @@ static esp_err_t fw_upload(httpd_req_t *req, const char *kind, const char *want_
         timeouts = 0;
         fill += (size_t)n;
         got  += (size_t)n;
-        progress(kind, (uint32_t)((uint64_t)got * 100 / req->content_len));
+        psvc_fw_progress_set(kind, (uint32_t)((uint64_t)got * 100 / req->content_len));
 
         /* Identify the image BEFORE the first write, so nothing is erased for
          * a file that was never going to be accepted: the brief's order
@@ -298,7 +282,7 @@ static esp_err_t fw_upload(httpd_req_t *req, const char *kind, const char *want_
      * dropped first. fw_srv.c's send_all() carries the same lesson the hard
      * way: a slow-but-healthy send panicked the board on the bench. */
     if (wdt_ok) esp_task_wdt_delete(NULL);
-    progress("", 0);
+    psvc_fw_progress_set("", 0);
     busy_release();
 
     if (code) http_srv_error(req, status, code, NULL);
