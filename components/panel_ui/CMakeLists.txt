@@ -22,6 +22,7 @@ if("${CMAKE_PROJECT_NAME}" STREQUAL "hillgrow_master" AND "${panel_target}" STRE
     list(APPEND PANEL_SRCS "pcfg_edit.c" "pnl_msg.c")       # Task 18: edit model, refusal texts (pure)
     list(APPEND PANEL_SRCS "pnl_input.c" "wdg_field.c" "wdg_keyboard.c")   # Task 19: field widgets, keyboard
     list(APPEND PANEL_SRCS "scr_config.c" "cfg_zone.c")     # Task 20: the generated config editor (zones)
+    list(APPEND PANEL_SRCS "cfg_frame.c")                   # the editor frame, split out of scr_config.c (file rule)
 endif()
 
 idf_component_register(SRCS ${PANEL_SRCS} INCLUDE_DIRS "."

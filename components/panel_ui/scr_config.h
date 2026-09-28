@@ -1,5 +1,5 @@
 #pragma once
-/* scr_config.h -- the Config destination and the generated-editor frame both editors share (glue; LVGL task). */
+/* scr_config.h -- the Config destination (scr_config.c) and the editor frame both editors share (cfg_frame.c). Glue; LVGL. */
 #include <stddef.h>
 #include <stdint.h>
 #include "lvgl.h"
