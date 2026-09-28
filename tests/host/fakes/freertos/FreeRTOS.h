@@ -1,6 +1,7 @@
 #pragma once
 /* Host-only stand-in for ESP-IDF's freertos/FreeRTOS.h. components/mcfg_ops's
- * mcfg_ops.c is moved verbatim out of master/main/net_ops_master.c (Task 5)
+ * mcfg_ops.c is moved verbatim out of master/main/net_ops_master.c (migration
+ * Task 5; that file is now components/panel_svc/psvc_net.c)
  * and touches the raw FreeRTOS semaphore API directly rather than hiding it
  * behind its own seam -- unlike node_mgr, whose decision-logic files
  * (compiled for host in test_node_mgr_cfg.c) reach FreeRTOS only through

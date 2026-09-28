@@ -20,7 +20,7 @@ extern "C" {
  * route handlers never run concurrently with each other. They DO run
  * concurrently with the CLI task, ring/node_mgr tasks and the fleet
  * sequencer, so all shared state reached from here is either owned by a
- * mutex (http_auth's wa_state_t, net_ops_master's mcfg read-modify-write) or
+ * mutex (http_auth's wa_state_t, panel_svc's mcfg read-modify-write) or
  * handed over through cmd_task's queue. */
 
 /* Starts the instance and registers every row of HTTP_ROUTES plus, via

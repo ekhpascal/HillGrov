@@ -12,19 +12,11 @@
 #include "node_mgr.h"
 #include "app_if_common.h"
 #include "mcfg_store.h"
-#include "mcfg_ops.h"
 #include "master_cmds.h"   /* net_ops_t -- a component header, safe to include */
+#include "psvc_net.h"   /* master_net_ops(), psvc_wifi_scan() -- components/panel_svc */
 #include "http_srv_internal.h"
 
 static const char *TAG = "http_api";
-
-/* net_ops_master.{h,c} live in master/main -- an app, not a component -- so
- * this component cannot include that header (same reason http_login.c
- * extern-declares master_web_set_password rather than including it). This is
- * the whole contract this file needs from it; the lock itself now comes from
- * components/mcfg_ops (Task 5), which both this file and http_api_cfg.c take
- * the SAME instance of. */
-extern const net_ops_t *master_net_ops(void);
 
 /* ---- GET /api/schema: built once, served forever ---- */
 
@@ -173,22 +165,19 @@ esp_err_t h_alarms(httpd_req_t *req) {
 /* ---- GET /api/wifi/scan ---- */
 
 esp_err_t h_wifi_scan(httpd_req_t *req) {
-    /* wifi_mgr_scan() blocks ~2 s and parks the single radio -- must not run
-     * concurrently with a net_ops apply (SET WIFI STA/AP/TZ, SET WEB
-     * PASSWORD, or this same handler's own PUT /api/config?zone=0 path).
-     * Each of those holds this same components/mcfg_ops lock across its own
-     * commit AND its apply (net_ops_master.c's mcfg_ops_edit() `apply`
-     * callbacks, or cfg_put_zone0's own mcfg_ops_lock()/_unlock() pair in
-     * http_api_cfg.c), so taking it here for the whole scan is enough. */
-    if (mcfg_ops_lock(100) != 0) {
+    /* wifi_mgr_scan() parks the single radio for the whole scan, so it must not
+     * run concurrently with a master-config apply (SET WIFI STA/AP/TZ, SET WEB
+     * PASSWORD, a zone-0 PUT or a panel save): psvc_wifi_scan() holds the
+     * components/mcfg_ops lock across the scan, which every one of those takes
+     * across its own commit AND apply. 100 ms try, exactly as before. */
+    wifi_scan_t out[20];
+    int n = 0;
+    psvc_rc_t src = psvc_wifi_scan(out, 20, &n, PSVC_LOCK_WEB_MS);
+    if (src == PSVC_E_BUSY) {
         http_srv_error(req, 409, "BUSY", NULL);
         return http_srv_done(req, 0);
     }
-    wifi_scan_t out[20];
-    int n = wifi_mgr_scan(out, 20);
-    mcfg_ops_unlock();
-
-    if (n < 0) {
+    if (src != PSVC_OK) {
         http_srv_error(req, 500, "INTERNAL", NULL);
         return http_srv_done(req, 0);
     }

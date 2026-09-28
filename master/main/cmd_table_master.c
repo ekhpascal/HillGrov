@@ -7,7 +7,7 @@
 #include "ring_link.h"
 #include "node_mgr.h"
 #include "master_cmds.h"
-#include "net_ops_master.h"
+#include "psvc_net.h"
 
 static const char *TAG = "cmd_table_master";
 static cmd_entry_t s_table[64];
@@ -40,7 +40,7 @@ static const node_ops_t MASTER_NODE_OPS = {
 const cmd_entry_t *master_table(int *n) {
     if (!s_init) {
         /* Task 8: the NET/TIME rows get their own ops struct
-         * (net_ops_master.c), so this is init2, not init. */
+         * (components/panel_svc/psvc_net.c), so this is init2, not init. */
         master_cmds_init2(&MASTER_NODE_OPS, master_net_ops());
         int total = CMD_COMMON_ROWS_N + MASTER_CMD_ROWS_N + OTA_TRIAL_ROWS_N;
         if (total > 64) {

@@ -17,7 +17,7 @@ static const char *TAG = "http_auth";
 /* The ONE wa_state_t in the firmware: the live login sessions plus the
  * sha/rand hooks web_auth needs. Both the httpd task (login/logout/password/
  * cookie checks) and the CLI task (SET WEB PASSWORD, through
- * net_ops_master.c) reach it, so every access goes through s_lock and nothing
+ * components/panel_svc/psvc_net.c) reach it, so every access goes through s_lock and nothing
  * outside this file ever sees the struct -- every caller uses the locked
  * facade in http_auth.h.
  *

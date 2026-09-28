@@ -4,6 +4,7 @@
 #include "cJSON.h"
 #include "http_body_sizes.h"
 #include "http_srv_internal.h"
+#include "psvc_net.h"   /* master_web_set_password() -- components/panel_svc */
 
 static const char *TAG = "http_login";
 
@@ -121,13 +122,6 @@ esp_err_t h_logout(httpd_req_t *req) {
      * closes -- which for a logout is no loss at all. */
     return sent == 0 ? http_srv_done(req, 0) : ESP_FAIL;
 }
-
-/* Implemented in master/main/net_ops_master.c, which owns the mcfg
- * snapshot -> commit sequence and its mutex. Declared here rather than
- * through net_ops_master.h because that header lives in the master app and a
- * component cannot include it; this one symbol is the whole contract.
- * 0 ok, -1 length/invalid, -2 could not be stored, -3 crypto unavailable. */
-extern int master_web_set_password(const char *pw);
 
 esp_err_t h_password(httpd_req_t *req) {
     char body[HTTP_PASSWORD_BODY_MAX];   /* two worst-case-escaped passwords plus JSON punctuation */

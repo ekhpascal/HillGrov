@@ -7,23 +7,10 @@
 #include "hg_json.h"
 #include "node_mgr.h"
 #include "mcfg_store.h"
-#include "wifi_mgr.h"
-#include "time_svc.h"
-#include "time_core.h"
 #include "http_srv_internal.h"
+#include "psvc_mcfg.h"   /* psvc_mcfg_edit() -- the ONE master-config RMW, components/panel_svc */
 
 static const char *TAG = "http_api_cfg";
-
-/* components/mcfg_ops owns the master-config read-modify-write lock and the
- * snapshot->modify->commit sequence (Task 5: moved out of the app file
- * master/main/net_ops_master.c, which this component used to reach through
- * extern declarations -- its own comment called that awkward). cfg_put_zone0
- * below takes this same lock the CLI's SET WIFI/TZ rows take internally
- * (net_ops_master.c's net_set_sta/net_set_ap/net_set_tz, via
- * mcfg_ops_edit()), so a concurrent console command and a zone-0 PUT can
- * never interleave their own snapshot -> modify -> commit -> apply
- * sequences. */
-#include "mcfg_ops.h"
 
 /* zone=N&secrets=0|1, both optional. Review fix round 1 (CRITICAL #3): a
  * present-but-unparsable value must NOT silently fall back to the default --
@@ -182,69 +169,28 @@ static esp_err_t cfg_put_zone(httpd_req_t *req, uint8_t zone, const char *body) 
     return http_srv_done(req, 1);
 }
 
-/* zone 0: the master's own mcfg. mcfg_commit() has no err_path out for its
- * own -1 verdict, so the copy is validated here first, with the same checker
- * time_svc_start() now wires into both mcfg_store and hg_json's own merge-
- * time validate -- once that wiring is in place this call is defensive
- * (the merge below already ran an identical check), but it is what lets a
- * bad TIME.TZ (or any other mcfg field mcfg_commit's stricter check might
- * still catch) report a path instead of a bare 400.
- *
- * Review fix round 1 (CRITICAL #1): the whole snapshot -> merge -> validate
- * -> commit -> wifi_mgr_apply -> time_svc_apply_mcfg sequence now runs under
- * mcfg_ops_lock() -- the exact mutex net_ops_master.c's own
- * net_set_sta/net_set_ap/net_set_tz already hold across their own identical
- * sequence, named in that file's own comment as being for this handler.
- * Without it, a concurrent console `SET WIFI STA`/`SET TZ` and this PUT both
- * snapshot mcfg_get() before either commits, and the second commit silently
- * overwrites the first's field with its own stale copy of everything else --
- * exactly the race net_ops_master.c's mutex exists to close, which this
- * handler was bypassing entirely by going straight to mcfg_commit(). 100 ms
- * try-lock, same budget h_wifi_scan uses; 409 BUSY on failure to acquire. */
+/* zone 0: the master's own mcfg, through panel_svc's ONE master-config
+ * read-modify-write -- the same code the panel's Config editor and the CLI's
+ * NET/TIME rows run, so a web PUT and a console SET WIFI or a panel save can
+ * never interleave their snapshot -> modify -> commit -> apply sequences
+ * (panel plan Task 4; this replaces the hand-rolled copy follow-ups item 6
+ * recorded). Observable behaviour is unchanged: 100 ms try-lock (409 BUSY),
+ * merge (400 BAD_JSON / INVALID_FIELD + path), validate (400 VALIDATION +
+ * path), commit (-1 -> 400 VALIDATION without a path, -2 -> 503 STORAGE),
+ * then wifi_mgr_apply() + time_svc_apply_mcfg() under the lock, then 200. */
 static esp_err_t cfg_put_zone0(httpd_req_t *req, const char *body) {
-    if (mcfg_ops_lock(100) != 0) {
-        http_srv_error(req, 409, "BUSY", NULL);
-        return http_srv_done(req, 1);
-    }
-
-    hg_mcfg_t scratch = *mcfg_get();
-
     char err[64] = "";
-    int rc = hg_json_merge_mcfg(&scratch, body, err, sizeof err);
-    if (rc == -1) {
-        mcfg_ops_unlock();
-        http_srv_error(req, 400, "BAD_JSON", NULL);
-        return http_srv_done(req, 1);
+    psvc_rc_t rc = psvc_mcfg_edit(psvc_mcfg_json_fn, (void *)body, PSVC_LOCK_WEB_MS,
+                                  "PUT CONFIG ZONE0", err, sizeof err);
+    switch (rc) {
+    case PSVC_OK:              http_srv_json(req, 200, "{\"ok\":true}");                     break;
+    case PSVC_E_BUSY:          http_srv_error(req, 409, "BUSY", NULL);                       break;
+    case PSVC_E_BAD_JSON:      http_srv_error(req, 400, "BAD_JSON", NULL);                   break;
+    case PSVC_E_INVALID_FIELD: http_srv_error(req, 400, "INVALID_FIELD", err);               break;
+    case PSVC_E_VALIDATION:    http_srv_error(req, 400, "VALIDATION", err[0] ? err : NULL);  break;
+    case PSVC_E_STORAGE:       http_srv_error(req, 503, "STORAGE", NULL);                    break;
+    default:                   http_srv_error(req, 500, "INTERNAL", NULL);                   break;
     }
-    if (rc == -2) {
-        mcfg_ops_unlock();
-        http_srv_error(req, 400, "INVALID_FIELD", err);
-        return http_srv_done(req, 1);
-    }
-
-    char verr[64] = "";
-    if (hg_mcfg_validate(&scratch, tz_check, verr, sizeof verr) != 0) {
-        mcfg_ops_unlock();
-        http_srv_error(req, 400, "VALIDATION", verr);
-        return http_srv_done(req, 1);
-    }
-
-    rc = mcfg_commit(&scratch);
-    if (rc == -1) {   /* defensive: see above -- the pre-check should have already caught this */
-        mcfg_ops_unlock();
-        http_srv_error(req, 400, "VALIDATION", NULL);
-        return http_srv_done(req, 1);
-    }
-    if (rc == -2) {
-        mcfg_ops_unlock();
-        http_srv_error(req, 503, "STORAGE", NULL);
-        return http_srv_done(req, 1);
-    }
-
-    wifi_mgr_apply();
-    time_svc_apply_mcfg();
-    mcfg_ops_unlock();
-    http_srv_json(req, 200, "{\"ok\":true}");
     return http_srv_done(req, 1);
 }
 

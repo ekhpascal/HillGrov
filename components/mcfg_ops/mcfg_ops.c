@@ -6,7 +6,7 @@
 
 static const char *TAG = "mcfg_ops";
 
-/* Moved out of master/main/net_ops_master.c verbatim (Task 5): that file was
+/* Moved out of master/main/net_ops_master.c verbatim (migration Task 5; that file is now components/panel_svc/psvc_net.c): that file was
  * an *app*, so components/http_srv could only reach its lock through extern
  * declarations -- awkward, and something the panel UI (next plan) would have
  * had to repeat. Every caller of the master-config read-modify-write now

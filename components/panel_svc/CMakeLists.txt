@@ -6,12 +6,12 @@
 # components present in every app build.
 set(PSVC_SRCS "")
 if("${CMAKE_PROJECT_NAME}" STREQUAL "hillgrow_master")
-    list(APPEND PSVC_SRCS "psvc_rc.c" "psvc_mcfg.c")
+    list(APPEND PSVC_SRCS "psvc_rc.c" "psvc_mcfg.c" "psvc_net.c")
 endif()
 
 idf_component_register(
     SRCS ${PSVC_SRCS}
     INCLUDE_DIRS "."
-    REQUIRES hg_cfg hg_mcfg
-    PRIV_REQUIRES mcfg_ops time_core hg_json wifi_mgr time_svc
+    REQUIRES hg_cfg hg_mcfg master_cmds wifi_mgr
+    PRIV_REQUIRES mcfg_ops time_core hg_json time_svc http_auth node_mgr
 )

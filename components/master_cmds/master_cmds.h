@@ -40,7 +40,7 @@ typedef struct {
  * SET NODE <z> MAC) reach wifi_mgr / mcfg_store / web_auth / node_mgr only
  * through this second ops struct, for the same reason node_ops_t exists: the
  * rows stay host-testable against a fake with no IDF header anywhere near
- * them. master/main/net_ops_master.c holds the production implementation
+ * them. components/panel_svc/psvc_net.c holds the production implementation
  * (mcfg copy -> modify -> mcfg_commit -> wifi_mgr_apply/time_svc_apply_mcfg).
  *
  * Every int-returning member is 0 on success and -1 on "the caller asked for
