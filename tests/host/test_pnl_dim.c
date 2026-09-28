@@ -102,6 +102,14 @@ static void test_follow_lights_without_schedules_is_day(void) {
     TEST_ASSERT_EQUAL_UINT8(0, o.night); TEST_ASSERT_EQUAL_UINT8(80, o.pct);
 }
 
+/* Before the first snapshot pnl_idle passes no schedule at all: FOLLOW_LIGHTS must then count as day. */
+static void test_follow_lights_null_schedule_is_day(void) {
+    pnl_dim_out_t o;
+    pnl_local_t t = at(23, 0);
+    pnl_dim_eval(&g_c, NULL, &t, 600000, &o);
+    TEST_ASSERT_EQUAL_UINT8(0, o.night); TEST_ASSERT_EQUAL_UINT8(80, o.pct);
+}
+
 static void test_idle_threshold(void) {
     pnl_dim_out_t o;
     light(6 * 60, 22 * 60);
@@ -130,6 +138,7 @@ int main(void) {
     RUN_TEST(test_follow_lights);
     RUN_TEST(test_follow_lights_any_light_on_keeps_day);
     RUN_TEST(test_follow_lights_without_schedules_is_day);
+    RUN_TEST(test_follow_lights_null_schedule_is_day);
     RUN_TEST(test_idle_threshold);
     RUN_TEST(test_min_duty_clamped);
     return UNITY_END();

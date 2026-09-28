@@ -137,6 +137,8 @@ static void pw_teardown(void) {
 
 void sys_password_wipe(void) {
     if (s_confirming) pnl_confirm_close();
+    if (s_ok_mb) lv_msgbox_close(s_ok_mb);      /* the success box outlives the screen; the idle return closes it too.
+                                                   ok_deleted clears s_ok_mb (the close deletes it synchronously) */
     if (s_pw_lbl && wdg_keyboard_is_open()) wdg_keyboard_close();   /* the section is showing: the keyboard is ours */
     pnl_zero(s_pw, sizeof s_pw);
     if (!s_busy) { s_last[0] = '\0'; pnl_kit_msg_set(s_msg, "", PNL_KIT_INFO); }

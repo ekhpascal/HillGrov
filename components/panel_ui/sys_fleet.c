@@ -34,17 +34,20 @@ static lv_obj_t *s_upd[HG_MAX_ZONES], *s_name[HG_MAX_ZONES];
 
 /* ---- the one reboot flow (D16) ---- */
 static lv_obj_t *s_overlay, *s_overlay_lbl;   /* on the top layer: outlives any screen until Close (or the reset) */
+static uint8_t   s_overlay_failed;             /* the overlay shows a refusal and a Close button, not "Rebooting..." */
 
 static void overlay_close(lv_event_t *e) {
     (void)e;
     if (s_overlay) lv_obj_delete_async(s_overlay);   /* the Close button lives inside it: never delete synchronously */
     s_overlay = s_overlay_lbl = NULL;
+    s_overlay_failed = 0;
 }
 
 static void overlay_fail(const char *text) {
     lv_obj_set_style_text_font(s_overlay_lbl, &lv_font_montserrat_28, 0);
     lv_label_set_text(s_overlay_lbl, text);
     pnl_kit_button(s_overlay, "Close", overlay_close, NULL);
+    s_overlay_failed = 1;
 }
 
 static void reboot_run(pnl_job_t *j) { j->irc = pnl_cmd_run("REBOOT CONFIRM", (char *)j->out, PNL_JOB_OUT_MAX); }
@@ -135,6 +138,17 @@ static void submit(uint8_t op, uint8_t zone) {
     s_last[0] = '\0';
     enable_all();
     pnl_kit_msg_set(s_msg, "...", PNL_KIT_INFO);
+}
+
+/* The idle wipe (Task 27): the kept fleet outcome, and a FAILED reboot overlay (a dialog waiting for Close). A
+ * "Rebooting..." overlay stays: the master is going down (the one intended exception). */
+void sys_fleet_wipe(void) {
+    if (!s_busy) { s_last[0] = '\0'; s_last_err = 0; pnl_kit_msg_set(s_msg, "", PNL_KIT_INFO); }   /* NULL-safe */
+    if (s_overlay && s_overlay_failed) {    /* called from a timer, never from inside the overlay: delete now */
+        lv_obj_delete(s_overlay);
+        s_overlay = s_overlay_lbl = NULL;
+        s_overlay_failed = 0;
+    }
 }
 
 static void upd_click(lv_event_t *e) { submit(OP_ZONE, (uint8_t)(intptr_t)lv_event_get_user_data(e)); }

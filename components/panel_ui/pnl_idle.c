@@ -41,10 +41,13 @@ static void dim_decide(uint32_t idle_ms, pnl_dim_out_t *out) {
 }
 
 /* Ruling C21 (pnl_dim_hold.h): while a Panel-screen preview holds the backlight, never touch it, and forget the
- * cached level so the first tick after the hold re-applies even an unchanged level. Returns 1 when applied/unchanged. */
+ * cached level so the first tick after the hold re-applies even an unchanged level. Returns 1 when the backlight is
+ * at pct (applied now or already), 0 when held or the write failed (a dark panel: panel_hw_brightness -1). */
 static int dim_apply(uint8_t pct) {
     if (pnl_dim_held(lv_tick_get())) { s_cur_pct = PCT_NONE; return 0; }
-    if (pct != s_cur_pct && panel_hw_brightness(pct) == 0) s_cur_pct = pct;
+    if (pct == s_cur_pct) return 1;
+    if (panel_hw_brightness(pct) != 0) { s_cur_pct = PCT_NONE; return 0; }
+    s_cur_pct = pct;
     return 1;
 }
 
@@ -89,7 +92,8 @@ static void idle_wipe(void) {
     zone_replace_wipe();        /* every zone's MAC draft and the shown reply */
     sys_wifi_wipe();            /* Wi-Fi form text, passwords, scan list, kept outcomes */
     sys_time_wipe();            /* the TZ draft and kept outcomes */
-    sys_password_wipe();        /* the unsubmitted new web password */
+    sys_password_wipe();        /* the unsubmitted new web password and its "Web password changed" box */
+    sys_fleet_wipe();           /* the kept fleet outcome; a failed-reboot overlay (a "Rebooting..." one stays) */
     pnl_confirm_close();        /* the ONE confirm (C16): any box still open */
     if (wdg_keyboard_is_open()) wdg_keyboard_close();   /* wipes its text; re-masks */
     pnl_nav_go(PNL_DEST_HOME, 0);
@@ -104,7 +108,8 @@ static void idle_tick(lv_timer_t *tm) {
     dim_decide(idle, &out);
     dim_decide(0, &day);                         /* the "in use" level: dimmed means below it */
     int applied = dim_apply(out.pct);
-    catcher_show(applied && out.pct < day.pct);  /* no catcher while a preview holds the backlight */
+    catcher_show(applied && out.pct < day.pct);  /* only over a backlight really at the dim level: never while a
+                                                    preview holds it, never after a failed write */
 
     if (idle >= (uint32_t)p->wipe_idle_s * 1000u) {
         if (!s_wiped && !pnl_worker_pending()) {   /* never wipe a buffer a job still owns; retried every tick */
