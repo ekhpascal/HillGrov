@@ -6,10 +6,12 @@
  * with the same meaning, and while the panel installs the web gets 409 UPLOAD_ACTIVE and SET FW ZONE gets ERR FW_BUSY.
  * A master install ends with "Reboot now" (the one reboot flow, sys_reboot_confirm).
  * Card rules (pnl_sd.h): every card operation runs on the worker, mount -> use -> unmount, and the install's FILE* is
- * closed before the unmount on every path. */
+ * closed before the unmount on every path. An install whose file no longer has the listed size (the card was swapped
+ * between Read card and Install) is refused before anything is written. */
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <sys/stat.h>
 #include "sdkconfig.h"
 #include "esp_heap_caps.h"
 #include "lvgl.h"
@@ -144,9 +146,17 @@ static void inst_run(pnl_job_t *j) {
     if (sd == PNL_SD_OK) {
         FILE *f = fopen(a->path, "rb");
         if (f) {
-            pnl_sd_src_t src = { .f = f, .left = a->size };
-            psvc_fw_stats_t st;
-            j->rc = psvc_fw_install((psvc_fw_kind_t)a->kind, a->size, pnl_sd_read, &src, &res, &st);
+            struct stat fs;
+            if (fstat(fileno(f), &fs) != 0 || fs.st_size < 0 || (uint32_t)fs.st_size != a->size) {
+                /* the card was swapped (or the file rewritten) between Read card and Install: the listing's size
+                 * and header no longer describe this file, so nothing is installed from it */
+                snprintf(j->err, sizeof j->err, "The file on the card changed since Read card -- nothing was "
+                         "written. Read the card again.");
+            } else {
+                pnl_sd_src_t src = { .f = f, .left = a->size };
+                psvc_fw_stats_t st;
+                j->rc = psvc_fw_install((psvc_fw_kind_t)a->kind, a->size, pnl_sd_read, &src, &res, &st);
+            }
             fclose(f);                          /* before the unmount, on every path */
         }
         pnl_sd_unmount();
@@ -181,13 +191,17 @@ static void inst_done(pnl_job_t *j) {
     memcpy(&res, j->out, sizeof res);
     s_installing = 0;
     prog_stop();
+    j->err[sizeof j->err - 1] = '\0';
+    int changed = j->err[0] != '\0';            /* inst_run's size check refused the file (nothing written) */
     if (j->irc != PNL_SD_OK) {
         snprintf(s_fw_last, sizeof s_fw_last, "%s", pnl_sd_rc_text((pnl_sd_rc_t)j->irc));
+    } else if (changed) {
+        snprintf(s_fw_last, sizeof s_fw_last, "%s", j->err);
     } else {
         pnl_msg_arg_t ma = { .zone = 0, .version = res.version, .slot = res.slot, .len = res.len };
         pnl_msg(a->kind == PSVC_FW_MASTER ? PNL_CTX_FW_MASTER : PNL_CTX_FW_ZONE, j->rc, &ma, s_fw_last, sizeof s_fw_last);
     }
-    s_fw_last_ok = (uint8_t)(j->irc == PNL_SD_OK && j->rc == PSVC_OK);
+    s_fw_last_ok = (uint8_t)(j->irc == PNL_SD_OK && !changed && j->rc == PSVC_OK);
     s_fw_last_kind = (uint8_t)(1 + a->kind);    /* module state first; the widgets may be gone (note above) */
     show_outcome();
     render_list();
