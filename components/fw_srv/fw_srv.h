@@ -47,18 +47,23 @@ extern "C" {
  * chunked+Content-Length pair httpd_resp_send_chunk() would produce. */
 int fw_srv_validate(void);
 
-/* SP4 Task 13: re-runs that validation after the zone_fw partition has been
- * rewritten from the browser (POST /api/fw/zone, http_upload_zone.c) and
- * updates the cached verdict + length. 0 = the partition now holds a good
- * HGFW-prefixed image, -1 = it does not (the normal answer while the upload
- * has the header sector erased, and after a failed upload).
+/* Re-runs the validation after the zone_fw partition has been rewritten (POST /api/fw/zone on httpd, or the panel's
+ * microSD install on pnl_work -- both through panel_svc's install core) and updates the cached verdict + length.
+ * 0 = the partition now holds a good HGFW-prefixed image, -1 = it does not (the normal answer while the header sector is
+ * erased, and after a failed upload).
  *
- * Call it ONLY from the httpd task: it shares fw_srv.c's one 4 KB static
- * buffer with the GET /fw/zone.bin handler, and the whole "never touched
- * concurrently" argument for that buffer rests on both living on that single
- * task. Everything else (the fleet sequencer's PRECHECK) only ever READS the
- * verdict through fw_srv_image_ok(). */
+ * Callable from ANY task that holds the writer claim below: validation reads through its own static buffer (s_vbuf),
+ * never the GET send loop's (s_buf), and the verdict is published under a spinlock. (The ESP32 master, which has no
+ * panel and so no writer off the httpd task, maps s_vbuf onto s_buf to keep 4 KB of .bss; fw_srv.c says why that is
+ * still safe.) */
 int fw_srv_revalidate(void);
+
+/* The zone_fw writer claim. A writer (the install core, for a zone image) claims BEFORE the first erase and releases
+ * after its last revalidate. 0 = claimed; -1 = a GET /fw/zone.bin is streaming right now, or another writer holds it.
+ * While claimed, GET /fw/zone.bin answers 404 FW_NO_IMAGE without reading flash, so a zone never streams a partition that
+ * is being rewritten. Both are spinlock-only and safe from any task. */
+int  fw_srv_writer_claim(void);
+void fw_srv_writer_release(void);
 
 /* Registers GET /fw/zone.bin on an already-started server. Called by
  * http_srv_start() after it has registered its own routes; safe to call

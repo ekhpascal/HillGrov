@@ -1,3 +1,4 @@
+#include "freertos/FreeRTOS.h"
 #include <stdio.h>
 #include <string.h>
 #include "esp_partition.h"
@@ -5,6 +6,7 @@
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "sdkconfig.h"
 #include "hg_blob.h"   /* hg_crc32 */
 #include "fw_srv.h"
 
@@ -20,12 +22,26 @@ static const esp_partition_t *s_part;
 static uint32_t                s_img_len;
 static uint8_t                 s_img_ok;
 
-/* Shared by validate_image() (fw_srv_validate(), at boot) and zone_bin_get()
- * (the httpd task, later) -- never touched concurrently (fix round minor #8:
- * app_main calls fw_srv_validate() before http_srv_start(), so validation
- * always finishes before any request can arrive and one 4 KB buffer is enough
- * for both). */
+/* Two buffers, one owner each: s_buf is the GET /fw/zone.bin send loop's (httpd task only); s_vbuf is validate_image()'s
+ * (fw_srv_validate() at boot, and fw_srv_revalidate() from whichever task holds the writer claim). They used to be one
+ * buffer, which was safe only while every caller lived on the httpd task. */
 static uint8_t s_buf[FW_CHUNK];
+#if CONFIG_IDF_TARGET_ESP32P4
+static uint8_t s_vbuf[FW_CHUNK];
+#else
+/* The ESP32 master keeps the one buffer: it sits close to its 64 KB internal-heap bar (the alarm_mgr snapshot lesson)
+ * and has no panel, so no writer off the httpd task. Sharing stays safe there for the reason it always was -- boot
+ * validation finishes before http_srv_start(), and every runtime revalidate runs on the httpd task, which cannot be
+ * inside the send loop at the same time -- and the writer claim adds a second, task-independent reason: a claim is
+ * granted only while no GET is streaming, and a claimed partition is never streamed, so a claim holder's validation and
+ * the send loop can never overlap. */
+static uint8_t *const s_vbuf = s_buf;
+#endif
+
+/* {writer flag, streaming count} and the published verdict, under one spinlock (copies only, never across I/O). */
+static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint8_t      s_writer;
+static uint8_t      s_streaming;
 
 /* esp_task_wdt_reset() is NOT a quiet no-op for a task that is not
  * subscribed: it logs an ESP_LOGE("task not found") every time (bench: ~60
@@ -46,7 +62,7 @@ static uint32_t rd32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
-/* One-time validation, streamed through s_buf (the image can be up to
+/* One-time validation, streamed through s_vbuf (the image can be up to
  * ~1.5 MB -- far too big to read in one shot). hg_crc32 chains across
  * chunks by feeding the previous result back in as the next seed (hg_blob.h:
  * "seed 0 for one-shot; feed previous result to continue"). */
@@ -65,8 +81,8 @@ static int validate_image(const esp_partition_t *part, uint32_t *len_out) {
          * right after a browser upload and re-reads the whole image. */
         wdt_kick();
         uint32_t n = rem < FW_CHUNK ? rem : FW_CHUNK;
-        if (esp_partition_read(part, off, s_buf, n) != ESP_OK) return -1;
-        crc = hg_crc32(crc, s_buf, n);
+        if (esp_partition_read(part, off, s_vbuf, n) != ESP_OK) return -1;
+        crc = hg_crc32(crc, s_vbuf, n);
         off += n;
         rem -= n;
     }
@@ -118,21 +134,45 @@ static int send_all(httpd_req_t *r, const char *buf, size_t len, int64_t deadlin
     return 0;
 }
 
-/* SP4 Task 13: re-run the one-time validation after POST /api/fw/zone has
- * rewritten the partition (http_upload_zone.c). Callable ONLY from the httpd
- * task: it reuses the same s_buf that zone_bin_get() streams from, and both
- * only ever run on that one task (see s_buf's comment above). Unlike
- * fw_srv_validate() it also clears s_img_len on a bad verdict -- validate_image
- * leaves *len_out untouched when it fails, and a stale length behind
- * s_img_ok = 0 is a trap for anything that ever reads the two together.
+/* SP4 Task 13: re-run the one-time validation after the partition has been
+ * rewritten (POST /api/fw/zone, http_upload_zone.c; the panel's microSD
+ * install). Callable from any task holding the writer claim: it reads through
+ * s_vbuf, never the send loop's s_buf, and publishes the verdict under s_mux.
+ * Unlike fw_srv_validate() it also clears s_img_len on a bad verdict --
+ * validate_image leaves *len_out untouched when it fails, and a stale length
+ * behind s_img_ok = 0 is a trap for anything that ever reads the two together.
  * 0 = the partition now holds a good image, -1 = it does not (which is the
  * expected answer when the caller has deliberately erased the header). */
 int fw_srv_revalidate(void) {
     if (!s_part) return -1;
-    s_img_ok = (validate_image(s_part, &s_img_len) == 0) ? 1 : 0;
-    if (!s_img_ok) s_img_len = 0;
-    ESP_LOGI(TAG, "zone_fw revalidated: %s (%lu B)", s_img_ok ? "ok" : "no image", (unsigned long)s_img_len);
-    return s_img_ok ? 0 : -1;
+    uint32_t len = 0;
+    int ok = validate_image(s_part, &len) == 0;
+    portENTER_CRITICAL(&s_mux);
+    s_img_ok = ok ? 1 : 0;
+    s_img_len = ok ? len : 0;   /* a stale length behind s_img_ok = 0 is a trap for anything reading the two together */
+    portEXIT_CRITICAL(&s_mux);
+    ESP_LOGI(TAG, "zone_fw revalidated: %s (%lu B)", ok ? "ok" : "no image", (unsigned long)(ok ? len : 0));
+    return ok ? 0 : -1;
+}
+
+int fw_srv_writer_claim(void) {
+    int got = 0;
+    portENTER_CRITICAL(&s_mux);
+    if (!s_writer && s_streaming == 0) { s_writer = 1; got = 1; }
+    portEXIT_CRITICAL(&s_mux);
+    return got ? 0 : -1;
+}
+
+void fw_srv_writer_release(void) {
+    portENTER_CRITICAL(&s_mux);
+    s_writer = 0;
+    portEXIT_CRITICAL(&s_mux);
+}
+
+static void stream_end(void) {
+    portENTER_CRITICAL(&s_mux);
+    if (s_streaming) s_streaming--;
+    portEXIT_CRITICAL(&s_mux);
 }
 
 /* fix round 1 CRITICAL fix: httpd_resp_send_chunk() UNCONDITIONALLY emits
@@ -191,7 +231,14 @@ static esp_err_t done_or_close(httpd_req_t *req) {
 }
 
 static esp_err_t zone_bin_get(httpd_req_t *req) {
-    if (!s_img_ok) {
+    uint8_t ok;
+    uint32_t img_len;
+    portENTER_CRITICAL(&s_mux);
+    ok = s_img_ok && !s_writer;   /* a writer is rewriting zone_fw: never stream it, never even read it */
+    img_len = s_img_len;
+    if (ok) s_streaming++;
+    portEXIT_CRITICAL(&s_mux);
+    if (!ok) {
         httpd_resp_set_status(req, "404 Not Found");
         httpd_resp_send(req, "FW_NO_IMAGE", HTTPD_RESP_USE_STRLEN);   /* identity by default: fine as-is */
         return done_or_close(req);   /* answered; close rather than purge an unread body (see above) */
@@ -206,14 +253,14 @@ static esp_err_t zone_bin_get(httpd_req_t *req) {
     char head[128];
     int hn = snprintf(head, sizeof head,
                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %lu\r\n\r\n",
-                       (unsigned long)s_img_len);
-    if (hn < 0 || (size_t)hn >= sizeof head || send_all(req, head, (size_t)hn, deadline) != 0) return ESP_FAIL;
+                       (unsigned long)img_len);
+    if (hn < 0 || (size_t)hn >= sizeof head || send_all(req, head, (size_t)hn, deadline) != 0) { stream_end(); return ESP_FAIL; }
 
     /* The httpd worker task isn't TWDT-subscribed by default -- add/delete
      * around the loop, reset every chunk (SP1 rescue-upload pattern,
      * rescue_http.c's upload_post). */
     esp_task_wdt_add(NULL);
-    uint32_t rem = s_img_len, off = FW_HDR_LEN;
+    uint32_t rem = img_len, off = FW_HDR_LEN;
     esp_err_t rc = ESP_OK;
     while (rem) {
         esp_task_wdt_reset();
@@ -227,6 +274,7 @@ static esp_err_t zone_bin_get(httpd_req_t *req) {
         rem -= n;
     }
     esp_task_wdt_delete(NULL);
+    stream_end();
     if (rc != ESP_OK) {
         ESP_LOGW(TAG, "zone.bin transfer abandoned with %lu B to go", (unsigned long)rem);
         return ESP_FAIL;   /* truncated body promised Content-Length bytes: close is the only honest framing */
@@ -241,8 +289,13 @@ int fw_srv_validate(void) {
         return -1;
     }
 
-    s_img_ok = (validate_image(s_part, &s_img_len) == 0) ? 1 : 0;
-    if (!s_img_ok)
+    uint32_t len = 0;
+    int ok = validate_image(s_part, &len) == 0;
+    portENTER_CRITICAL(&s_mux);
+    s_img_ok = ok ? 1 : 0;
+    s_img_len = ok ? len : 0;
+    portEXIT_CRITICAL(&s_mux);
+    if (!ok)
         ESP_LOGW(TAG, "zone_fw image missing/invalid (magic/len/crc) -- GET /fw/zone.bin will 404 FW_NO_IMAGE");
 
     return 0;
