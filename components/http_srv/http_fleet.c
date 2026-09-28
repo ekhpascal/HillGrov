@@ -7,7 +7,7 @@
 /* The fleet update button: POST /api/fleet starts SP3's fleet OTA sequencer
  * over one zone ({"zone":2}) or every assigned zone ({"all":true}), DELETE
  * cancels a running one. Neither touches flash -- the sequencer pulls the
- * zone_fw image http_upload_zone.c stored, over GET /fw/zone.bin, from each
+ * zone_fw image panel_svc/fw_sink_zone.c stored, over GET /fw/zone.bin, from each
  * zone in turn after rebooting it into rescue. The bodies are tiny, so this
  * uses http_srv_body() rather than the upload path's streaming reader.
  *

@@ -118,7 +118,7 @@ void test_p4_cp_fw_holds_the_coprocessor_image(void) {
 /* Deferred from Task 2 as cosmetic (the parser read the subtype column and
    threw it away); Task 6 makes it load-bearing. cp_ota_sync() looks cp_fw up
    with an EXPLICIT subtype -- esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
-   0x41, "cp_fw") -- unlike fw_srv.c and http_upload_zone.c, which both pass
+   0x41, "cp_fw") -- unlike fw_srv.c and panel_svc/fw_sink_zone.c, which both pass
    ESP_PARTITION_SUBTYPE_ANY and match zone_fw by name alone. A hand-edited CSV
    that renamed or renumbered either subtype would make esp_partition_find_first()
    return NULL at runtime with nothing else here to catch it. */

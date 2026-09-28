@@ -124,7 +124,7 @@ hg_test(test_pnl_touch ${COMP}/panel_ui/pnl_touch.c)
 # psvc_state_conv.c (pure: the snap_master_t conversion and h_state's two text
 # parsers) against the REAL state_snap writer; psvc_fw.c's progress
 # publication. psvc_state.c itself is IDF glue (node_mgr, wifi_mgr, heap).
-hg_test(test_psvc_state ${COMP}/panel_svc/psvc_state_conv.c ${COMP}/panel_svc/psvc_fw.c ${COMP}/state_snap/state_snap.c)
+hg_test(test_psvc_state ${COMP}/panel_svc/psvc_state_conv.c ${COMP}/panel_svc/psvc_fw.c ${COMP}/state_snap/state_snap.c ${COMP}/hg_image/hg_image.c)
 target_link_libraries(test_psvc_state cjson_host)
 
 # Task 10: pure presentation helpers (time, formatting, home-screen maths).
@@ -160,3 +160,7 @@ target_compile_definitions(test_hg_image PRIVATE
     HG_MASTER_CMAKELISTS="${CMAKE_CURRENT_LIST_DIR}/../../master/CMakeLists.txt"
     HG_ZONE_CMAKELISTS="${CMAKE_CURRENT_LIST_DIR}/../../zone/CMakeLists.txt"
     HG_COPROC_CMAKELISTS="${CMAKE_CURRENT_LIST_DIR}/../../coproc/CMakeLists.txt")
+
+# panel_svc's firmware-install core (Task 30): pure, behind a fake environment, sink and reader. The web upload and the
+# panel's microSD install both run it.
+hg_test(test_psvc_fw ${COMP}/panel_svc/psvc_fw.c ${COMP}/panel_svc/psvc_rc.c ${COMP}/hg_image/hg_image.c)

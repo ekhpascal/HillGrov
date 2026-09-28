@@ -1,15 +1,15 @@
 #include <stdio.h>
 #include <string.h>
 #include "esp_partition.h"
-#include "esp_task_wdt.h"
 #include "esp_log.h"
 #include "hg_blob.h"   /* hg_crc32 */
 #include "fw_srv.h"
-#include "http_upload.h"
+#include "psvc_fw.h"
 
-static const char *TAG = "http_upload_zone";
+static const char *TAG = "fw_sink_zone";
 
-/* POST /api/fw/zone writes the SAME storage layout tools/flash_app.py's
+/* The zone_fw sink (POST /api/fw/zone, and the panel's microSD zone install)
+ * writes the SAME storage layout tools/flash_app.py's
  * build_zonefw_image() produces and fw_srv.c validates: a 16-byte header at
  * zone_fw+0 -- { 'HGFW' u32 LE, len u32 LE, crc32 u32 LE, rsvd u32 } --
  * followed by the raw zone app image at zone_fw+16. crc32 is hg_crc32(0,
@@ -18,7 +18,8 @@ static const char *TAG = "http_upload_zone";
  *
  * Order matters, and it is the whole safety argument of this file:
  *   1. the header sector is erased FIRST and fw_srv_revalidate() is called
- *      immediately, so from that instant fw_srv_image_ok() reads 0. A fleet
+ *      immediately, so from that instant the cached verdict is 0 (and
+ *      fw_srv_image_ok() already reads 0 from the writer claim on). A fleet
  *      PRECHECK running on node_mgr's task during the ~2 s bulk erase below
  *      therefore sees "no image" instead of being handed a Content-Length for
  *      an image that is being erased under it;
@@ -30,10 +31,10 @@ static const char *TAG = "http_upload_zone";
  * Any failure leaves the header erased, which is exactly "no image" to
  * fw_srv.c (404 FW_NO_IMAGE) and to the fleet sequencer's PRECHECK.
  *
- * All of this runs on the httpd task -- the same task as fw_srv.c's
- * /fw/zone.bin handler, which is why the shared 4 KB buffer and the cached
- * verdict inside fw_srv.c stay single-threaded (see fw_srv_revalidate's
- * contract in fw_srv.h). */
+ * This runs on whichever task called psvc_fw_install() -- httpd for the web, pnl_work for the panel -- always inside
+ * the zone_fw writer claim (fw_srv_writer_claim(), taken by the install core before begin()), which is what makes
+ * fw_srv_revalidate() safe from here. The TWDT resets are psvc_fw_wdt_kick(): silent when the caller is not
+ * subscribed. */
 
 #define FW_HDR_LEN   16u
 #define FW_HDR_MAGIC 0x57464748u   /* 'HGFW' LE */
@@ -89,14 +90,14 @@ static int zone_begin(size_t content_len) {
     for (size_t off = SECTOR; off < p->size; off += ERASE_STEP) {
         size_t n = p->size - off;
         if (n > ERASE_STEP) n = ERASE_STEP;
-        esp_task_wdt_reset();
+        psvc_fw_wdt_kick();
         esp_err_t rc = esp_partition_erase_range(p, off, n);
         if (rc != ESP_OK) {
             ESP_LOGE(TAG, "erase zone_fw at %u: %s", (unsigned)off, esp_err_to_name(rc));
             return -1;
         }
     }
-    esp_task_wdt_reset();
+    psvc_fw_wdt_kick();
 
     s_crc = 0;
     s_len = 0;
@@ -116,7 +117,7 @@ static int zone_write(const void *buf, size_t n) {
     return 0;
 }
 
-static int zone_finish(char *resp, size_t cap) {
+static int zone_finish(psvc_fw_result_t *res) {
     uint8_t hdr[FW_HDR_LEN];
     wr32(hdr + 0,  FW_HDR_MAGIC);
     wr32(hdr + 4,  s_len);
@@ -133,16 +134,18 @@ static int zone_finish(char *resp, size_t cap) {
      * flash and re-checks the CRC against the header just written, so a 200
      * means the zone image on this board has been verified from flash, not
      * merely streamed at it. ~0.5 s for a ~700 KB image; the TWDT is fed on
-     * both sides of it (this task is subscribed for the whole upload). */
-    esp_task_wdt_reset();
+     * both sides of it (the install core subscribes the caller for the whole flash loop). */
+    psvc_fw_wdt_kick();
     int ok = fw_srv_revalidate();
-    esp_task_wdt_reset();
+    psvc_fw_wdt_kick();
     if (ok != 0) {
         ESP_LOGE(TAG, "zone_fw failed read-back validation after %u B", (unsigned)s_len);
         return -1;
     }
 
-    snprintf(resp, cap, "{\"ok\":true,\"len\":%lu}", (unsigned long)s_len);
+    snprintf(res->slot, sizeof res->slot, "zone_fw");
+    res->version[0] = '\0';
+    res->len = s_len;
     ESP_LOGW(TAG, "zone image stored: %u B, crc32 %08lx", (unsigned)s_len, (unsigned long)s_crc);
     return 0;
 }
@@ -154,9 +157,9 @@ static void zone_cancel(void) {
     (void)erase_header();
 }
 
-static const upload_sink_t ZONE_SINK = {
+static const psvc_fw_sink_t ZONE_SINK = {
     .ready = zone_ready, .max = zone_max, .begin = zone_begin,
     .write = zone_write, .finish = zone_finish, .cancel = zone_cancel
 };
 
-const upload_sink_t *http_upload_zone_sink(void) { return &ZONE_SINK; }
+const psvc_fw_sink_t *psvc_fw_sink_zone(void) { return &ZONE_SINK; }

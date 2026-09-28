@@ -119,11 +119,11 @@ int  node_mgr_fw_status(char *buf, size_t n);
  * lock, before fw_zone/fw_all start anything -- 1 from it means "refuse with
  * -2" (the same code fleet_start returns for "already running", so
  * master_cmds answers ERR FW_BUSY and the web endpoint 409 FLEET_BUSY).
- * http_srv_start() installs http_upload_busy() here, which closes the other
- * half of the exclusivity the upload handler enforces with its own
+ * app_main installs panel_svc's psvc_fw_busy() here, which closes the other
+ * half of the exclusivity the install core enforces with its own
  * node_mgr_fw_status() check: without it a console SET FW ZONE could start a
- * sequence that pulls the very zone_fw partition a browser upload is
- * erasing. Passed as a pointer rather than called by name because http_srv
+ * sequence that pulls the very zone_fw partition an install is
+ * erasing. Passed as a pointer rather than called by name because panel_svc
  * is a master-only component that the zone and rescue images do not link.
  * NULL (the default, and what a board with no web server keeps) = no gate. */
 void node_mgr_set_fw_gate(int (*busy)(void));

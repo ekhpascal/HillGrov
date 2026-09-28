@@ -59,7 +59,8 @@ int fw_srv_validate(void);
 int fw_srv_revalidate(void);
 
 /* The zone_fw writer claim. A writer (the install core, for a zone image) claims BEFORE the first erase and releases
- * after its last revalidate. 0 = claimed; -1 = a GET /fw/zone.bin is streaming right now, or another writer holds it.
+ * after its last revalidate -- and only after a claim that returned 0 (releasing an unheld claim logs a warning).
+ * 0 = claimed; -1 = a GET /fw/zone.bin is streaming right now, or another writer holds it.
  * While claimed, GET /fw/zone.bin answers 404 FW_NO_IMAGE without reading flash, so a zone never streams a partition that
  * is being rewritten. Both are spinlock-only and safe from any task. */
 int  fw_srv_writer_claim(void);
@@ -73,9 +74,11 @@ void fw_srv_writer_release(void);
 int fw_srv_register(httpd_handle_t server);
 
 /* Cached verdict from fw_srv_validate()'s one-time validation; 1 = the
- * zone_fw partition holds a good HGFW-prefixed image, 0 = missing/invalid
+ * zone_fw partition holds a good HGFW-prefixed image, 0 = missing/invalid,
+ * or a writer holds the claim above (the partition is being rewritten)
  * (fw_srv's own GET handler already 404s on this; the fleet sequencer's
- * PRECHECK step reads it too, per-zone, before starting an update). */
+ * PRECHECK step reads it too, per-zone, before starting an update). Safe
+ * from any task. */
 int fw_srv_image_ok(void);
 
 #ifdef __cplusplus

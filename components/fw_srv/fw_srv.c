@@ -135,8 +135,8 @@ static int send_all(httpd_req_t *r, const char *buf, size_t len, int64_t deadlin
 }
 
 /* SP4 Task 13: re-run the one-time validation after the partition has been
- * rewritten (POST /api/fw/zone, http_upload_zone.c; the panel's microSD
- * install). Callable from any task holding the writer claim: it reads through
+ * rewritten (POST /api/fw/zone and the panel's microSD install, both through
+ * panel_svc/fw_sink_zone.c). Callable from any task holding the writer claim: it reads through
  * s_vbuf, never the send loop's s_buf, and publishes the verdict under s_mux.
  * Unlike fw_srv_validate() it also clears s_img_len on a bad verdict --
  * validate_image leaves *len_out untouched when it fails, and a stale length
@@ -165,8 +165,12 @@ int fw_srv_writer_claim(void) {
 
 void fw_srv_writer_release(void) {
     portENTER_CRITICAL(&s_mux);
+    uint8_t held = s_writer;
     s_writer = 0;
     portEXIT_CRITICAL(&s_mux);
+    /* Only a claim that returned 0 may be released: an unbalanced release could free another writer's claim. Logged
+     * outside the critical section. */
+    if (!held) ESP_LOGW(TAG, "zone_fw writer claim released while not held");
 }
 
 static void stream_end(void) {
@@ -315,4 +319,12 @@ int fw_srv_register(httpd_handle_t server) {
     return 0;
 }
 
-int fw_srv_image_ok(void) { return s_img_ok; }
+/* Never "ok" while a writer holds the claim: from the claim to the header erase in the writer's begin() the old verdict
+ * is still cached, and a fleet PRECHECK must not be told an image is there that is about to be erased. The same rule
+ * zone_bin_get() applies. */
+int fw_srv_image_ok(void) {
+    portENTER_CRITICAL(&s_mux);
+    int ok = s_img_ok && !s_writer;
+    portEXIT_CRITICAL(&s_mux);
+    return ok;
+}

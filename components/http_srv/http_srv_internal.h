@@ -76,14 +76,14 @@ esp_err_t h_alarms(httpd_req_t *req);
 esp_err_t h_wifi_scan(httpd_req_t *req);
 esp_err_t h_wifi_set(httpd_req_t *req);
 
-/* ---- http_upload.c (+ _master.c / _zone.c) and http_fleet.c ----
+/* ---- http_upload.c and http_fleet.c ----
  * The two firmware upload endpoints -- raw application/octet-stream bodies,
  * master -> the inactive OTA slot, zone -> the zone_fw partition behind the
- * HGFW header -- and the fleet update button. http_upload.c holds the guards
- * and the one streaming loop; the two sinks are a file each (they share
- * nothing but the upload_sink_t contract); http_fleet.c is the pair of
- * node_mgr calls behind the button. http_upload.h carries the guard list and
- * the upload-progress getter /api/state reads. */
+ * HGFW header -- and the fleet update button. http_upload.c is the HTTP face
+ * of panel_svc's install core (psvc_fw.h: the guards, the streaming loop and
+ * both sinks, shared with the panel's microSD install); http_fleet.c is the
+ * pair of node_mgr calls behind the button. http_upload.h carries the guard
+ * list. */
 #include "http_upload.h"
 
 esp_err_t h_fw_master(httpd_req_t *req);

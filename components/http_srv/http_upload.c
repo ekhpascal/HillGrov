@@ -1,83 +1,25 @@
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "esp_task_wdt.h"
 #include "esp_timer.h"
-#include "esp_system.h"
 #include "esp_log.h"
-#include "sdkconfig.h"   /* CONFIG_IDF_FIRMWARE_CHIP_ID: the chip a master image must be built for */
-#include "node_mgr.h"
+#include "psvc_fw.h"
+#include "psvc_rc.h"
 #include "http_upload.h"
-#include "hg_image.h"   /* the ONE image-identity rule and project names (recovery design 4.2 / 5.7) */
-#include "psvc_fw.h"   /* progress lives in panel_svc: /api/state and the panel read one value */
 #include "http_srv_internal.h"
 
 static const char *TAG = "http_upload";
 
-/* Sized like rescue_http.c's upload buffer; static, because the httpd task's
- * 8 KB stack is shared with /api/cmd's dispatch path and state_snap's writer.
- * One buffer for both uploads is safe: s_busy makes them mutually exclusive
- * (and esp_http_server runs every socket from one task anyway). */
-#define UPLOAD_BUF   4096
-/* rescue's rule verbatim: this many CONSECUTIVE recv timeouts (~60 s of no
- * data at all at httpd's 5 s recv_wait_timeout) gives up rather than letting
- * a client that walked out of AP range mid-upload pin the single httpd task
- * with a half-written slot open. */
+/* rescue's rule verbatim: this many CONSECUTIVE recv timeouts (~60 s of no data at all at httpd's 5 s
+ * recv_wait_timeout) gives up rather than letting a client that walked out of AP range mid-upload pin the single httpd
+ * task with a half-written slot open. */
 #define MAX_TIMEOUTS 12
-/* KraftWerk lesson: yield after this many flash writes so the Wi-Fi and IDLE
- * tasks still run during a ~1 MB flash burst. */
-#define YIELD_BLOCKS 8
-
-#define LOW_HEAP_B   (40 * 1024)   /* same guard as PUT /api/config */
-
-/* ---- exclusivity ----
- * One upload at a time, claimed test-and-set under a critical section. The
- * fleet sequencer is excluded separately (node_mgr_fw_status): it pulls the
- * zone_fw partition a zone upload erases, and it runs on node_mgr's task, so
- * "the httpd task is busy" is not enough to keep the two apart. */
-static portMUX_TYPE s_busy_mux = portMUX_INITIALIZER_UNLOCKED;
-static uint8_t      s_busy;
-
-static int busy_claim(void) {
-    int got = 0;
-    portENTER_CRITICAL(&s_busy_mux);
-    if (!s_busy) { s_busy = 1; got = 1; }
-    portEXIT_CRITICAL(&s_busy_mux);
-    return got;
-}
-
-static void busy_release(void) {
-    portENTER_CRITICAL(&s_busy_mux);
-    s_busy = 0;
-    portEXIT_CRITICAL(&s_busy_mux);
-}
-
-int http_upload_busy(void) {
-    portENTER_CRITICAL(&s_busy_mux);
-    int b = s_busy;
-    portEXIT_CRITICAL(&s_busy_mux);
-    return b;
-}
-
-/* esp_task_wdt_reset() logs an ESP_LOGE("task not found") for a task that is
- * not subscribed -- once per call -- so every reset on this path is gated on
- * the subscription actually being in place (fix round 1, same shape as
- * fw_srv.c's wdt_kick). esp_task_wdt_status() is silent when the answer is
- * "no". This also makes the loops below correct if esp_task_wdt_add() failed. */
-static void wdt_kick(void) {
-    if (esp_task_wdt_status(NULL) == ESP_OK) esp_task_wdt_reset();
-}
-
-/* ---- the shared upload path ---- */
 
 static int type_is_octet_stream(httpd_req_t *req) {
     char ct[48];
-    /* TRUNC means the value was longer than this buffer -- a legal header with
-     * a long parameter list, e.g. a browser adding a boundary=... it should
-     * not. The 24-byte type prefix is fully present either way, which is all
-     * this compares, so a truncated read is accepted rather than refused
-     * (fix round 1). */
+    /* TRUNC means the value was longer than this buffer -- a legal header with a long parameter list. The 24-byte type
+     * prefix is fully present either way, which is all this compares, so a truncated read is accepted (fix round 1). */
     esp_err_t rc = httpd_req_get_hdr_value_str(req, "Content-Type", ct, sizeof ct);
     if (rc != ESP_OK && rc != ESP_ERR_HTTPD_RESULT_TRUNC) return 0;
     static const char want[] = "application/octet-stream";
@@ -86,39 +28,22 @@ static int type_is_octet_stream(httpd_req_t *req) {
     return ct[n] == '\0' || ct[n] == ';' || ct[n] == ' ';   /* parameters are allowed */
 }
 
-/* Reads away the rest of a body this handler has already decided to refuse.
- * 1 = the body is fully consumed (the connection may be kept), 0 = the peer
- * stalled or went away (the caller closes instead).
- *
- * Bench finding (Task 13): closing the socket on a client that is still
- * streaming -- http_srv_done's usual answer for an unread body -- makes the
- * peer's TCP stack discard whatever of our response it had already buffered
- * (the close RSTs the connection because unread data is pending). curl showed
- * "Recv failure: Connection was reset" and only the status line survived; a
- * browser would see the fetch reject outright. Since the operator's commonest
- * mistake -- the wrong image in the wrong endpoint -- is exactly the case that
- * has to explain itself, the body is drained first and the answer sent into a
- * quiet socket. That is affordable ONLY here: by this point the size guard has
- * already bounded content_len by the target partition.
- *
- * TWO bounds, because either alone is escapable (fix round 1): the silence
- * rule gives up after 3 consecutive timeouts (~15 s), and a wall-clock budget
- * caps the whole drain at 10 s regardless. The silence counter resets on every
- * byte received, so without the budget a client that trickles one byte every
- * few seconds -- feeding the watchdog through this very loop -- would hold the
- * single httpd task, and therefore the entire web UI, for as long as it liked.
- * Courtesy to a misbehaving client is not worth the server. */
+/* Reads away the rest of a body this handler has already decided to refuse, so the answer goes into a quiet socket (the
+ * Task 13 bench finding: closing on a still-streaming client RSTs the connection and the peer loses the response body).
+ * 1 = fully consumed, 0 = the peer stalled or went away. Two bounds: 3 consecutive timeouts (~15 s) and a 10 s wall-clock
+ * budget, because either alone is escapable (fix round 1). It runs after the install core released its TWDT
+ * subscription, so the kick below is a silent no-op; the budget is the bound. */
 #define DRAIN_MAX_TIMEOUTS 3
 #define DRAIN_BUDGET_US    (10 * 1000 * 1000LL)
+#define DRAIN_BUF          1024u
 
 static int drain_body(httpd_req_t *req, uint8_t *buf, size_t cap, size_t got) {
     int timeouts = 0;
     int64_t deadline = esp_timer_get_time() + DRAIN_BUDGET_US;
     while (got < req->content_len) {
-        wdt_kick();
+        psvc_fw_wdt_kick();
         if (esp_timer_get_time() > deadline) {
-            ESP_LOGW(TAG, "drain budget spent with %u B still unread -- closing",
-                     (unsigned)(req->content_len - got));
+            ESP_LOGW(TAG, "drain budget spent with %u B still unread -- closing", (unsigned)(req->content_len - got));
             return 0;
         }
         size_t want = req->content_len - got;
@@ -135,16 +60,40 @@ static int drain_body(httpd_req_t *req, uint8_t *buf, size_t cap, size_t got) {
     return 1;
 }
 
-/* Every exit from here answers exactly once and returns through
- * http_srv_done(): drained = 1 only when the whole body was read, so a
- * refusal with a body still on the wire closes the socket instead of letting
- * httpd purge megabytes on the single httpd task. */
-static esp_err_t fw_upload(httpd_req_t *req, const char *kind, uint16_t want_chip, const char *want_name,
-                           const upload_sink_t *sink) {
-    /* Framing first, and before anything is claimed or any target static is
-     * touched (fix round 1): a chunked or wrong-type request is malformed
-     * whatever the target's state is, and must answer 400 even during a
-     * trial window that would otherwise report 409. */
+/* The install core's byte source for an HTTP body. */
+typedef struct { httpd_req_t *req; int timeouts; const char *kind; } recv_src_t;
+
+static int recv_src(void *src, void *buf, size_t cap) {
+    recv_src_t *s = (recv_src_t *)src;
+    int n = httpd_req_recv(s->req, (char *)buf, cap);
+    if (n == HTTPD_SOCK_ERR_TIMEOUT) {
+        if (++s->timeouts > MAX_TIMEOUTS) {
+            ESP_LOGW(TAG, "%s upload stalled (~%d s of silence), aborting", s->kind, MAX_TIMEOUTS * 5);
+            return PSVC_FW_SRC_STALLED;
+        }
+        return PSVC_FW_SRC_AGAIN;
+    }
+    if (n <= 0) return PSVC_FW_SRC_FAILED;
+    s->timeouts = 0;
+    return n;
+}
+
+static int status_for(psvc_rc_t rc) {
+    switch (rc) {
+    case PSVC_E_UPLOAD_ACTIVE: case PSVC_E_FLEET_ACTIVE: case PSVC_E_TRIAL_PENDING: case PSVC_E_ZONE_FW_BUSY: return 409;
+    case PSVC_E_LOW_HEAP:                                                                                   return 503;
+    case PSVC_E_TOO_LARGE:                                                                                  return 413;
+    case PSVC_E_STALLED: case PSVC_E_RECV_FAILED:                                                           return 400;
+    case PSVC_E_IMAGE_MISMATCH: case PSVC_E_WRITE_FAILED:                                                   return 422;
+    default:                                                                                                return 500;
+    }
+}
+
+/* Every exit answers exactly once and returns through http_srv_done(): drained = 1 only when the whole body was read,
+ * so a refusal with a body still on the wire closes the socket instead of letting httpd purge megabytes. */
+static esp_err_t fw_upload(httpd_req_t *req, psvc_fw_kind_t kind) {
+    const char *kname = kind == PSVC_FW_MASTER ? "master" : "zone";
+    /* Framing first, before anything is claimed (fix round 1): malformed whatever the target's state is. */
     if (httpd_req_get_hdr_value_len(req, "Transfer-Encoding") > 0) {
         http_srv_error(req, 400, "CHUNKED_UNSUPPORTED", NULL);
         return http_srv_done(req, 0);
@@ -158,136 +107,42 @@ static esp_err_t fw_upload(httpd_req_t *req, const char *kind, uint16_t want_chi
         return http_srv_done(req, 0);
     }
 
-    /* Claim BEFORE reading the fleet status, never after: node_mgr reads
-     * http_upload_busy() inside the same lock it starts a sequence under, so
-     * claim-then-read here and read-then-start there means a simultaneous
-     * pair always has exactly one loser -- whichever ordering it lands in,
-     * one of the two sees the other's flag. */
-    if (!busy_claim()) {
-        http_srv_error(req, 409, "UPLOAD_ACTIVE", NULL);
-        return http_srv_done(req, 0);
-    }
-    /* from here on out every exit goes through busy_release() */
+    ESP_LOGW(TAG, "%s upload: %u B", kname, (unsigned)req->content_len);
+    recv_src_t src = { .req = req, .timeouts = 0, .kind = kname };
+    psvc_fw_result_t res;
+    psvc_fw_stats_t st;
+    psvc_rc_t rc = psvc_fw_install(kind, req->content_len, recv_src, &src, &res, &st);
 
-    const char *code = NULL;
-    int status = 0;
-    char fleet[40] = "";
-    node_mgr_fw_status(fleet, sizeof fleet);
-    int rdy = strcmp(fleet, "IDLE") == 0 ? sink->ready() : 1;
-    size_t max_len = rdy == 0 ? sink->max() : 0;
-
-    if (rdy == 1)                              { status = 409; code = "FLEET_ACTIVE"; }
-    else if (rdy == -2)                        { status = 409; code = "TRIAL_PENDING"; }
-    else if (rdy != 0)                         { status = 500; code = "NO_SLOT"; }
-    else if (esp_get_free_heap_size() < LOW_HEAP_B) { status = 503; code = "LOW_HEAP"; }
-    else if (max_len == 0)                     { status = 500; code = "INTERNAL"; }
-    else if (req->content_len > max_len)       { status = 413; code = "TOO_LARGE"; }
-    if (code) {
-        ESP_LOGW(TAG, "%s upload refused: %s (%u B, max %u)", kind, code,
-                 (unsigned)req->content_len, (unsigned)max_len);
-        /* Refused before a single body byte was read, so the socket is closed
-         * rather than drained (see drain_body): content_len is whatever the
-         * client claimed -- TOO_LARGE means it is bigger than any partition
-         * here by definition -- and reading megabytes away just to be polite
-         * about the error body would hand any logged-in client the single
-         * httpd task for as long as it liked. The status code still reaches
-         * the client; only the JSON body can be lost to the reset. */
-        http_srv_error(req, status, code, NULL);
-        busy_release();
-        return http_srv_done(req, 0);
-    }
-
-    ESP_LOGW(TAG, "%s upload starting: %u B", kind, (unsigned)req->content_len);
-    psvc_fw_progress_set(kind, 0);
-    /* The httpd task is not TWDT-subscribed by default. If this fails, every
-     * wdt_kick() below is a silent no-op and the loop simply runs unwatched
-     * rather than logging an error per 4 KB block. */
-    int wdt_ok = (esp_task_wdt_add(NULL) == ESP_OK);
-    if (!wdt_ok) ESP_LOGW(TAG, "esp_task_wdt_add failed -- %s upload runs unwatched", kind);
-
-    static uint8_t buf[UPLOAD_BUF];
-    size_t got = 0, fill = 0;
-    int timeouts = 0, blocks = 0, started = 0, sock_ok = 1;
-
-    while (got < req->content_len) {
-        wdt_kick();
-        size_t want = req->content_len - got;
-        if (want > UPLOAD_BUF - fill) want = UPLOAD_BUF - fill;
-
-        int n = httpd_req_recv(req, (char *)buf + fill, want);
-        if (n == HTTPD_SOCK_ERR_TIMEOUT) {
-            if (++timeouts > MAX_TIMEOUTS) {
-                ESP_LOGW(TAG, "%s upload stalled (~%d s of silence), aborting", kind, MAX_TIMEOUTS * 5);
-                status = 400; code = "STALLED"; sock_ok = 0;
-                break;
+    if (rc != PSVC_OK) {
+        ESP_LOGE(TAG, "%s upload refused after %u/%u B: %s", kname, (unsigned)st.consumed,
+                 (unsigned)req->content_len, psvc_rc_token(rc));
+        int drained = st.consumed == req->content_len;
+        /* A guard refusal (started == 0) closes without reading: content_len is whatever the client claimed, and reading
+         * megabytes away to be polite would hand the single httpd task to any logged-in client. Past the guards, drain
+         * BEFORE answering (curl stops sending once it sees an error status), unless the socket itself failed. */
+        if (!drained && st.started && !st.src_failed) {
+            /* Transient, not static: the drain is its only user, and a permanent buffer would come out of the ESP32
+             * master's internal-RAM margin (the install core's 4 KB one is private to it now). A failed allocation
+             * closes instead of draining -- the status line still reaches the client. */
+            uint8_t *dbuf = malloc(DRAIN_BUF);
+            if (dbuf) {
+                drained = drain_body(req, dbuf, DRAIN_BUF, st.consumed);
+                free(dbuf);
             }
-            continue;
         }
-        if (n <= 0) { status = 400; code = "RECV_FAILED"; sock_ok = 0; break; }
-        timeouts = 0;
-        fill += (size_t)n;
-        got  += (size_t)n;
-        psvc_fw_progress_set(kind, (uint32_t)((uint64_t)got * 100 / req->content_len));
-
-        /* Identify the image BEFORE the first write, so nothing is erased for
-         * a file that was never going to be accepted: the brief's order
-         * (erase, then check) would cost the stored zone image every time
-         * someone picks the wrong file in the browser. The first recv is NOT
-         * guaranteed to return HG_IMG_ID_BYTES, so the check waits for them to
-         * accumulate across recv boundaries; a whole body shorter than that is
-         * a mismatch. hg_image_is() also checks the chip id and the
-         * app-descriptor magic (decision D22), so a master image built for the
-         * other chip is refused here, before any erase, rather than by
-         * esp_ota_end() after it. */
-        if (!started && (fill >= HG_IMG_ID_BYTES || got == req->content_len)) {
-            if (!hg_image_is(buf, fill, want_chip, want_name)) {
-                ESP_LOGW(TAG, "%s upload is not a %s image", kind, want_name);
-                status = 422; code = "IMAGE_MISMATCH";
-                break;
-            }
-            if (sink->begin(req->content_len) != 0) { status = 422; code = "WRITE_FAILED"; break; }
-            started = 1;
-        }
-        if (started && (fill == UPLOAD_BUF || got == req->content_len)) {
-            if (sink->write(buf, fill) != 0) { status = 422; code = "WRITE_FAILED"; break; }
-            fill = 0;
-            if (++blocks % YIELD_BLOCKS == 0) vTaskDelay(1);
-        }
+        http_srv_error(req, status_for(rc), psvc_rc_token(rc), NULL);
+        return http_srv_done(req, drained);
     }
 
     char resp[128];
-    int drained = (got == req->content_len);
-    if (!code && sink->finish(resp, sizeof resp) != 0) { status = 422; code = "WRITE_FAILED"; }
-    if (code) {
-        if (started) sink->cancel();
-        ESP_LOGE(TAG, "%s upload failed after %u/%u B: %s", kind, (unsigned)got,
-                 (unsigned)req->content_len, code);
-        /* Drain BEFORE answering, never after: curl stops sending as soon as
-         * it sees an error status ("HTTP error before end of send"), so a
-         * drain that ran afterwards would wait out its own timeout budget for
-         * bytes that are never coming. */
-        if (!drained && sock_ok) drained = drain_body(req, buf, sizeof buf, got);
-    }
-
-    /* Every flash write and every recv is done by here. The response send
-     * below is bounded by the socket's own 5 s send timeout and can legitimately
-     * take several seconds on a marginal AP link, so the TWDT subscription --
-     * which exists to catch a stuck flash/recv loop, not a slow client -- is
-     * dropped first. fw_srv.c's send_all() carries the same lesson the hard
-     * way: a slow-but-healthy send panicked the board on the bench. */
-    if (wdt_ok) esp_task_wdt_delete(NULL);
-    psvc_fw_progress_set("", 0);
-    busy_release();
-
-    if (code) http_srv_error(req, status, code, NULL);
-    else      http_srv_json(req, 200, resp);
-    return http_srv_done(req, drained);
+    if (kind == PSVC_FW_MASTER)
+        snprintf(resp, sizeof resp, "{\"ok\":true,\"slot\":\"%s\",\"version\":\"%s\"}", res.slot, res.version);
+    else
+        snprintf(resp, sizeof resp, "{\"ok\":true,\"len\":%lu}", (unsigned long)res.len);
+    http_srv_json(req, 200, resp);
+    return http_srv_done(req, 1);
 }
 
-esp_err_t h_fw_master(httpd_req_t *req) {
-    return fw_upload(req, "master", CONFIG_IDF_FIRMWARE_CHIP_ID, HG_PROJ_MASTER, http_upload_master_sink());
-}
+esp_err_t h_fw_master(httpd_req_t *req) { return fw_upload(req, PSVC_FW_MASTER); }
 
-esp_err_t h_fw_zone(httpd_req_t *req) {
-    return fw_upload(req, "zone", HG_CHIP_ESP32, HG_PROJ_ZONE, http_upload_zone_sink());   /* zone boards are ESP32 */
-}
+esp_err_t h_fw_zone(httpd_req_t *req) { return fw_upload(req, PSVC_FW_ZONE); }

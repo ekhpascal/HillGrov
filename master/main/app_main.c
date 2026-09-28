@@ -18,6 +18,7 @@
 #include "fw_srv.h"
 #include "cp_ota.h"
 #include "http_srv.h"
+#include "psvc_fw.h"
 #include "mcfg_store.h"
 #include "mcfg_ops.h"
 #include "time_svc.h"
@@ -214,6 +215,10 @@ void app_main(void) {
     uint8_t mac[6];
     hg_app_get_mac(mac);
     ring_link_start(1, master_id_fn, mac);
+    /* The fleet sequencer's gate (node_mgr.h:118-129): it refuses to start a fleet update while ANY firmware install --
+     * a web upload or the panel's microSD install -- holds panel_svc's one install claim. Installed here on every boot,
+     * before node_mgr_start(), rather than from http_srv_start(), which never runs on a boot without the AP. */
+    node_mgr_set_fw_gate(psvc_fw_busy);
     node_mgr_start();
 #if CONFIG_IDF_TARGET_ESP32P4
     /* Panel worker + poller, once node_mgr owns the node table and BEFORE the

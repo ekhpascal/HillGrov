@@ -28,10 +28,10 @@
 static fleet_t           s_fleet;
 static SemaphoreHandle_t s_fleet_mux;
 
-/* SP4 Task 13 fix round 1: "is a browser firmware upload in flight?", set by
- * http_srv_start() to http_upload_busy(). Read INSIDE flock() in both
- * starters below, which is what makes it interlock with the upload handler's
- * own fleet check: the upload claims its flag before it reads the fleet
+/* SP4 Task 13 fix round 1: "is a firmware install in flight?" (web upload or
+ * panel microSD), set by app_main to panel_svc's psvc_fw_busy(). Read INSIDE
+ * flock() in both starters below, which is what makes it interlock with the
+ * install core's own fleet check: the install claims its flag before it reads the fleet
  * status (which takes this same lock), so whichever of the two gets here
  * first, the other sees it and backs off. A plain pointer store, written once
  * at boot before either caller can run. */

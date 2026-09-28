@@ -165,7 +165,7 @@ int cp_ota_sync(void) {
     }
 
     /* Explicit subtype, not ESP_PARTITION_SUBTYPE_ANY (fw_srv.c and
-     * http_upload_zone.c both use ANY and match zone_fw by name alone) --
+     * panel_svc/fw_sink_zone.c both use ANY and match zone_fw by name alone) --
      * cp_fw's subtype 0x41 is asserted against partitions_p4.csv by
      * tests/host/test_partitions_p4.c, which is what makes this lookup safe
      * against a hand-edited CSV. */

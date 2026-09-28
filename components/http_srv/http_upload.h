@@ -1,73 +1,10 @@
 #pragma once
-#include <stddef.h>
-#include <stdint.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/* Browser firmware upload -- POST /api/fw/master (a raw app image into the
- * inactive OTA slot) and POST /api/fw/zone (a raw zone app image into the
- * zone_fw data partition, behind the 16-byte HGFW header fw_srv.c validates).
+/* Browser firmware upload -- POST /api/fw/master (a raw app image into the inactive OTA slot) and POST /api/fw/zone (a
+ * raw zone app image into the zone_fw partition behind the 16-byte HGFW header fw_srv.c validates).
  *
- * This is the one path in the product that writes flash from the network, so
- * every guard is stated once here and implemented once in http_upload.c:
- *
- *   - the route's auth bit (http_routes.c) has already run: route_entry
- *     rejects an unauthenticated POST before the handler is reached;
- *   - Transfer-Encoding present -> 400 (esp_http_server does NOT de-chunk
- *     request bodies -- the KraftWerk scar http_srv_body carries too);
- *   - Content-Type must be application/octet-stream, content_len must be
- *     non-zero and must fit the target partition;
- *   - exactly one upload at a time, and never while the fleet sequencer is
- *     running (it reads the very partition a zone upload erases);
- *   - the image is identified from its own esp_app_desc before anything is
- *     erased or written, so pointing the wrong file at the wrong endpoint
- *     costs nothing.
- */
-
-/* Upload progress is published through panel_svc (psvc_fw.h:
- * psvc_fw_progress_set() by the installer, psvc_fw_progress() by /api/state
- * and the panel), so every face reads ONE value. */
-
-/* ---- one upload target ----
- * ready() runs first, and ONLY once this upload owns the exclusivity claim --
- * it is what may touch the target's statics (fix round 1): 0 = go ahead,
- * -1 = this target cannot be written at all (500 NO_SLOT), -2 = it could be,
- * but not right now (409 TRIAL_PENDING). max() is the largest body that fits
- * and is only meaningful after a ready() of 0; 0 means the partition is
- * missing (500 INTERNAL). begin() runs only after the image identity check
- * has passed, so a refused image never erases anything; write() gets every
- * body byte exactly once, in order; finish() is called after the last byte
- * and fills the 200 response body; cancel() undoes a begun-but-failed upload
- * (including a failed finish()) and must leave nothing behind that could
- * later be booted or served. All of them run on the httpd task, one upload at
- * a time. 0 = ok, -1 = failed (the handler answers 422 WRITE_FAILED). */
-typedef struct {
-    int    (*ready)(void);
-    size_t (*max)(void);
-    int    (*begin)(size_t content_len);
-    int    (*write)(const void *buf, size_t n);
-    int    (*finish)(char *resp, size_t cap);
-    void   (*cancel)(void);
-} upload_sink_t;
-
-/* http_upload_master.c: the inactive OTA slot (esp_ota_begin/write/end/
- * set_boot_partition). http_upload_zone.c: the zone_fw partition (erase, body
- * at offset 16, HGFW header written last, fw_srv_revalidate). */
-const upload_sink_t *http_upload_master_sink(void);
-const upload_sink_t *http_upload_zone_sink(void);
-
-/* 1 while a body is streaming into flash. Installed into node_mgr as the
- * fleet sequencer's gate (node_mgr_set_fw_gate, from http_srv_start), so the
- * console's SET FW ZONE cannot start a sequence that would pull the very
- * partition an upload is rewriting -- the mirror of the FLEET_ACTIVE check
- * the upload handler makes. The two orderings interlock: an upload claims the
- * flag BEFORE reading the fleet status, and the sequencer reads the flag
- * INSIDE the same lock it starts under, so exactly one of a simultaneous pair
- * wins. Safe from any task. */
-int http_upload_busy(void);
-
-#ifdef __cplusplus
-}
-#endif
+ * http_upload.c is only the HTTP face: the framing checks (Transfer-Encoding -> 400 CHUNKED_UNSUPPORTED, Content-Type
+ * must be application/octet-stream -> 400 BAD_TYPE, content_len 0 -> 400 EMPTY_BODY), a recv source for the install
+ * core, the drain-before-answer rule and the response. Every other guard -- one install at a time, never while the fleet
+ * sequencer runs, the target's ready/heap/size checks, the image identity (magic, chip id, app-descriptor magic and
+ * project name) before anything is erased -- is panel_svc's install core (psvc_fw.h), shared with the panel's microSD
+ * install. The route's auth bit (http_routes.c) has already run before either handler is reached. */
