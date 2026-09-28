@@ -71,10 +71,20 @@ out:
     return rc;
 }
 
-int pnl_con_line_ok(const char *line) {
-    if (!line) return 0;
+static int is_trim(char ch) { return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'; }
+
+const char *pnl_con_span(const char *line, size_t *len) {
+    if (!line) { *len = 0; return ""; }
+    while (*line && is_trim(*line)) line++;
     size_t n = strlen(line);
-    while (n > 0 && (line[n - 1] == '\r' || line[n - 1] == '\n' || line[n - 1] == ' ')) n--;
+    while (n > 0 && is_trim(line[n - 1])) n--;
+    *len = n;
+    return line;
+}
+
+int pnl_con_line_ok(const char *line) {
+    size_t n;
+    (void)pnl_con_span(line, &n);
     return n >= 1 && n <= (size_t)(CMD_LINE_MAX - 1);
 }
 

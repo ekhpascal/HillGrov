@@ -22,7 +22,10 @@ void pnl_con_init(pnl_console_t *c, char (*reply_store)[CMD_RESP_MAX]);   /* PNL
 int  pnl_con_forward(const char *line, uint8_t zone, char *out, size_t cap);
      /* app.js:582-590: split on whitespace; tok2 == "ZONE" (case-insensitive) -> unchanged; else "VERB ZONE <z> rest"
         joined with single spaces; 0 / -1 result would exceed CMD_LINE_MAX-1 (or cap-1) */
-int  pnl_con_line_ok(const char *line);          /* after trimming trailing CR/LF/space: 1..CMD_LINE_MAX-1 bytes */
+const char *pnl_con_span(const char *line, size_t *len);
+     /* the web's .trim(): skips leading and drops trailing space/tab/CR/LF; returns the first kept byte (never NULL; ""
+        for a NULL line) and its length in *len (0 = nothing to send). Inner whitespace is kept. */
+int  pnl_con_line_ok(const char *line);          /* pnl_con_span length is 1..CMD_LINE_MAX-1 bytes */
 pnl_con_entry_t *pnl_con_push(pnl_console_t *c, const char *sent);
      /* newest entry, pending; NULL when the slot it would reuse is still pending (never overwrites the worker's buffer) */
 void pnl_con_hist_add(pnl_console_t *c, const char *line);            /* the ORIGINAL line; keeps the newest PNL_CON_HIST */

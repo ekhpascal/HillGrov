@@ -45,6 +45,7 @@ static zcon_t *con_for(uint8_t zone) {
 static void render(void) {
     zcon_t *z = con_for(s_zone);
     if (!z || !s_log_lbl || !s_view) return;
+    pnl_zero(s_view, CON_VIEW_MAX);                        /* a shorter transcript must not leave the old one's tail (C3) */
     size_t o = 0;
     for (int first = 0; first < z->con.n_log; first++) {   /* drop the oldest until the rest fits */
         int fits = 1;
@@ -117,14 +118,17 @@ static int queue_line(zcon_t *z, const char *line, char *sent) {
 static int send_line(const char *text) {
     zcon_t *z = con_for(s_zone);
     if (!z || !s_scratch) { pnl_kit_msg_set(s_msg, "Console unavailable (no memory)", PNL_KIT_ERR); return 0; }
-    while (*text == ' ' || *text == '\t') text++;
-    if (!*text) return 0;
-    if (!pnl_con_line_ok(text)) { pnl_kit_msg_set(s_msg, "Line too long -- 191 characters at most", PNL_KIT_ERR); return 0; }
+    size_t n;
+    const char *p = pnl_con_span(text, &n);      /* the web's .trim(): space/tab/CR/LF at both ends */
+    if (n == 0) return 0;                        /* only whitespace: nothing to send, nothing to complain about */
+    if (n > (size_t)(CMD_LINE_MAX - 1)) {
+        pnl_kit_msg_set(s_msg, "Line too long -- 191 characters at most", PNL_KIT_ERR);
+        return 0;
+    }
     if (s_busy_zone) { pnl_kit_msg_set(s_msg, "A command is still running -- wait for its reply", PNL_KIT_ERR); return 0; }
     char line[CMD_LINE_MAX], sent[CMD_LINE_MAX];
-    snprintf(line, sizeof line, "%s", text);
-    size_t n = strlen(line);
-    while (n && (line[n - 1] == ' ' || line[n - 1] == '\r' || line[n - 1] == '\n')) line[--n] = '\0';
+    pnl_zero(line, sizeof line);
+    memcpy(line, p, n);
     int queued = queue_line(z, line, sent);
     pnl_zero(line, sizeof line);   /* a console line can carry a credential (C3) */
     pnl_zero(sent, sizeof sent);
@@ -140,7 +144,10 @@ static void kb_done(void *ctx, int accepted, const char *text) {
     if (!text) text = "";
     /* Keep what was typed as the draft when it could ever be sent, so a refusal (a line still running) loses nothing;
      * an over-long line is refused visibly by send_line and never cut down to fit the draft. */
-    if (pnl_con_line_ok(text)) snprintf(z->con.draft, sizeof z->con.draft, "%s", text);
+    if (pnl_con_line_ok(text)) {
+        pnl_zero(z->con.draft, sizeof z->con.draft);   /* a shorter line must not leave the old draft's tail (C3) */
+        snprintf(z->con.draft, sizeof z->con.draft, "%s", text);
+    }
     send_line(text);
     render();
 }
@@ -170,7 +177,10 @@ static void prev_click(lv_event_t *e) {
     zcon_t *z = con_for(s_zone);
     if (!z) return;
     const char *h = pnl_con_hist_prev(&z->con);
-    if (h) snprintf(z->con.draft, sizeof z->con.draft, "%s", h);
+    if (h) {
+        pnl_zero(z->con.draft, sizeof z->con.draft);   /* the draft it replaces may be an unsent credential (C3) */
+        snprintf(z->con.draft, sizeof z->con.draft, "%s", h);
+    }
     render();
 }
 

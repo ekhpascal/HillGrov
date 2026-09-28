@@ -15,6 +15,17 @@ void tearDown(void) {}
 
 static void fill(char *s, char ch, int n) { memset(s, ch, (size_t)n); s[n] = '\0'; }
 
+static int all_zero(const void *p, size_t n) {
+    const unsigned char *b = (const unsigned char *)p;
+    for (size_t i = 0; i < n; i++) if (b[i]) return 0;
+    return 1;
+}
+/* bytes after the terminator are zero: a shorter string written over a longer one leaves no tail behind (C3) */
+static int tail_zero(const char *s, size_t cap) {
+    size_t n = strlen(s);
+    return all_zero(s + n, cap - n);
+}
+
 static void test_forward_plain(void) {
     char out[CMD_LINE_MAX];
     TEST_ASSERT_EQUAL_INT(0, pnl_con_forward("GET WATER 1", 2, out, sizeof out));
@@ -57,6 +68,25 @@ static void test_line_ok_bounds(void) {
     fill(s, 'x', 191); TEST_ASSERT_EQUAL_INT(1, pnl_con_line_ok(s));
     fill(s, 'x', 192); TEST_ASSERT_EQUAL_INT(0, pnl_con_line_ok(s));
     fill(s, 'x', 191); strcat(s, "  \r\n"); TEST_ASSERT_EQUAL_INT(1, pnl_con_line_ok(s));  /* trailing trimmed first */
+    TEST_ASSERT_EQUAL_INT(0, pnl_con_line_ok("\r\n"));                                  /* only whitespace: empty */
+    TEST_ASSERT_EQUAL_INT(0, pnl_con_line_ok(" \t\r\n\t "));
+    s[0] = '\t'; s[1] = ' '; fill(s + 2, 'x', 191); strcat(s, "\t");                   /* both ends, like .trim() */
+    TEST_ASSERT_EQUAL_INT(1, pnl_con_line_ok(s));
+}
+
+static void test_span_trims_both_ends(void) {
+    size_t n = 99;
+    const char *p = pnl_con_span(" \tGET ID\t\r\n", &n);
+    TEST_ASSERT_EQUAL_size_t(6, n);
+    TEST_ASSERT_EQUAL_INT(0, strncmp(p, "GET ID", 6));
+    p = pnl_con_span("\r\n", &n);
+    TEST_ASSERT_EQUAL_size_t(0, n);
+    TEST_ASSERT_NOT_NULL(p);
+    p = pnl_con_span(NULL, &n);
+    TEST_ASSERT_EQUAL_size_t(0, n);
+    TEST_ASSERT_NOT_NULL(p);
+    p = pnl_con_span("GET  ID", &n);                                                   /* inner whitespace is kept */
+    TEST_ASSERT_EQUAL_size_t(7, n);
 }
 
 static void test_log_ring_wraps_at_21(void) {
@@ -92,6 +122,26 @@ static void test_reply_is_verbatim_and_clipped(void) {
     fill(big, 'r', 4999);
     pnl_con_reply(e, big);
     TEST_ASSERT_EQUAL_size_t(CMD_RESP_MAX - 1, strlen(e->reply));
+    pnl_con_reply(e, "OK\n");                                             /* shorter over longer: no tail left */
+    TEST_ASSERT_EQUAL_STRING("OK\n", e->reply);
+    TEST_ASSERT_TRUE(tail_zero(e->reply, CMD_RESP_MAX));
+}
+
+static void test_reuse_leaves_no_tail(void) {
+    pnl_con_entry_t *first = pnl_con_push(&g_c, "SET WIFI STA house secretpass");
+    pnl_con_reply(first, "OK WIFI STA house secretpass\n");
+    for (int i = 1; i < PNL_CON_LOG; i++) pnl_con_reply(pnl_con_push(&g_c, "X"), "OK\n");
+    pnl_con_entry_t *again = pnl_con_push(&g_c, "GET ID");                /* wraps onto the first entry */
+    TEST_ASSERT_EQUAL_PTR(first, again);
+    TEST_ASSERT_TRUE(tail_zero(again->sent, sizeof again->sent));
+    TEST_ASSERT_TRUE(all_zero(g_store[0], CMD_RESP_MAX));                 /* pending: the old reply is gone already */
+    pnl_con_reply(again, "OK\n");
+    TEST_ASSERT_TRUE(tail_zero(g_store[0], CMD_RESP_MAX));
+
+    for (int i = 0; i < PNL_CON_HIST; i++) pnl_con_hist_add(&g_c, "SET WIFI STA house secretpass");
+    pnl_con_hist_add(&g_c, "GET ID");                                     /* shifts, then writes the last slot */
+    TEST_ASSERT_EQUAL_STRING("GET ID", g_c.hist[PNL_CON_HIST - 1]);
+    TEST_ASSERT_TRUE(tail_zero(g_c.hist[PNL_CON_HIST - 1], CMD_LINE_MAX));
 }
 
 static void test_history_prev_next_ends(void) {
@@ -115,7 +165,7 @@ static void test_history_keeps_the_newest_20(void) {
 }
 
 static void test_wipe_clears_everything_idle(void) {
-    pnl_con_reply(pnl_con_push(&g_c, "SET WIFI STA house secretpass"), "OK WIFI STA\n");
+    pnl_con_reply(pnl_con_push(&g_c, "SET WIFI STA house secretpass"), "OK WIFI STA house secretpass\n");
     pnl_con_hist_add(&g_c, "SET WIFI STA house secretpass");
     strcpy(g_c.draft, "SET WIFI STA other pw");
     g_c.forward = 1;
@@ -128,7 +178,10 @@ static void test_wipe_clears_everything_idle(void) {
         TEST_ASSERT_EQUAL_STRING("", g_c.log[i].sent);
         TEST_ASSERT_EQUAL_STRING("", g_c.log[i].reply);
     }
-    TEST_ASSERT_NULL(strstr(g_store[0], "secretpass"));
+    TEST_ASSERT_TRUE(all_zero(g_c.log[0].sent, sizeof g_c.log[0].sent));   /* every byte, not just the first */
+    TEST_ASSERT_TRUE(all_zero(g_c.hist[0], sizeof g_c.hist[0]));
+    TEST_ASSERT_TRUE(all_zero(g_store[0], CMD_RESP_MAX));
+    TEST_ASSERT_TRUE(all_zero(g_c.draft, sizeof g_c.draft));
 }
 
 static void test_wipe_leaves_a_pending_entry_to_the_worker(void) {
@@ -148,9 +201,11 @@ int main(void) {
     RUN_TEST(test_forward_collapses_whitespace);
     RUN_TEST(test_forward_overflow_limit);
     RUN_TEST(test_line_ok_bounds);
+    RUN_TEST(test_span_trims_both_ends);
     RUN_TEST(test_log_ring_wraps_at_21);
     RUN_TEST(test_push_never_overwrites_a_pending_entry);
     RUN_TEST(test_reply_is_verbatim_and_clipped);
+    RUN_TEST(test_reuse_leaves_no_tail);
     RUN_TEST(test_history_prev_next_ends);
     RUN_TEST(test_history_keeps_the_newest_20);
     RUN_TEST(test_wipe_clears_everything_idle);
