@@ -25,6 +25,7 @@ if("${CMAKE_PROJECT_NAME}" STREQUAL "hillgrow_master" AND "${panel_target}" STRE
     list(APPEND PANEL_SRCS "cfg_frame.c")                   # the editor frame, split out of scr_config.c (file rule)
     list(APPEND PANEL_SRCS "cfg_master.c")                  # Task 21: the master config editor
     list(APPEND PANEL_SRCS "pnl_console.c" "pnl_cmd.c" "pnl_ui_kit.c" "zone_console.c" "zone_replace.c")   # Task 22
+    list(APPEND PANEL_SRCS "scr_system.c" "sys_wifi.c" "sys_time.c")      # Task 23: System -- Wi-Fi and Time
 endif()
 
 idf_component_register(SRCS ${PANEL_SRCS} INCLUDE_DIRS "."
