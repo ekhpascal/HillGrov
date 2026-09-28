@@ -31,6 +31,7 @@ if("${CMAKE_PROJECT_NAME}" STREQUAL "hillgrow_master" AND "${panel_target}" STRE
     list(APPEND PANEL_SRCS "pnl_prefs.c" "pnl_prefs_nvs.c" "scr_panel.c" "pnl_dim_hold.c")   # Task 26: Panel screen
     list(APPEND PANEL_SRCS "pnl_dim.c" "pnl_idle.c")                     # Task 27: night dimming, wake guard, idle wipe
     list(APPEND PANEL_SRCS "pnl_sd_pick.c" "pnl_sd.c")                   # Task 31: microSD mount, firmware file picking
+    list(APPEND PANEL_SRCS "sys_firmware.c")                             # Task 32: System -- firmware from microSD
 endif()
 
 idf_component_register(SRCS ${PANEL_SRCS} INCLUDE_DIRS "."

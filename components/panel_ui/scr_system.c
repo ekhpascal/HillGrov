@@ -1,5 +1,4 @@
 #include <stdint.h>
-#include <stdio.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "lvgl.h"
@@ -14,22 +13,12 @@ static const sys_row_t SYS_ROWS[PNL_SYS_SEC_COUNT] = {
     [PNL_SYS_SEC_TIME]     = { "Time",     &PNL_SYS_TIME },
     [PNL_SYS_SEC_PASSWORD] = { "Password", &PNL_SYS_PASSWORD },
     [PNL_SYS_SEC_FLEET]    = { "Fleet",    &PNL_SYS_FLEET },
-    [PNL_SYS_SEC_FIRMWARE] = { "Firmware", &PNL_SYS_PLACEHOLDER },
+    [PNL_SYS_SEC_FIRMWARE] = { "Firmware", &PNL_SYS_FIRMWARE },
 };
 
 static lv_obj_t   *s_body, *s_tab[PNL_SYS_SEC_COUNT];
 static int         s_cur = -1, s_last = PNL_SYS_SEC_WIFI;
 static const char *s_cur_title = "";
-
-/* ---- the placeholder section (Task 32 replaces the last row) ---- */
-static void ph_build(lv_obj_t *parent) {
-    lv_obj_t *c = pnl_kit_card(parent, s_cur_title);
-    lv_obj_t *m = pnl_kit_msg(c);
-    char b[64];
-    snprintf(b, sizeof b, "%s: not available yet", s_cur_title);
-    pnl_kit_msg_set(m, b, PNL_KIT_INFO);
-}
-const pnl_sys_section_t PNL_SYS_PLACEHOLDER = { .title = "", .build = ph_build, .update = NULL, .teardown = NULL };
 
 static void open_section(int i) {
     if (s_cur >= 0 && SYS_ROWS[s_cur].sec->teardown) SYS_ROWS[s_cur].sec->teardown();

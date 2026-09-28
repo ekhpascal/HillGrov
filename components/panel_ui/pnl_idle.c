@@ -15,7 +15,7 @@
 #include "pnl_worker.h"
 #include "scr_shell.h"
 #include "scr_config.h"      /* cfg_zone_wipe_all, cfg_master_wipe */
-#include "scr_system.h"      /* sys_wifi_wipe, sys_time_wipe, sys_password_wipe */
+#include "scr_system.h"      /* sys_wifi_wipe, sys_time_wipe, sys_password_wipe, sys_fleet_wipe, sys_fw_wipe */
 #include "zone_sections.h"   /* zone_console_wipe_all, zone_replace_wipe */
 #include "wdg_keyboard.h"
 #include "pnl_idle.h"
@@ -94,6 +94,7 @@ static void idle_wipe(void) {
     sys_time_wipe();            /* the TZ draft and kept outcomes */
     sys_password_wipe();        /* the unsubmitted new web password and its "Web password changed" box */
     sys_fleet_wipe();           /* the kept fleet outcome; a failed-reboot overlay (a "Rebooting..." one stays) */
+    sys_fw_wipe();              /* the kept install outcome (and its Reboot now) and the microSD listing */
     pnl_confirm_close();        /* the ONE confirm (C16): any box still open */
     if (wdg_keyboard_is_open()) wdg_keyboard_close();   /* wipes its text; re-masks */
     pnl_nav_go(PNL_DEST_HOME, 0);
