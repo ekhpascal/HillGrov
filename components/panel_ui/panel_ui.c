@@ -7,6 +7,7 @@
 #include "panel_lock.h"
 #include "pnl_touch.h"
 #include "pnl_theme.h"
+#include "pnl_worker.h"
 #include "scr_diag.h"
 #include "panel_ui.h"
 
@@ -47,5 +48,7 @@ int panel_start(void) {
 }
 
 int panel_services_start(void) {
-    return s_lit ? 0 : -1;   /* the header's contract: -1 when the panel is dark */
+    if (!s_lit) return -1;   /* a dark panel runs no worker: nothing could ever submit to it */
+    pnl_worker_start();
+    return 0;
 }

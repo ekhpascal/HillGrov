@@ -41,6 +41,9 @@ typedef struct {
  * app_main (before the LVGL task exists). */
 int  panel_hw_start(uint8_t orient);
 void panel_hw_status(panel_hw_status_t *out);   /* [ANY] */
+/* [ANY] 1 once panel_hw_start() has returned 0 (adapter started, display
+ * registered), else 0. A one-byte read, cheap enough for every panel_lock(). */
+int  panel_hw_lit(void);
 lv_display_t *panel_hw_display(void);
 lv_indev_t   *panel_hw_touch(void);             /* NULL when touch_ok == 0 */
 

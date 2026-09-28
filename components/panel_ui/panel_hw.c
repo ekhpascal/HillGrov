@@ -172,6 +172,10 @@ void panel_hw_status(panel_hw_status_t *out) {
     portEXIT_CRITICAL(&s_mux);
 }
 
+/* s_st.lit is written once, by panel_hw_start() on the app_main task, before
+ * any other task can call this; a byte load needs no critical section. */
+int panel_hw_lit(void) { return s_st.lit; }
+
 lv_display_t *panel_hw_display(void) { return s_disp; }
 lv_indev_t   *panel_hw_touch(void)   { return s_st.touch_ok ? s_touch : NULL; }
 

@@ -12,7 +12,15 @@ extern "C" {
  * a failed take panics the board (esp_lv_adapter_lock(751)), and
  * bsp_display_lock(0) means "try ONCE", not "forever" -- so 0 is promoted to 1.
  * Nothing blocking is ever called while it is held; the worker and the poller
- * never take it. */
+ * never take it. panel_lock() is false, without waiting, while the panel is
+ * not lit (panel_hw_lit() == 0).
+ *
+ * A take that times out makes the adapter log E "Failed to acquire LVGL lock"
+ * (tag "esp_lvgl:adapter") on UART0. That tag keeps its default level on
+ * purpose: every caller takes the lock at boot with 2000 ms, so a timeout is a
+ * real fault worth its line; silencing it would need ESP_LOG_NONE, which also
+ * hides the adapter's bring-up errors; and uart_test.py already drops log
+ * lines (^[IWEDV] \(n\)). */
 #define PANEL_LOCK_MS 200u
 
 bool panel_lock(uint32_t timeout_ms);   /* false -> the caller makes NO lv_* call */

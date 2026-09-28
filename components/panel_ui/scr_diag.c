@@ -1,11 +1,15 @@
 #include <stdio.h>
 #include <stdint.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "lvgl.h"
 #include "panel_hw.h"
 #include "pnl_palette.h"
 #include "pnl_theme.h"
+#include "pnl_worker.h"
 #include "scr_diag.h"
 
 #define TGT_N 5
@@ -21,6 +25,49 @@ static lv_obj_t   *s_heap, *s_touch;
 static lv_obj_t   *s_tgt[TGT_N], *s_tgt_lbl[TGT_N];
 static uint16_t    s_hits[TGT_N];
 static lv_timer_t *s_tick;
+
+static const char *TAG = "scr_diag";
+static lv_obj_t   *s_job_lbl, *s_job_btn;
+static lv_timer_t *s_ui_tick;               /* 16 ms: counts LVGL cycles while a job runs */
+static uint32_t    s_ticks, s_ticks_at_submit;
+static uint8_t     s_job_busy;
+
+static void ui_tick(lv_timer_t *t) { (void)t; s_ticks++; }
+
+/* [WORKER] deliberately blocks for 3 s -- if the UI keeps ticking meanwhile,
+ * the worker/mailbox split holds. */
+static void job_block_run(pnl_job_t *j) {
+    if (pnl_on_lvgl_task()) {
+        ESP_LOGE(TAG, "blocking job ran on the LVGL task -- THE RULE is broken");
+        j->irc = -1;
+        return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    j->irc = 0;
+}
+
+/* [LVGL] via the drain timer. */
+static void job_block_done(pnl_job_t *j) {
+    s_job_busy = 0;
+    if (j->screen_gen != pnl_screen_gen() || !s_job_lbl) return;   /* this screen was torn down meanwhile */
+    char buf[96];
+    if (j->irc != 0) snprintf(buf, sizeof buf, "FAILED: the job ran on the LVGL task");
+    else snprintf(buf, sizeof buf, "done after %u ms, %u UI ticks during the job",
+                  (unsigned)(j->t_done_ms - j->t_submit_ms), (unsigned)(s_ticks - s_ticks_at_submit));
+    lv_label_set_text(s_job_lbl, buf);
+}
+
+static void job_btn_cb(lv_event_t *e) {
+    (void)e;
+    if (s_job_busy) return;
+    s_ticks_at_submit = s_ticks;
+    if (pnl_worker_submit(job_block_run, job_block_done, NULL, 0) != 0) {
+        lv_label_set_text(s_job_lbl, "worker unavailable (not started or pool full)");
+        return;
+    }
+    s_job_busy = 1;
+    lv_label_set_text(s_job_lbl, "running... (the spinner must keep turning)");
+}
 
 static void tgt_paint(int i) {
     char buf[40];
@@ -86,6 +133,21 @@ void scr_diag_build(lv_obj_t *parent) {
     lv_obj_align(rst, LV_ALIGN_BOTTOM_MID, 0, -TGT_M);
     lv_obj_add_event_cb(rst, reset_cb, LV_EVENT_CLICKED, NULL);
 
+    lv_obj_t *spin = lv_spinner_create(parent);
+    lv_obj_set_size(spin, 72, 72);
+    lv_obj_align(spin, LV_ALIGN_LEFT_MID, 190, 0);
+
+    s_job_btn = lv_button_create(parent);
+    lv_obj_t *jl = lv_label_create(s_job_btn);
+    lv_label_set_text(jl, "Blocking job (3 s)");
+    lv_obj_align(s_job_btn, LV_ALIGN_RIGHT_MID, -170, -30);
+    lv_obj_add_event_cb(s_job_btn, job_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    s_job_lbl = pnl_label(parent, "tap to prove the LVGL task never blocks", &lv_font_montserrat_20, PNL_C_MUTED);
+    lv_obj_set_width(s_job_lbl, 300);
+    lv_obj_align(s_job_lbl, LV_ALIGN_RIGHT_MID, -120, 40);
+
+    s_ui_tick = lv_timer_create(ui_tick, 16, NULL);
     s_tick = lv_timer_create(diag_tick, 200, NULL);
     diag_tick(s_tick);
 }
