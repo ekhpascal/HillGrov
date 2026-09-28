@@ -26,7 +26,7 @@ typedef struct { const char *title; const pnl_screen_ops_t *ops; uint8_t rail; }
 static const pnl_reg_t REG[PNL_DEST_COUNT] = {
     [PNL_DEST_HOME]      = { "Home",       &PNL_SCR_HOME,        0 },
     [PNL_DEST_DASHBOARD] = { "Dashboard",  &PNL_SCR_DASHBOARD,   1 },
-    [PNL_DEST_ZONE]      = { "Zone",       &PNL_SCR_PLACEHOLDER, 1 },   /* Task 14 */
+    [PNL_DEST_ZONE]      = { "Zone",       &PNL_SCR_ZONE,        1 },
     [PNL_DEST_CONFIG]    = { "Config",     &PNL_SCR_PLACEHOLDER, 1 },   /* Task 20 */
     [PNL_DEST_ALARMS]    = { "Alarms",     &PNL_SCR_PLACEHOLDER, 1 },   /* Task 16 */
     [PNL_DEST_SYSTEM]    = { "System",     &PNL_SCR_PLACEHOLDER, 1 },   /* Task 23 */

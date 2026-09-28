@@ -17,7 +17,7 @@ idf_build_get_property(panel_target IDF_TARGET)
 if("${CMAKE_PROJECT_NAME}" STREQUAL "hillgrow_master" AND "${panel_target}" STREQUAL "esp32p4")
     set(PANEL_SRCS "panel_ui.c" "panel_hw.c" "panel_lock.c" "pnl_touch.c" "pnl_theme.c" "scr_diag.c" "pnl_worker.c"
                    "pnl_time.c" "pnl_fmt.c" "pnl_home.c" "pnl_poll.c" "scr_shell.c" "scr_dashboard.c"
-                   "font_clock_180.c" "scr_home.c" "scr_audio.c")
+                   "font_clock_180.c" "scr_home.c" "scr_audio.c" "scr_zone.c")
 endif()
 
 idf_component_register(SRCS ${PANEL_SRCS} INCLUDE_DIRS "."
