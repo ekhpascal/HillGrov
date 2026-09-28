@@ -164,3 +164,7 @@ target_compile_definitions(test_hg_image PRIVATE
 # panel_svc's firmware-install core (Task 30): pure, behind a fake environment, sink and reader. The web upload and the
 # panel's microSD install both run it.
 hg_test(test_psvc_fw ${COMP}/panel_svc/psvc_fw.c ${COMP}/panel_svc/psvc_rc.c ${COMP}/hg_image/hg_image.c)
+
+# panel_ui's microSD firmware picker (Task 31): pure -- classifies and orders the .bin files on the card from their
+# 112-byte headers through the shared hg_image identity. The mount itself (pnl_sd.c) is glue, proven only on the bench.
+hg_test(test_pnl_sd_pick ${COMP}/panel_ui/pnl_sd_pick.c ${COMP}/hg_image/hg_image.c)
