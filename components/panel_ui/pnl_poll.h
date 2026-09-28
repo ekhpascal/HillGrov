@@ -3,6 +3,7 @@
 #include "hg_cfg_types.h"
 #include "psvc_state.h"
 #include "pnl_home.h"
+#include "alarm_mgr.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -41,6 +42,14 @@ void     pnl_poll_stack_free(uint32_t *poll_b, uint32_t *wifi_b);
  * a beat (an ACTIVE alarm, key "ALARM 0"), and NOTIFY ALARM 0 CLEARED
  * PANEL_FROZEN on the next beat after that (D5), which clears it. */
 void     pnl_lvgl_heartbeat(void);
+
+/* [ANY] The last published alarm_mgr snapshot. The poller re-copies only when
+ * alarm_mgr_total() moved (every NOTIFY bumps it), so this is cheap to poll.
+ * ~6.6 KB: out lives in PSRAM or static storage, never on the LVGL stack.
+ * The same poll's st.alarms_active / st.alarms_total are taken from this copy,
+ * so the band's count and the Alarms view never disagree. */
+void     pnl_poll_alarms(am_snapshot_t *out);
+uint32_t pnl_poll_alarms_seq(void);   /* [ANY] increments once per new alarm snapshot; 0 = none yet */
 
 #ifdef __cplusplus
 }

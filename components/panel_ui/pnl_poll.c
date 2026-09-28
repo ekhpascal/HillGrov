@@ -5,6 +5,7 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "notify.h"
+#include "alarm_mgr.h"
 #include "wifi_mgr.h"
 #include "psvc_state.h"
 #include "psvc_zcfg.h"
@@ -36,6 +37,23 @@ static uint8_t           s_sched_used[HG_MAX_ZONES];
 static uint32_t          s_sched_gen[HG_MAX_ZONES];
 static hg_zone_cfg_t     s_cfg;       /* scratch for the schedule rebuild, off the 6 KB stack */
 static hg_zone_hw_t      s_hw;
+
+static am_snapshot_t    *s_am_stage, *s_am_pub;   /* PSRAM, same stage + published pattern as the state */
+static portMUX_TYPE      s_am_mux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint32_t s_am_seq;
+static int64_t           s_am_total_seen = -1;
+
+static void alarms_poll(void) {
+    if (!s_am_stage || !s_am_pub) return;
+    int total = alarm_mgr_total();
+    if ((int64_t)total == s_am_total_seen) return;
+    alarm_mgr_copy(s_am_stage);                    /* alarm_mgr's own lock, microseconds */
+    s_am_total_seen = (int64_t)s_am_stage->total;
+    portENTER_CRITICAL(&s_am_mux);
+    memcpy(s_am_pub, s_am_stage, sizeof *s_am_pub);
+    s_am_seq++;
+    portEXIT_CRITICAL(&s_am_mux);
+}
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -100,6 +118,12 @@ static void poll_task(void *arg) {
                                    ? (uint8_t)(psvc_zone_cfg_busy((uint8_t)(i + 1)) ? 1 : 0) : 0;
         if (sched_stale(s_stage, t0)) sched_rebuild(s_stage, t0);
         heartbeat_check(now_ms());   /* not t0: the fill above can take a while */
+        alarms_poll();               /* after the heartbeat's NOTIFY, before the state publish (see pnl_poll_alarms) */
+        if (s_am_total_seen >= 0) {  /* the band's count from the SAME copy the Alarms view shows: psvc_state_fill
+                                      * reads the two counts under separate lock holds, and earlier than this */
+            s_stage->st.alarms_active = s_am_stage->n_active;
+            s_stage->st.alarms_total  = (int)s_am_stage->total;
+        }
         s_stage->started = 1;
         s_stage->seq = s_seq + 1;
 
@@ -133,6 +157,14 @@ void pnl_poll_start(void) {
     if (!s_stage || !s_pub) {
         ESP_LOGE(TAG, "no PSRAM for the snapshot buffers -- the panel stays on \"starting\"");
         return;
+    }
+    s_am_stage = heap_caps_calloc(1, sizeof(am_snapshot_t), MALLOC_CAP_SPIRAM);
+    s_am_pub   = heap_caps_calloc(1, sizeof(am_snapshot_t), MALLOC_CAP_SPIRAM);
+    if (!s_am_stage || !s_am_pub) {   /* both or neither: alarms_poll and pnl_poll_alarms test them as a pair */
+        heap_caps_free(s_am_stage);
+        heap_caps_free(s_am_pub);
+        s_am_stage = s_am_pub = NULL;
+        ESP_LOGE(TAG, "no PSRAM for the alarm snapshot -- the Alarms screen stays on \"Loading...\"");
     }
     if (xTaskCreatePinnedToCore(wifi_task, "pnl_wifi", 4096, NULL, 1, &s_wifi_task, 0) != pdPASS) {
         s_wifi_task = NULL;
@@ -169,3 +201,12 @@ void pnl_lvgl_heartbeat(void) {
     uint32_t t = now_ms();
     s_beat_ms = t ? t : 1u;
 }
+
+void pnl_poll_alarms(am_snapshot_t *out) {
+    if (!s_am_pub) { memset(out, 0, sizeof *out); return; }
+    portENTER_CRITICAL(&s_am_mux);
+    memcpy(out, s_am_pub, sizeof *out);
+    portEXIT_CRITICAL(&s_am_mux);
+}
+
+uint32_t pnl_poll_alarms_seq(void) { return s_am_seq; }
