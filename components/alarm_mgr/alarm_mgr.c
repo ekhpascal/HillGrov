@@ -162,7 +162,7 @@ void alarm_mgr_sink(void *ctx, const char *line) {
     const char *rest = (*p == ' ') ? p + 1 : p;
 
     uint32_t now = s_now_s ? s_now_s() : 0;
-    char text[72];
+    char text[sizeof ((am_event_t *)0)->text] = "";
     bcopy_trunc(text, sizeof text, text_start, strlen(text_start));
 
     /* Decide the active-set effect BEFORE taking the lock: parsing is the slow

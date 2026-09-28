@@ -27,7 +27,8 @@ typedef struct {
 
 /* A consistent copy of everything /api/alarms exports, for a reader that wants
  * structs (the panel). active[] is in the same order the JSON lists it;
- * events[] newest first. ~6.6 KB: callers keep it static or in PSRAM. */
+ * events[] newest first. ~6.6 KB: keep it off the stack -- heap-allocate it
+ * for the length of one use (as alarm_mgr_json does), or put it in PSRAM. */
 typedef struct { char key[AM_KEY_MAX]; char text[72]; uint32_t since_s; } am_active_view_t;
 typedef struct {
     am_active_view_t active[AM_ACTIVE_MAX]; int n_active;

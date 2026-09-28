@@ -328,6 +328,21 @@ static void test_json_formats_outside_the_lock(void) {
     TEST_ASSERT_EQUAL_INT(0, s_malloc_held);
 }
 
+/* The -1 path (here: an output buffer too small for the document) leaves the
+   lock balanced and taken exactly once -- the heap snapshot is freed on it
+   too. (The snapshot's own malloc cannot be failed from here: it is plain
+   malloc, which cJSON's hooks do not reach.) */
+static void test_json_failure_returns_minus_one_lock_balanced(void) {
+    alarm_mgr_sink(NULL, "NOTIFY NODE 2 DEGRADED\n");
+    hooks_reset();
+    alarm_mgr_set_lock(fake_lock, fake_unlock);
+    char tiny[8];
+    TEST_ASSERT_EQUAL_INT(-1, alarm_mgr_json(tiny, sizeof tiny));
+    TEST_ASSERT_EQUAL_INT(1, s_lock_n);
+    TEST_ASSERT_EQUAL_INT(s_lock_n, s_unlock_n);
+    TEST_ASSERT_EQUAL_INT(0, s_depth);
+}
+
 int main(void) { UNITY_BEGIN();
     RUN_TEST(test_bench_sequence_active_set_and_events);
     RUN_TEST(test_active_json_shape_and_since_s);
@@ -346,4 +361,5 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_copy_matches_json_after_the_ring_wraps);
     RUN_TEST(test_lock_hooks_balance_on_every_entry_point);
     RUN_TEST(test_json_formats_outside_the_lock);
+    RUN_TEST(test_json_failure_returns_minus_one_lock_balanced);
     return UNITY_END(); }
