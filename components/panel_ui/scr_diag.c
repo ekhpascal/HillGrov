@@ -13,6 +13,7 @@
 #include "pnl_worker.h"
 #include "pnl_poll.h"
 #include "scr_diag.h"
+#include "scr_shell.h"
 
 #define TGT_N 5
 #define TGT_W 150
@@ -168,3 +169,33 @@ void scr_diag_build(lv_obj_t *parent) {
     s_tick = lv_timer_create(diag_tick, 200, NULL);
     diag_tick(s_tick);
 }
+
+/* ---- shell registration (Task 12) ---- */
+
+static void home_cb(lv_event_t *e) { (void)e; pnl_nav_go(PNL_DEST_HOME, 0); }
+
+/* Opened as "Touch test" (not as HOME, which has the rail), the screen carries
+ * its own Home button at the bottom centre, above "Reset targets": the shell's
+ * top-left one would cover the top-left target (controller ruling C1). */
+static void diag_build(lv_obj_t *page, int arg) {
+    (void)arg;
+    scr_diag_build(page);
+    if (pnl_nav_current() != PNL_DEST_HOME) {
+        lv_obj_t *home = lv_button_create(page);
+        lv_obj_t *hl = lv_label_create(home);
+        lv_label_set_text(hl, LV_SYMBOL_HOME " Home");
+        lv_obj_align(home, LV_ALIGN_BOTTOM_MID, 0, -TGT_M - 60);
+        lv_obj_add_event_cb(home, home_cb, LV_EVENT_CLICKED, NULL);
+    }
+}
+
+/* The timers reference this screen's labels, so they die with it. A blocking
+ * job still in flight finds screen_gen changed and s_job_lbl NULL. */
+static void diag_teardown(void) {
+    if (s_tick)    { lv_timer_delete(s_tick);    s_tick = NULL; }
+    if (s_ui_tick) { lv_timer_delete(s_ui_tick); s_ui_tick = NULL; }
+    s_heap = s_touch = s_poll = s_job_lbl = s_job_btn = NULL;
+    for (int i = 0; i < TGT_N; i++) { s_tgt[i] = NULL; s_tgt_lbl[i] = NULL; }
+}
+
+const pnl_screen_ops_t PNL_SCR_DIAG = { "Touch test", diag_build, NULL, diag_teardown, 0 };

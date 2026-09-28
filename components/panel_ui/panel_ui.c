@@ -9,7 +9,7 @@
 #include "pnl_theme.h"
 #include "pnl_worker.h"
 #include "pnl_poll.h"
-#include "scr_diag.h"
+#include "scr_shell.h"
 #include "panel_ui.h"
 
 static const char *TAG = "panel";
@@ -41,7 +41,7 @@ int panel_start(void) {
         return -1;
     }
     pnl_theme_init(panel_hw_display());
-    scr_diag_build(lv_screen_active());
+    pnl_shell_start();
     panel_unlock();
     (void)panel_hw_brightness(80);
     s_lit = 1;
