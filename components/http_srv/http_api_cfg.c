@@ -9,6 +9,7 @@
 #include "mcfg_store.h"
 #include "http_srv_internal.h"
 #include "psvc_mcfg.h"   /* psvc_mcfg_edit() -- the ONE master-config RMW, components/panel_svc */
+#include "psvc_zcfg.h"   /* the ONE zone-config edit -- components/panel_svc */
 
 static const char *TAG = "http_api_cfg";
 
@@ -66,7 +67,7 @@ esp_err_t h_config_get(httpd_req_t *req) {
         hg_zone_hw_t  hw;
         uint32_t      cfg_gen = 0;
         int           hw_present = 0;
-        if (node_mgr_cfg_get((uint8_t)zone, &cfg, &hw, &cfg_gen, &hw_present) != 0) {
+        if (psvc_zone_cfg_get((uint8_t)zone, &cfg, &hw, &cfg_gen, &hw_present) != PSVC_OK) {
             http_srv_error(req, 404, "NO_CACHE", NULL);
             return http_srv_done(req, 0);
         }
@@ -98,63 +99,30 @@ esp_err_t h_config_get(httpd_req_t *req) {
 
 /* ---- PUT /api/config?zone=N ---- */
 
-/* zone 1..8: merge applies the "cfg" plane only -- "hw" is read-only from the
- * web (system spec §4.4) and comes back as warnings, never merged (see
- * hg_json_merge_cfg's own doc comment). Status mapping is the controller
- * ruling verbatim, cross-checked against node_mgr_cfg_api.c's own comments. */
+/* zone 1..8, through panel_svc's ONE zone-config edit (the panel's Config
+ * editor runs the same function with field edits instead of JSON). Merge
+ * applies the "cfg" plane only -- "hw" is read-only from the web (system spec
+ * §4.4) and comes back as warnings, never merged. The hw_present rule and the
+ * check order now live in psvc_zcfg.c. Status mapping unchanged. */
 static esp_err_t cfg_put_zone(httpd_req_t *req, uint8_t zone, const char *body) {
-    if (node_mgr_cfg_busy(zone)) {
-        http_srv_error(req, 409, "BUSY", NULL);
-        return http_srv_done(req, 1);
-    }
-
-    hg_zone_cfg_t cfg;
-    hg_zone_hw_t  hw;
-    int           hw_present = 0;
-    if (node_mgr_cfg_get(zone, &cfg, &hw, NULL, &hw_present) != 0) {
-        http_srv_error(req, 404, "NO_CACHE", NULL);
-        return http_srv_done(req, 1);
-    }
-
-    /* node_mgr_cfg_get treats the HW plane as best-effort -- when it is absent
-     * or its envelope will not unwrap it zeroes the struct and returns 0,
-     * signalling the absence through hw_present. Discarding that signal handed
-     * hg_cfg_validate an all-zero hardware profile, so in the first seconds
-     * after a zone reboot (or behind a terminally latched HW plane) EVERY save
-     * was rejected 400 VALIDATION naming a field the operator never touched --
-     * shelf[0].water.dose_s, because the default dose_s=20 was being compared
-     * against pump_max_run_s=0. hg_json_merge_cfg's hw argument is hw_or_null
-     * precisely so a caller with no hardware plane can skip the
-     * hardware-dependent checks instead of running them against zeros.
-     *
-     * The first attempt at this keyed on hw_gen, which is structurally ALWAYS 0
-     * (the HW plane carries no generation on the wire -- zone_ring_cfg.c sends
-     * gen 0 and node_mgr_cfgx.c caches gen 0 by ruling #7). That passed NULL on
-     * every save and silently disabled the pump-limit rules in
-     * hg_cfg_validate -- dose_s > pump_max_run_s and the daily water budget --
-     * turning a narrow false reject into a permanent false accept on a flood
-     * guard. Presence must come from the cache's own validity, never a gen. */
     char err[96]  = "";
     char warn[256] = "";
-    int rc = hg_json_merge_cfg(hw_present ? &hw : NULL, &cfg, body, err, sizeof err, warn, sizeof warn);
-    if (rc == -1) { http_srv_error(req, 400, "BAD_JSON", NULL);     return http_srv_done(req, 1); }
-    if (rc == -2) { http_srv_error(req, 400, "INVALID_FIELD", err); return http_srv_done(req, 1); }
-    if (rc == -3) { http_srv_error(req, 400, "VALIDATION", err);    return http_srv_done(req, 1); }
+    psvc_rc_t rc = psvc_zone_cfg_edit(zone, psvc_zone_json_fn, (void *)body, err, sizeof err, warn, sizeof warn);
+    switch (rc) {
+    case PSVC_OK:                break;
+    case PSVC_E_BUSY:            http_srv_error(req, 409, "BUSY", NULL);            return http_srv_done(req, 1);
+    case PSVC_E_NO_CACHE:        http_srv_error(req, 404, "NO_CACHE", NULL);        return http_srv_done(req, 1);
+    case PSVC_E_BAD_JSON:        http_srv_error(req, 400, "BAD_JSON", NULL);        return http_srv_done(req, 1);
+    case PSVC_E_INVALID_FIELD:   http_srv_error(req, 400, "INVALID_FIELD", err);    return http_srv_done(req, 1);
+    case PSVC_E_VALIDATION:      http_srv_error(req, 400, "VALIDATION", err);       return http_srv_done(req, 1);
+    case PSVC_E_ZONE_UNKNOWN:    http_srv_error(req, 404, "ZONE_UNKNOWN", NULL);    return http_srv_done(req, 1);
+    case PSVC_E_ZONE_NOT_ONLINE: http_srv_error(req, 409, "ZONE_NOT_ONLINE", NULL); return http_srv_done(req, 1);
+    default:                     http_srv_error(req, 500, "INTERNAL", NULL);        return http_srv_done(req, 1);
+    }
 
-    rc = node_mgr_cfg_set(zone, &cfg);
-    if (rc == -1) { http_srv_error(req, 404, "ZONE_UNKNOWN", NULL);    return http_srv_done(req, 1); }
-    if (rc == -2) { http_srv_error(req, 409, "BUSY", NULL);            return http_srv_done(req, 1); }
-    if (rc == -3) { http_srv_error(req, 409, "ZONE_NOT_ONLINE", NULL); return http_srv_done(req, 1); }
-
-    /* Review fix round 1 (CRITICAL #2): warn is comma-joined path text built
-     * from hg_json_merge_cfg's own field/group names, but its unknown-key
-     * branch (hgj_warn/hgj_path in hg_json_internal.h) embeds the JSON key
-     * verbatim as typed by the client -- e.g. a body key of
-     * `a":1,"pwned":true,"x":"` was going straight into a hand-built
-     * "{\"queued\":true,\"warnings\":\"%s\"}" format string with no
-     * escaping, breaking out of the JSON string. cJSON_Print does the
-     * escaping (quotes, backslashes, control chars) properly, so the
-     * response is built through it instead of snprintf. */
+    /* Review fix round 1 (CRITICAL #2): warn embeds client-typed JSON keys
+     * verbatim (hg_json_internal.h's unknown-key branch), so the response is
+     * built through cJSON, which escapes it, never through a format string. */
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddBoolToObject(resp, "queued", 1);
     cJSON_AddStringToObject(resp, "warnings", warn);

@@ -110,3 +110,9 @@ hg_test(test_psvc_mcfg ${COMP}/panel_svc/psvc_mcfg.c ${COMP}/panel_svc/psvc_rc.c
         ${COMP}/hg_mcfg/hg_mcfg.c ${HG_CFG_SRC} ${COMP}/hg_blob/hg_blob.c ${COMP}/hg_json/hg_json_mcfg.c
         ${COMP}/time_core/time_core.c fakes/fake_mcfg_store.c fakes/fake_apply.c)
 target_link_libraries(test_psvc_mcfg cjson_host)
+
+# psvc_zcfg.c over the REAL hg_cfg validation and hg_json merge; only node_mgr's
+# three §4.4 primitives are scripted (fakes/fake_nmgr_cfg_api.c).
+hg_test(test_psvc_zcfg ${COMP}/panel_svc/psvc_zcfg.c ${COMP}/panel_svc/psvc_rc.c ${HG_CFG_SRC}
+        ${COMP}/hg_json/hg_json_cfg.c ${COMP}/hg_mcfg/hg_mcfg.c ${COMP}/hg_blob/hg_blob.c fakes/fake_nmgr_cfg_api.c)
+target_link_libraries(test_psvc_zcfg cjson_host)

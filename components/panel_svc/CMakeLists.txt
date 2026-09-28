@@ -6,7 +6,7 @@
 # components present in every app build.
 set(PSVC_SRCS "")
 if("${CMAKE_PROJECT_NAME}" STREQUAL "hillgrow_master")
-    list(APPEND PSVC_SRCS "psvc_rc.c" "psvc_mcfg.c" "psvc_net.c")
+    list(APPEND PSVC_SRCS "psvc_rc.c" "psvc_mcfg.c" "psvc_net.c" "psvc_zcfg.c")
 endif()
 
 idf_component_register(
