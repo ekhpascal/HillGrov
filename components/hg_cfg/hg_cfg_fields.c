@@ -94,6 +94,10 @@ int hg_group_scope(uint8_t group) {
     return 1;
 }
 
+int hg_group_is_hw(uint8_t group) {
+    return group == HG_G_HW || group == HG_G_HWSHELF || group == HG_G_CAL;
+}
+
 static void *group_base(uint8_t group, int idx, const hg_zone_hw_t *hw, const hg_zone_cfg_t *cfg) {
     int scope = hg_group_scope(group);
     if (scope == 1 && (idx < 0 || idx >= HG_MAX_SHELVES)) return NULL;

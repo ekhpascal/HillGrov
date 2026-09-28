@@ -114,6 +114,17 @@ static void test_hhmm_truncation(void) {
     TEST_ASSERT_EQUAL_CHAR('\0', buf[3]);
 }
 
+/* The read-only hardware plane has one C home: hg_group_is_hw(). The web's isHwGroup()
+ * (web/app.js:623) and hg_json's "hw" section encode the same three groups. */
+static void test_group_is_hw(void) {
+    for (int g = 0; g < HG_G_COUNT; g++) {
+        int want = (g == HG_G_HW || g == HG_G_HWSHELF || g == HG_G_CAL) ? 1 : 0;
+        TEST_ASSERT_EQUAL_INT_MESSAGE(want, hg_group_is_hw((uint8_t)g), HG_GROUP_NAMES[g]);
+    }
+    TEST_ASSERT_EQUAL_INT(0, hg_group_is_hw((uint8_t)HG_G_COUNT));
+    TEST_ASSERT_EQUAL_INT(0, hg_group_is_hw(255));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_table_integrity);
@@ -122,5 +133,6 @@ int main(void) {
     RUN_TEST(test_errors);
     RUN_TEST(test_generic_write_read_matches_set_text);
     RUN_TEST(test_hhmm_truncation);
+    RUN_TEST(test_group_is_hw);
     return UNITY_END();
 }

@@ -18,6 +18,7 @@ if("${CMAKE_PROJECT_NAME}" STREQUAL "hillgrow_master" AND "${panel_target}" STRE
     set(PANEL_SRCS "panel_ui.c" "panel_hw.c" "panel_lock.c" "pnl_touch.c" "pnl_theme.c" "scr_diag.c" "pnl_worker.c"
                    "pnl_time.c" "pnl_fmt.c" "pnl_home.c" "pnl_poll.c" "scr_shell.c" "scr_dashboard.c"
                    "font_clock_180.c" "scr_home.c" "scr_audio.c" "scr_zone.c" "scr_alarms.c")
+    list(APPEND PANEL_SRCS "pcfg_gen.c" "pcfg_pres.c")      # Task 17: the config-widget generator (pure)
 endif()
 
 idf_component_register(SRCS ${PANEL_SRCS} INCLUDE_DIRS "."

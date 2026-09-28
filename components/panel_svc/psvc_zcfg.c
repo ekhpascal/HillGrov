@@ -72,8 +72,6 @@ int psvc_zone_json_fn(hg_zone_cfg_t *cfg, const hg_zone_hw_t *hw_or_null, void *
     }
 }
 
-static int is_hw_group(uint8_t g) { return g == HG_G_HW || g == HG_G_HWSHELF || g == HG_G_CAL; }
-
 static void cfg_path(char *err, size_t errcap, const hg_field_t *f, int idx) {
     if (!err || !errcap) return;
     int scope = hg_group_scope(f->group);
@@ -96,7 +94,7 @@ int psvc_zone_fields_fn(hg_zone_cfg_t *cfg, const hg_zone_hw_t *hw_or_null, void
             if (err && errcap) snprintf(err, errcap, "cfg.?");
             return PSVC_EDIT_INVALID_FIELD;
         }
-        if (is_hw_group(f->group)) {
+        if (hg_group_is_hw(f->group)) {
             if (err && errcap) snprintf(err, errcap, "hw.%s.%s", HG_GROUP_NAMES[f->group], f->key);
             return PSVC_EDIT_INVALID_FIELD;
         }

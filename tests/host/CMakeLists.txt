@@ -132,3 +132,7 @@ target_link_libraries(test_psvc_state cjson_host)
 hg_test(test_pnl_time ${COMP}/panel_ui/pnl_time.c)
 hg_test(test_pnl_fmt  ${COMP}/panel_ui/pnl_fmt.c ${COMP}/panel_ui/pnl_time.c)
 hg_test(test_pnl_home ${COMP}/panel_ui/pnl_home.c ${COMP}/panel_ui/pnl_time.c ${COMP}/hg_cfg/hg_cfg_defaults.c)
+
+# panel_ui's config-widget generator (Task 17): pure, linked against the real field tables.
+hg_test(test_pcfg_gen ${COMP}/panel_ui/pcfg_gen.c ${COMP}/panel_ui/pcfg_pres.c ${HG_CFG_SRC}
+        ${COMP}/hg_mcfg/hg_mcfg.c ${COMP}/hg_blob/hg_blob.c)
