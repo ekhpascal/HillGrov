@@ -11,6 +11,14 @@
 
 static const char *TAG = "psvc_mcfg";
 
+/* The secret wipe for this file's stack copies. The master builds with -Os: GCC drops a plain memset on a local that
+ * is never read again as a dead store; volatile stores cannot be dropped. panel_ui's pnl_zero() (pnl_zero.h) is the
+ * same thing, but panel_svc sits below panel_ui and cannot include it. Pure C: the host suite builds this file. */
+static inline void psvc_wipe(void *p, size_t n) {
+    volatile unsigned char *v = (volatile unsigned char *)p;
+    while (n--) *v++ = 0;
+}
+
 typedef struct {
     psvc_mcfg_fn fn;
     void        *ctx;
@@ -75,8 +83,11 @@ int psvc_mcfg_fields_fn(hg_mcfg_t *m, void *ctx, char *err, size_t errcap) {
         char text[PSVC_FEDIT_TEXT_MAX];
         memcpy(text, e->text, sizeof text);
         text[sizeof text - 1] = '\0';                            /* never trust the caller's terminator */
-        if (hg_mcfg_is_secret(f) && text[0] == '\0') continue;   /* blank secret = unchanged */
-        if (hg_field_write(f, m, text) != 0) {
+        int bad = 0;
+        if (!(hg_mcfg_is_secret(f) && text[0] == '\0'))          /* blank secret = unchanged */
+            bad = hg_field_write(f, m, text) != 0;
+        psvc_wipe(text, sizeof text);                            /* the text may be a password: wiped on every path */
+        if (bad) {
             if (err && errcap) snprintf(err, errcap, "%s.%s", HG_MGROUP_NAMES[f->group], f->key);
             return PSVC_EDIT_INVALID_FIELD;
         }
