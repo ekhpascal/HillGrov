@@ -77,3 +77,14 @@ void pcfg_edits_wipe(pcfg_edits_t *e) {
     e->table = t;
     e->zone = z;
 }
+
+int pcfg_edits_drop_saved(pcfg_edits_t *e, const psvc_fedit_t *saved, int n) {
+    if (!e || !saved) return 0;
+    int dropped = 0;
+    for (int i = 0; i < n; i++) {
+        const psvc_fedit_t *cur = pcfg_edits_get(e, saved[i].group, saved[i].idx, saved[i].f);
+        if (cur && strcmp(cur->text, saved[i].text) == 0 &&
+            pcfg_edits_drop(e, saved[i].group, saved[i].idx, saved[i].f) == 0) dropped++;
+    }
+    return dropped;
+}

@@ -22,6 +22,10 @@ const psvc_fedit_t *pcfg_edits_get(const pcfg_edits_t *e, uint8_t group, int idx
  * save"; -1 when cap is smaller than the set (nothing is ever partially exported) */
 int  pcfg_edits_export(const pcfg_edits_t *e, psvc_fedit_t *out, int cap);
 void pcfg_edits_wipe(pcfg_edits_t *e);   /* memset 0 (secrets included) + reset, keeping table and zone */
+/* After a save that succeeded: drop each saved entry whose current text still equals the saved text -- an entry
+ * re-edited while the save was in flight stays dirty. Both editors (zones, master) use it. Returns the number dropped
+ * (0 on NULL args). The vacated slots are zeroed, as pcfg_edits_drop does. */
+int  pcfg_edits_drop_saved(pcfg_edits_t *e, const psvc_fedit_t *saved, int n);
 
 #ifdef __cplusplus
 }

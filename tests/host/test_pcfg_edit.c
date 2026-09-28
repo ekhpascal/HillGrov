@@ -123,6 +123,37 @@ static void test_wipe(void) {
     TEST_ASSERT_NULL(E.d[0].f);
 }
 
+static void test_drop_saved_keeps_reedits(void) {
+    const hg_field_t *a = zrow(HG_G_WATER, "TARGET"), *b = zrow(HG_G_WATER, "HYST"), *c = zrow(HG_G_ZONECFG, "NAME");
+    pcfg_edits_set(&E, HG_G_WATER, 1, a, "55");
+    pcfg_edits_set(&E, HG_G_WATER, 1, b, "5");
+    pcfg_edits_set(&E, HG_G_ZONECFG, -1, c, "north");
+    psvc_fedit_t saved[3];
+    TEST_ASSERT_EQUAL_INT(3, pcfg_edits_export(&E, saved, 3));      /* the frozen set a save sends */
+    pcfg_edits_set(&E, HG_G_WATER, 1, b, "6");                      /* re-edited while the save was in flight */
+    pcfg_edits_set(&E, HG_G_WATER, 2, a, "40");                     /* a new edit meanwhile */
+    TEST_ASSERT_EQUAL_INT(2, pcfg_edits_drop_saved(&E, saved, 3));
+    TEST_ASSERT_EQUAL_INT(2, E.n);
+    TEST_ASSERT_NULL(pcfg_edits_get(&E, HG_G_WATER, 1, a));
+    TEST_ASSERT_NULL(pcfg_edits_get(&E, HG_G_ZONECFG, -1, c));
+    TEST_ASSERT_EQUAL_STRING("6", pcfg_edits_get(&E, HG_G_WATER, 1, b)->text);
+    TEST_ASSERT_EQUAL_STRING("40", pcfg_edits_get(&E, HG_G_WATER, 2, a)->text);
+    TEST_ASSERT_EQUAL_INT(0, pcfg_edits_drop_saved(&E, saved, 3));  /* nothing left to drop */
+    TEST_ASSERT_EQUAL_INT(0, pcfg_edits_drop_saved(&E, NULL, 3));
+    TEST_ASSERT_EQUAL_INT(0, pcfg_edits_drop_saved(NULL, saved, 3));
+}
+static void test_drop_saved_master_secret(void) {
+    pcfg_edits_reset(&E, PCFG_TABLE_MASTER, 0);
+    const hg_field_t *p = mrow(HG_MG_WIFI, "STA_PASS"), *h = mrow(HG_MG_SYS, "HOSTNAME");
+    pcfg_edits_set(&E, HG_MG_WIFI, -1, p, "hunter22hunter22");
+    pcfg_edits_set(&E, HG_MG_SYS, -1, h, "gh1");
+    psvc_fedit_t saved[2];
+    TEST_ASSERT_EQUAL_INT(2, pcfg_edits_export(&E, saved, 2));
+    TEST_ASSERT_EQUAL_INT(2, pcfg_edits_drop_saved(&E, saved, 2));
+    TEST_ASSERT_EQUAL_INT(0, E.n);
+    for (size_t i = 0; i < sizeof E.d[0].text; i++) TEST_ASSERT_EQUAL_INT(0, E.d[0].text[i]);   /* slots zeroed */
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_reset);
@@ -136,5 +167,7 @@ int main(void) {
     RUN_TEST(test_export_zone_keeps_blank_text);
     RUN_TEST(test_export_none);
     RUN_TEST(test_wipe);
+    RUN_TEST(test_drop_saved_keeps_reedits);
+    RUN_TEST(test_drop_saved_master_secret);
     return UNITY_END();
 }
