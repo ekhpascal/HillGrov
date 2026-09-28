@@ -24,7 +24,7 @@ include_directories(
   ${COMP}/zone_cmds ${COMP}/rescue_handover ${COMP}/ring_proto ${COMP}/node_store ${COMP}/ota_trial
   ${COMP}/master_cmds ${COMP}/node_mgr ${COMP}/ring_link ${COMP}/web_auth ${COMP}/hg_json ${COMP}/alarm_mgr
   ${COMP}/time_core ${COMP}/wifi_mgr ${COMP}/state_snap ${COMP}/http_srv ${COMP}/mcfg_ops ${COMP}/cp_ota
-  ${COMP}/panel_svc ${COMP}/time_svc ${COMP}/panel_ui
+  ${COMP}/panel_svc ${COMP}/time_svc ${COMP}/panel_ui ${COMP}/hg_image
   ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
 enable_testing()
 function(hg_test NAME)
@@ -152,3 +152,11 @@ hg_test(test_pnl_prefs ${COMP}/panel_ui/pnl_prefs.c ${COMP}/hg_blob/hg_blob.c)
 
 # panel_ui night dimming decision (Task 27): pure.
 hg_test(test_pnl_dim ${COMP}/panel_ui/pnl_dim.c ${COMP}/panel_ui/pnl_home.c ${COMP}/panel_ui/pnl_time.c ${HG_CFG_SRC})
+
+# hg_image shared app-image identity (Task 28; recovery design 4.2 / 5.7): pure. The three CMakeLists paths let the test
+# pin each HG_PROJ_* constant against the project() line that defines it.
+hg_test(test_hg_image ${COMP}/hg_image/hg_image.c)
+target_compile_definitions(test_hg_image PRIVATE
+    HG_MASTER_CMAKELISTS="${CMAKE_CURRENT_LIST_DIR}/../../master/CMakeLists.txt"
+    HG_ZONE_CMAKELISTS="${CMAKE_CURRENT_LIST_DIR}/../../zone/CMakeLists.txt"
+    HG_COPROC_CMAKELISTS="${CMAKE_CURRENT_LIST_DIR}/../../coproc/CMakeLists.txt")

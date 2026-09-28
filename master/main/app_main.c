@@ -40,47 +40,6 @@ static portMUX_TYPE s_am_mux = portMUX_INITIALIZER_UNLOCKED;
 static void am_lock(void)   { portENTER_CRITICAL(&s_am_mux); }
 static void am_unlock(void) { portEXIT_CRITICAL(&s_am_mux); }
 
-/* Is the image this master is running still on OTA trial -- i.e. is the
- * running slot ESP_OTA_IMG_PENDING_VERIFY, the state the bootloader hands an
- * OTA-updated app before it self-confirms?
- *
- * ONE implementation, deliberately: it is read both by the co-processor-OTA
- * gate at the end of app_main() (which is what must not run during a trial)
- * and by cp_ota_restart_for_new_radio()'s own defence-in-depth check, and two
- * copies of this test would eventually disagree.
- *
- * This is the same query ota_trial_start() itself uses to decide whether a
- * trial is running at all (components/ota_trial/ota_trial.c), so the two agree
- * by construction rather than by coincidence. ota_trial exposes no read-only
- * predicate to call instead, and ota_trial_confirm() is emphatically NOT one:
- * it *confirms* the trial (operator override) rather than reporting it, so
- * calling it here would short-circuit the very dwell period this protects.
- *
- * Every state the running slot can actually be observed in, and why "not on
- * trial" is the safe answer for all the others:
- *   PENDING_VERIFY  the trial -- the one state that must gate
- *   VALID           the trial already passed; there is nothing left to protect
- *   UNDEFINED       the normal bench state, what tools/hg_otadata.py writes
- *   NEW             unreachable at runtime: the bootloader rewrites NEW ->
- *                   PENDING_VERIFY before it hands over
- *   factory / any non-OTA running partition (the rescue app, or a board booted
- *                   from factory) -- esp_ota_get_state_partition() returns
- *                   ESP_ERR_NOT_SUPPORTED, the "== ESP_OK" conjunct fails and
- *                   this reports 0. Correct: the bootloader's rollback logic
- *                   only ever inspects otadata entries for OTA slots, so a
- *                   factory boot has no unconfirmed image to vote against.
- * A query that fails for any other reason lands in the same place, and that is
- * the safe direction rather than a shrug: reporting "no trial" only re-enables
- * work that is unconditionally fine whenever there really is no trial, which
- * is what every failing case above actually means. `state` is pre-initialised
- * but never read after a failed call (short-circuit &&). */
-static int running_slot_on_ota_trial(void) {
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
-    return running && esp_ota_get_state_partition(running, &state) == ESP_OK &&
-           state == ESP_OTA_IMG_PENDING_VERIFY;
-}
-
 /* Final-review F3: the ONE case where the master deliberately reboots itself
  * after a co-processor OTA. cp_ota_sync() returns 1 only when it re-read the
  * C6's reported version after the C6 rebooted into the new image and
@@ -124,11 +83,11 @@ static int running_slot_on_ota_trial(void) {
  * function. It is kept rather than deleted because cp_ota_sync() has exactly
  * one caller *today* and the obvious next feature -- an operator-triggered CP
  * update from the console or the web UI -- would add a second one that has no
- * reason to know any of this. Both tests read running_slot_on_ota_trial()
- * above, so a future second caller inherits the guard and the two can never
- * drift. */
+ * reason to know any of this. Both tests read ota_trial_running_on_trial()
+ * (components/ota_trial), so a future second caller inherits the guard and the
+ * two can never drift. */
 static void cp_ota_restart_for_new_radio(void) {
-    if (running_slot_on_ota_trial()) {
+    if (ota_trial_running_on_trial()) {
         ESP_LOGE(TAG, "co-processor updated, but this boot is still an OTA trial "
                       "(PENDING_VERIFY) -- NOT restarting, because that would retire "
                       "this master image (the bootloader marks a PENDING_VERIFY slot "
@@ -368,7 +327,7 @@ void app_main(void) {
      *
      * Return 1 (pushed AND confirmed) is the one outcome that needs something
      * from this function -- see cp_ota_restart_for_new_radio(). */
-    if (running_slot_on_ota_trial()) {
+    if (ota_trial_running_on_trial()) {
 #if CONFIG_IDF_TARGET_ESP32P4
         ESP_LOGW(TAG, "this boot is an OTA trial (PENDING_VERIFY) -- SKIPPING the "
                       "co-processor firmware check for this boot, so a CP push cannot "

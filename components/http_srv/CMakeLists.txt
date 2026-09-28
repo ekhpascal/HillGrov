@@ -22,5 +22,5 @@ idf_component_register(
     PRIV_REQUIRES app_common time_svc time_core hg_blob nvs_flash mbedtls esp_hw_support espressif__cjson
                   esp_timer
                   app_update esp_partition
-                  state_snap hg_json alarm_mgr node_mgr wifi_mgr master_cmds
+                  state_snap hg_json alarm_mgr node_mgr wifi_mgr master_cmds ota_trial hg_image
 )

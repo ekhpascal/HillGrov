@@ -5,6 +5,7 @@
 #include "esp_partition.h"
 #include "esp_log.h"
 #include "http_upload.h"
+#include "ota_trial.h"   /* ota_trial_running_on_trial() -- the ONE trial predicate (recovery design 2.3) */
 
 static const char *TAG = "http_upload_master";
 
@@ -97,10 +98,9 @@ static int master_ready(void) {
      * only slot that is known to work), and it would refuse only after the
      * client had already streamed the first 112 B. Say so up front instead --
      * the operator's answer is simply to wait out the trial. */
-    esp_ota_img_states_t st;
-    const esp_partition_t *run = esp_ota_get_running_partition();
-    if (run && esp_ota_get_state_partition(run, &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY) {
-        ESP_LOGW(TAG, "upload refused: %s is still on trial", run->label);
+    if (ota_trial_running_on_trial()) {
+        const esp_partition_t *run = esp_ota_get_running_partition();
+        ESP_LOGW(TAG, "upload refused: %s is still on trial", run ? run->label : "?");
         return -2;
     }
     return 0;

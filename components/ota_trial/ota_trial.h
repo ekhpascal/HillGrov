@@ -58,6 +58,12 @@ void ota_trial_master_frame(void);   /* ring glue: any valid master-sourced fram
 void ota_trial_tick(void);
 void ota_trial_drivers_ok(void);     /* ring driver (+ master: AP/httpd) is up */
 int  ota_trial_confirm(void);        /* SET OTA CONFIRM hook; -1 if no trial active */
+/* Recovery design 2.3's ONE shared copy of "is the running image still on OTA trial". Read-only: it never confirms or
+ * touches the trial (ota_trial_confirm() is an override, not a query). Callers: ota_trial_start() itself, app_main's
+ * co-processor gate and cp_ota_restart_for_new_radio(), the master upload sink's ready(), and (later) the boot record,
+ * hg_reboot_to_rescue() and RESCUE CONFIRM. */
+int  ota_trial_running_on_trial(void);   /* 1 while the running slot is ESP_OTA_IMG_PENDING_VERIFY; 0 for VALID, UNDEFINED,
+                                            factory/non-OTA (ESP_ERR_NOT_SUPPORTED) and any failed query */
 
 extern const cmd_entry_t OTA_TRIAL_ROWS[];   /* 1 row: SET OTA CONFIRM */
 extern const int         OTA_TRIAL_ROWS_N;

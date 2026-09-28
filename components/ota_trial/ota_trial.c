@@ -54,14 +54,28 @@ static void trial_timer_cb(void *arg) {
     }
 }
 
-void ota_trial_start(int is_master) {
-    (void)is_master;
+/* Every state the running slot can be observed in, and why "not on trial" is the safe answer for all the others:
+ *   PENDING_VERIFY  the trial -- the one state that must gate (any reset now retires the image: the bootloader rewrites
+ *                   every PENDING_VERIFY otadata entry to ABORTED before it selects a partition)
+ *   VALID           the trial already passed; there is nothing left to protect
+ *   UNDEFINED       the normal bench state, what tools/hg_otadata.py writes
+ *   NEW             unreachable at runtime: the bootloader rewrites NEW -> PENDING_VERIFY before it hands over
+ *   factory / any non-OTA running partition -- esp_ota_get_state_partition() returns ESP_ERR_NOT_SUPPORTED, the
+ *                   "== ESP_OK" conjunct fails and this reports 0. Correct: the bootloader's rollback logic only inspects
+ *                   otadata entries for OTA slots, so a factory boot has no unconfirmed image to vote against.
+ * A query that fails for any other reason lands in the same place, and that is the safe direction: reporting "no trial"
+ * only re-enables work that is unconditionally fine whenever there really is no trial. `state` is pre-initialised but
+ * never read after a failed call (short-circuit &&). */
+int ota_trial_running_on_trial(void) {
     const esp_partition_t *running = esp_ota_get_running_partition();
     esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
-    if (!running || esp_ota_get_state_partition(running, &state) != ESP_OK ||
-        state != ESP_OTA_IMG_PENDING_VERIFY) {
-        return;   /* not an OTA-pending boot (e.g. flashed by tools): nothing to trial */
-    }
+    return running && esp_ota_get_state_partition(running, &state) == ESP_OK &&
+           state == ESP_OTA_IMG_PENDING_VERIFY;
+}
+
+void ota_trial_start(int is_master) {
+    (void)is_master;
+    if (!ota_trial_running_on_trial()) return;   /* not an OTA-pending boot (e.g. flashed by tools): nothing to trial */
 
     memset(&s_probes, 0, sizeof s_probes);
     /* Reaching this line means hg_store/model (or master's config-free boot)

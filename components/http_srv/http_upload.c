@@ -6,8 +6,10 @@
 #include "esp_timer.h"
 #include "esp_system.h"
 #include "esp_log.h"
+#include "sdkconfig.h"   /* CONFIG_IDF_FIRMWARE_CHIP_ID: the chip a master image must be built for */
 #include "node_mgr.h"
 #include "http_upload.h"
+#include "hg_image.h"   /* the ONE image-identity rule and project names (recovery design 4.2 / 5.7) */
 #include "psvc_fw.h"   /* progress lives in panel_svc: /api/state and the panel read one value */
 #include "http_srv_internal.h"
 
@@ -26,13 +28,6 @@ static const char *TAG = "http_upload";
 /* KraftWerk lesson: yield after this many flash writes so the Wi-Fi and IDLE
  * tasks still run during a ~1 MB flash burst. */
 #define YIELD_BLOCKS 8
-/* esp_image_header_t (24) + esp_image_segment_header_t (8) + the offset of
- * project_name inside esp_app_desc_t (48) + its length (32). The first recv
- * is NOT guaranteed to return this much, so the check waits for the bytes to
- * accumulate across recv boundaries. */
-#define ID_MIN_BYTES 112
-#define ID_NAME_OFF  (32 + 48)
-#define ID_NAME_LEN  32
 
 #define LOW_HEAP_B   (40 * 1024)   /* same guard as PUT /api/config */
 
@@ -75,13 +70,6 @@ static void wdt_kick(void) {
 }
 
 /* ---- the shared upload path ---- */
-
-static int identity_ok(const uint8_t *b, const char *want) {
-    if (b[0] != 0xE9) return 0;   /* esp_image_header_t.magic */
-    const char *name = (const char *)b + ID_NAME_OFF;
-    size_t n = strnlen(name, ID_NAME_LEN);
-    return n == strlen(want) && memcmp(name, want, n) == 0;
-}
 
 static int type_is_octet_stream(httpd_req_t *req) {
     char ct[48];
@@ -151,7 +139,7 @@ static int drain_body(httpd_req_t *req, uint8_t *buf, size_t cap, size_t got) {
  * http_srv_done(): drained = 1 only when the whole body was read, so a
  * refusal with a body still on the wire closes the socket instead of letting
  * httpd purge megabytes on the single httpd task. */
-static esp_err_t fw_upload(httpd_req_t *req, const char *kind, const char *want_name,
+static esp_err_t fw_upload(httpd_req_t *req, const char *kind, uint16_t want_chip, const char *want_name,
                            const upload_sink_t *sink) {
     /* Framing first, and before anything is claimed or any target static is
      * touched (fix round 1): a chunked or wrong-type request is malformed
@@ -244,9 +232,15 @@ static esp_err_t fw_upload(httpd_req_t *req, const char *kind, const char *want_
         /* Identify the image BEFORE the first write, so nothing is erased for
          * a file that was never going to be accepted: the brief's order
          * (erase, then check) would cost the stored zone image every time
-         * someone picks the wrong file in the browser. */
-        if (!started && (fill >= ID_MIN_BYTES || got == req->content_len)) {
-            if (fill < ID_MIN_BYTES || !identity_ok(buf, want_name)) {
+         * someone picks the wrong file in the browser. The first recv is NOT
+         * guaranteed to return HG_IMG_ID_BYTES, so the check waits for them to
+         * accumulate across recv boundaries; a whole body shorter than that is
+         * a mismatch. hg_image_is() also checks the chip id and the
+         * app-descriptor magic (decision D22), so a master image built for the
+         * other chip is refused here, before any erase, rather than by
+         * esp_ota_end() after it. */
+        if (!started && (fill >= HG_IMG_ID_BYTES || got == req->content_len)) {
+            if (!hg_image_is(buf, fill, want_chip, want_name)) {
                 ESP_LOGW(TAG, "%s upload is not a %s image", kind, want_name);
                 status = 422; code = "IMAGE_MISMATCH";
                 break;
@@ -291,9 +285,9 @@ static esp_err_t fw_upload(httpd_req_t *req, const char *kind, const char *want_
 }
 
 esp_err_t h_fw_master(httpd_req_t *req) {
-    return fw_upload(req, "master", "hillgrow_master", http_upload_master_sink());
+    return fw_upload(req, "master", CONFIG_IDF_FIRMWARE_CHIP_ID, HG_PROJ_MASTER, http_upload_master_sink());
 }
 
 esp_err_t h_fw_zone(httpd_req_t *req) {
-    return fw_upload(req, "zone", "hillgrow_zone", http_upload_zone_sink());
+    return fw_upload(req, "zone", HG_CHIP_ESP32, HG_PROJ_ZONE, http_upload_zone_sink());   /* zone boards are ESP32 */
 }
