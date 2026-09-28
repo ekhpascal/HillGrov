@@ -24,6 +24,7 @@ include_directories(
   ${COMP}/zone_cmds ${COMP}/rescue_handover ${COMP}/ring_proto ${COMP}/node_store ${COMP}/ota_trial
   ${COMP}/master_cmds ${COMP}/node_mgr ${COMP}/ring_link ${COMP}/web_auth ${COMP}/hg_json ${COMP}/alarm_mgr
   ${COMP}/time_core ${COMP}/wifi_mgr ${COMP}/state_snap ${COMP}/http_srv ${COMP}/mcfg_ops ${COMP}/cp_ota
+  ${COMP}/panel_svc ${COMP}/time_svc
   ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
 enable_testing()
 function(hg_test NAME)
@@ -99,3 +100,13 @@ hg_test(test_mcfg_ops ${COMP}/mcfg_ops/mcfg_ops.c ${COMP}/hg_mcfg/hg_mcfg.c ${HG
 # production code does (fix round 1, Task 6 concern 1: cp_fw carries the
 # same HGFW header zone_fw does, and cp_ota_parse_header() checks it).
 hg_test(test_cp_ota ${COMP}/cp_ota/cp_ota.c ${COMP}/hg_blob/hg_blob.c)
+
+# panel_svc (panel plan Task 3): the shared service layer both faces call.
+# psvc_rc.c is pure; psvc_mcfg.c runs over the REAL mcfg_ops.c, hg_mcfg
+# validation, hg_json merge and time_core tz_check -- only the NVS store
+# (fake_mcfg_store.c) and the two radio/time apply hooks (fake_apply.c) are faked.
+hg_test(test_psvc_rc ${COMP}/panel_svc/psvc_rc.c)
+hg_test(test_psvc_mcfg ${COMP}/panel_svc/psvc_mcfg.c ${COMP}/panel_svc/psvc_rc.c ${COMP}/mcfg_ops/mcfg_ops.c
+        ${COMP}/hg_mcfg/hg_mcfg.c ${HG_CFG_SRC} ${COMP}/hg_blob/hg_blob.c ${COMP}/hg_json/hg_json_mcfg.c
+        ${COMP}/time_core/time_core.c fakes/fake_mcfg_store.c fakes/fake_apply.c)
+target_link_libraries(test_psvc_mcfg cjson_host)

@@ -48,6 +48,16 @@ void mcfg_ops_unlock(void);
 int  mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx,
                     void (*apply)(void *ctx), const char *what);
 
+/* mcfg_ops_edit() with a caller-chosen lock budget -- identical in every other
+ * respect (rc contract, private copy, apply under the lock). mcfg_ops_edit()
+ * is exactly mcfg_ops_edit_ms(..., MCFG_OPS_EDIT_LOCK_MS). The web's zone-0
+ * PUT keeps its historic 100 ms try-lock through this, while the panel worker,
+ * which can show "pending", waits the full 6000 ms (panel plan Task 3). */
+#define MCFG_OPS_EDIT_LOCK_MS 6000u   /* > mcfg_commit()'s own 5000 ms mutex timeout, so a
+                                         caller that loses a race reports the commit's verdict */
+int  mcfg_ops_edit_ms(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx,
+                       void (*apply)(void *ctx), const char *what, uint32_t lock_ms);
+
 #ifdef __cplusplus
 }
 #endif

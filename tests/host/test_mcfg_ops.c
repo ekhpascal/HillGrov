@@ -144,6 +144,30 @@ void test_apply_does_not_run_when_the_commit_fails_to_store(void) {
     TEST_ASSERT_EQUAL_INT(0, s_apply_calls);
 }
 
+/* Panel plan Task 3: mcfg_ops_edit_ms() is mcfg_ops_edit() with a caller-chosen
+   lock budget, so the web can keep its 100 ms try-lock and the panel worker can
+   wait 6000 ms on the SAME lock. The fake mutex fails a held take immediately,
+   which is the same answer a real one gives once its budget runs out. */
+void test_edit_ms_refuses_while_the_lock_is_held(void) {
+    mcfg_ops_init();
+    TEST_ASSERT_EQUAL_INT(0, mcfg_ops_lock(10));
+    TEST_ASSERT_EQUAL_INT(-1, mcfg_ops_edit_ms(set_hostname, "short-budget", NULL, "TEST", 100));
+    mcfg_ops_unlock();
+    TEST_ASSERT_EQUAL_STRING("hillgrow", mcfg_get()->hostname);   /* nothing committed */
+}
+
+void test_edit_ms_commits_exactly_like_edit(void) {
+    mcfg_ops_init();
+    TEST_ASSERT_EQUAL_INT(0, mcfg_ops_edit_ms(set_hostname, "via-ms", NULL, "TEST", 100));
+    TEST_ASSERT_EQUAL_STRING("via-ms", mcfg_get()->hostname);
+    TEST_ASSERT_EQUAL_INT(3, mcfg_ops_edit_ms(reject, NULL, NULL, "TEST", 100));
+    TEST_ASSERT_EQUAL_STRING("via-ms", mcfg_get()->hostname);
+}
+
+void test_default_budget_is_still_6000_ms(void) {
+    TEST_ASSERT_EQUAL_UINT32(6000u, MCFG_OPS_EDIT_LOCK_MS);
+}
+
 int main(void) { UNITY_BEGIN();
     RUN_TEST(test_edit_commits_when_the_edit_function_accepts);
     RUN_TEST(test_a_rejecting_edit_does_not_commit_and_leaves_no_trace);
@@ -155,4 +179,7 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_apply_runs_while_mcfg_ops_edit_still_holds_the_lock);
     RUN_TEST(test_apply_does_not_run_when_the_edit_is_refused);
     RUN_TEST(test_apply_does_not_run_when_the_commit_fails_to_store);
+    RUN_TEST(test_edit_ms_refuses_while_the_lock_is_held);
+    RUN_TEST(test_edit_ms_commits_exactly_like_edit);
+    RUN_TEST(test_default_budget_is_still_6000_ms);
     return UNITY_END(); }

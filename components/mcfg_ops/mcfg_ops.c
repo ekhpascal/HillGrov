@@ -26,11 +26,9 @@ static const char *TAG = "mcfg_ops";
  * window. */
 static SemaphoreHandle_t s_lock;
 
-static int lock_take(void) {
+static int lock_take(uint32_t ms) {
     if (!s_lock) return 0;   /* fail CLOSED: not created yet is NOT an open lock */
-    /* Longer than mcfg_commit()'s own 5000 ms mutex timeout, so a caller that
-     * loses this race reports the commit's verdict rather than ours. */
-    return xSemaphoreTake(s_lock, pdMS_TO_TICKS(6000)) == pdTRUE;
+    return xSemaphoreTake(s_lock, pdMS_TO_TICKS(ms)) == pdTRUE;
 }
 
 static void lock_give(void) { if (s_lock) xSemaphoreGive(s_lock); }
@@ -74,9 +72,9 @@ static int commit_and_log(hg_mcfg_t *m, const char *what) {
     return -3;
 }
 
-int mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx,
-                   void (*apply)(void *ctx), const char *what) {
-    if (!lock_take()) return -1;
+int mcfg_ops_edit_ms(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx,
+                      void (*apply)(void *ctx), const char *what, uint32_t lock_ms) {
+    if (!lock_take(lock_ms)) return -1;
     hg_mcfg_t m = *mcfg_get();
     int rc = fn(&m, ctx);
     if (rc == 0) {
@@ -88,4 +86,9 @@ int mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx,
     }
     lock_give();
     return rc;
+}
+
+int mcfg_ops_edit(int (*fn)(hg_mcfg_t *m, void *ctx), void *ctx,
+                   void (*apply)(void *ctx), const char *what) {
+    return mcfg_ops_edit_ms(fn, ctx, apply, what, MCFG_OPS_EDIT_LOCK_MS);
 }
