@@ -22,6 +22,9 @@
 #include "mcfg_ops.h"
 #include "time_svc.h"
 #include "alarm_mgr.h"
+#if CONFIG_IDF_TARGET_ESP32P4
+#include "panel_ui.h"     /* the 7" panel -- P4 master only (components/panel_ui) */
+#endif
 
 static const char *TAG = "hg_main";
 extern const app_if_t APP_IF_MASTER;
@@ -195,6 +198,14 @@ void app_main(void) {
     if (http_auth_init() != 0) ESP_LOGE(TAG, "web auth init failed -- web password changes will fail");
 
     ota_trial_start(1);
+#if CONFIG_IDF_TARGET_ESP32P4
+    /* The 7" panel comes up BEFORE the first radio call, so a silent C6 (or,
+     * after the recovery plan lands, its bounded esp_hosted retry loop) never
+     * leaves the operator looking at a dark screen. About 283 ms (the spike's
+     * figure) ahead of the AP and the ring (D19). Soft on every failure; the
+     * return value is informational only. */
+    (void)panel_start();
+#endif
 
     /* Task 15 ruling #7: AP -> httpd -> ring -> node_mgr -> trial
      * drivers_ok, in that order. wifi_mgr_start()/http_srv_start() failures
@@ -236,6 +247,11 @@ void app_main(void) {
     hg_app_get_mac(mac);
     ring_link_start(1, master_id_fn, mac);
     node_mgr_start();
+#if CONFIG_IDF_TARGET_ESP32P4
+    /* Panel worker + poller, once node_mgr owns the node table and BEFORE the
+     * cp_ota_sync() gate below, which can block this task for 15-45 s. */
+    (void)panel_services_start();
+#endif
 
     /* spec 3.10 drivers criterion (master): AP netif + httpd both up,
      * checked once here -- Task 10's plan-sequenced obligation this task

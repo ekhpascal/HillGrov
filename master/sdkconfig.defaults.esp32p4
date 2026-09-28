@@ -19,3 +19,17 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_p4.csv"
 # The MIPI-DSI frame buffer and LVGL need PSRAM (ESP32-P4NRW32, in package).
 # Harmless here and required by the panel plan that follows.
 CONFIG_SPIRAM=y
+
+# The Waveshare BSP's error macros default to ESP_ERROR_CHECK/assert: with this
+# y, a loose ribbon or a missing GT911 would ABORT the greenhouse controller
+# (system spec 3.3 forbids aborting). n turns them into returned errors, which
+# panel_hw.c handles softly; panel_hw.c #errors if this ever comes back y,
+# because sdkconfig.defaults silently ignores a misspelt name.
+CONFIG_BSP_ERROR_CHECK=n
+# LVGL's Montserrat ships only at 14; each size is a separate compiled bitmap.
+# 20 is the body text, 28 the context line and headings, 48 the home date line.
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
+CONFIG_LV_FONT_MONTSERRAT_48=y
+# Body text at arm's length on a 7" 1024x600 panel.
+CONFIG_LV_FONT_DEFAULT_MONTSERRAT_20=y
