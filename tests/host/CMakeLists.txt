@@ -140,3 +140,6 @@ hg_test(test_pcfg_gen ${COMP}/panel_ui/pcfg_gen.c ${COMP}/panel_ui/pcfg_pres.c $
 # panel_ui's config edit model and refusal texts (Task 18): pure.
 hg_test(test_pcfg_edit ${COMP}/panel_ui/pcfg_edit.c ${HG_CFG_SRC} ${COMP}/hg_mcfg/hg_mcfg.c ${COMP}/hg_blob/hg_blob.c)
 hg_test(test_pnl_msg ${COMP}/panel_ui/pnl_msg.c ${COMP}/panel_svc/psvc_rc.c)
+
+# panel_ui's keyboard filters and MAC parser (Task 19): pure.
+hg_test(test_pnl_input ${COMP}/panel_ui/pnl_input.c)

@@ -20,6 +20,7 @@ if("${CMAKE_PROJECT_NAME}" STREQUAL "hillgrow_master" AND "${panel_target}" STRE
                    "font_clock_180.c" "scr_home.c" "scr_audio.c" "scr_zone.c" "scr_alarms.c")
     list(APPEND PANEL_SRCS "pcfg_gen.c" "pcfg_pres.c")      # Task 17: the config-widget generator (pure)
     list(APPEND PANEL_SRCS "pcfg_edit.c" "pnl_msg.c")       # Task 18: edit model, refusal texts (pure)
+    list(APPEND PANEL_SRCS "pnl_input.c" "wdg_field.c" "wdg_keyboard.c")   # Task 19: field widgets, keyboard
 endif()
 
 idf_component_register(SRCS ${PANEL_SRCS} INCLUDE_DIRS "."
