@@ -34,7 +34,7 @@ int hg_json_export_mcfg(const hg_mcfg_t *m, int secrets, char *out, size_t cap) 
     return hgj_print_and_free(root, out, cap);
 }
 
-int hg_json_merge_mcfg(hg_mcfg_t *m, const char *json, char *err_path, size_t err_cap) {
+int hg_json_merge_mcfg_opts(hg_mcfg_t *m, const char *json, int skip_blank_secrets, char *err_path, size_t err_cap) {
     cJSON *root = cJSON_Parse(json);
     if (!root) return -1;
     if (err_path && err_cap) err_path[0] = '\0';
@@ -52,6 +52,9 @@ int hg_json_merge_mcfg(hg_mcfg_t *m, const char *json, char *err_path, size_t er
                     break;
                 }
             if (!f) continue; /* unknown key: hg_json_merge_mcfg has no warnings channel */
+            if (skip_blank_secrets && hg_mcfg_is_secret(f) && cJSON_IsString(item) && item->valuestring &&
+                item->valuestring[0] == '\0')
+                continue;   /* blank = unchanged */
             char text[80];
             if (hgj_json_to_text(f, item, text, sizeof text) != 0 || hg_field_write(f, &scratch, text) != 0) {
                 if (err_path && err_cap) snprintf(err_path, err_cap, "%s.%s", HG_MGROUP_NAMES[g], item->string);
@@ -73,4 +76,8 @@ int hg_json_merge_mcfg(hg_mcfg_t *m, const char *json, char *err_path, size_t er
     if (rc != 0) return rc;
     *m = scratch;
     return 0;
+}
+
+int hg_json_merge_mcfg(hg_mcfg_t *m, const char *json, char *err_path, size_t err_cap) {
+    return hg_json_merge_mcfg_opts(m, json, 0, err_path, err_cap);
 }

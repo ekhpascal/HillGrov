@@ -53,6 +53,17 @@ void cfg_master_close(void);                   /* Task 21 */
 void cfg_master_update(const pnl_snap_t *s);   /* Task 21 */
 void cfg_master_wipe(void);                    /* Task 21 */
 
+/* Task 33 (D13): config export/import through microSD (cfg_card.c). */
+void cfg_card_export(uint8_t zone);   /* job: doc -> mount -> PNL_SD_DIR "/zone<N>.json" | "/master.json" -> unmount */
+void cfg_card_import(uint8_t zone);   /* confirm, then job: mount -> read (<= 4096 B) -> unmount -> the Save path */
+void cfg_card_bar(lv_obj_t *bar);     /* [LVGL] adds [Export to card] [Import from card] to the save bar */
+void cfg_card_set_zone(uint8_t zone); /* [LVGL] the zone the editor shows (0 = Master) */
+void cfg_card_teardown(void);         /* [LVGL] drop the two button pointers; dismiss an open import confirm */
+void cfg_card_wipe(void);             /* [LVGL] the idle wipe: drop a kept export/import outcome */
+void cfg_zone_imported(uint8_t zone); /* [LVGL] an import landed: that zone's open editor refetches and follows the push,
+                                         exactly as after a Save (edits on screen stay dirty) */
+void cfg_master_imported(void);       /* [LVGL] an import landed: the master editor re-reads its copy */
+
 #ifdef __cplusplus
 }
 #endif

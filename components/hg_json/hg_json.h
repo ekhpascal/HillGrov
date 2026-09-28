@@ -58,6 +58,11 @@ int hg_json_export_mcfg(const hg_mcfg_t *m, int secrets, char *out, size_t cap);
  * untouched. */
 int hg_json_merge_mcfg(hg_mcfg_t *m, const char *json, char *err_path, size_t err_cap);
 
+/* hg_json_merge_mcfg(m,json,e,c) == hg_json_merge_mcfg_opts(m,json,0,e,c). skip_blank_secrets != 0: a "" STA_PASS or
+ * AP_PASS is ignored (blank = unchanged) -- the rule the web client applies before a PUT and on Import
+ * (web/app.js:1441-1474, 1775-1780), for the panel's microSD import, whose file came from an export that omits secrets. */
+int hg_json_merge_mcfg_opts(hg_mcfg_t *m, const char *json, int skip_blank_secrets, char *err_path, size_t err_cap);
+
 /* Injects the TZ checker hg_json_merge_mcfg's post-merge hg_mcfg_validate call uses; NULL
  * (the default, in effect until this is called) accepts any TZ string. */
 void hg_json_set_tz_check(hg_tz_check_fn fn);

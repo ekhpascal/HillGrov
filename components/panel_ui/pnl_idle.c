@@ -14,7 +14,7 @@
 #include "pnl_theme.h"       /* pnl_confirm_close */
 #include "pnl_worker.h"
 #include "scr_shell.h"
-#include "scr_config.h"      /* cfg_zone_wipe_all, cfg_master_wipe */
+#include "scr_config.h"      /* cfg_zone_wipe_all, cfg_master_wipe, cfg_card_wipe */
 #include "scr_system.h"      /* sys_wifi_wipe, sys_time_wipe, sys_password_wipe, sys_fleet_wipe, sys_fw_wipe */
 #include "zone_sections.h"   /* zone_console_wipe_all, zone_replace_wipe */
 #include "wdg_keyboard.h"
@@ -88,6 +88,7 @@ static void catcher_show(int on) {
 static void idle_wipe(void) {
     cfg_zone_wipe_all();        /* every zone's edit set, loaded doc and kept save outcome */
     cfg_master_wipe();          /* master edits (pending secrets included), frozen copy, scratch, kept outcome */
+    cfg_card_wipe();            /* the kept microSD export/import outcome */
     zone_console_wipe_all();    /* every zone's transcript, history and draft */
     zone_replace_wipe();        /* every zone's MAC draft and the shown reply */
     sys_wifi_wipe();            /* Wi-Fi form text, passwords, scan list, kept outcomes */

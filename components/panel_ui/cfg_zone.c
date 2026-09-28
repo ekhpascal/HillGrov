@@ -323,6 +323,15 @@ void cfg_zone_update(const pnl_snap_t *s) {
     if (s_rerender_due && !wdg_keyboard_is_open()) { s_rerender_due = 0; cfg_frame_rerender(); }
 }
 
+/* Task 33: an import from the card was queued for this zone (psvc_zone_cfg_edit OK) -- the Save outcomes: follow
+ * cfg_busy / cfg_sync to "Landed on the zone.", and refetch the document 3 s on (the web's cfgApplyPut). */
+void cfg_zone_imported(uint8_t zone) {
+    if (s_state != ZS_LOADED || zone != s_zone) return;   /* another zone, or not loaded: its next open loads fresh */
+    s_watch = 1;
+    s_watch_seq = pnl_poll_seq();
+    arm_reload();
+}
+
 void cfg_zone_wipe_all(void) {
     for (int z = 0; z < HG_MAX_ZONES; z++) if (s_edits[z]) pcfg_edits_wipe(s_edits[z]);
     if (s_doc && s_state == ZS_CLOSED) memset(s_doc, 0, sizeof *s_doc);

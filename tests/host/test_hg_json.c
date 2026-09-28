@@ -260,6 +260,39 @@ static void test_cap_too_small(void) {
     TEST_ASSERT_EQUAL_INT(-1, hg_json_export_cfg(&hw, &cfg, 1, buf, sizeof buf));
 }
 
+static void test_mcfg_merge_opts_skip_blank_secrets(void) {
+    hg_mcfg_t m;
+    hg_mcfg_defaults(&m);
+    hg_json_set_tz_check(NULL);
+    char err[64] = "";
+    TEST_ASSERT_EQUAL_INT(0, hg_json_merge_mcfg_opts(&m, "{\"WIFI\":{\"AP_PASS\":\"\",\"STA_PASS\":\"\",\"AP_SSID\":\"Glass\"}}",
+                                                     1, err, sizeof err));
+    TEST_ASSERT_EQUAL_STRING("hillgrow1", m.ap_pass);          /* blank = unchanged */
+    TEST_ASSERT_EQUAL_STRING("Glass", m.ap_ssid);
+}
+
+static void test_mcfg_merge_opts_skip_keeps_a_real_secret(void) {
+    hg_mcfg_t m;
+    hg_mcfg_defaults(&m);
+    hg_json_set_tz_check(NULL);
+    char err[64] = "";
+    TEST_ASSERT_EQUAL_INT(0, hg_json_merge_mcfg_opts(&m, "{\"WIFI\":{\"AP_PASS\":\"newpass99\"}}", 1, err, sizeof err));
+    TEST_ASSERT_EQUAL_STRING("newpass99", m.ap_pass);
+}
+
+static void test_mcfg_merge_without_skip_refuses_blank_ap_pass(void) {
+    hg_mcfg_t m;
+    hg_mcfg_defaults(&m);
+    hg_json_set_tz_check(NULL);
+    char err[64] = "";
+    TEST_ASSERT_EQUAL_INT(-2, hg_json_merge_mcfg_opts(&m, "{\"WIFI\":{\"AP_PASS\":\"\"}}", 0, err, sizeof err));
+    TEST_ASSERT_EQUAL_STRING("WIFI.AP_PASS", err);             /* hg_mcfg_validate: AP_PASS 8..63 */
+    TEST_ASSERT_EQUAL_STRING("hillgrow1", m.ap_pass);          /* untouched on failure */
+    err[0] = '\0';
+    TEST_ASSERT_EQUAL_INT(-2, hg_json_merge_mcfg(&m, "{\"WIFI\":{\"AP_PASS\":\"\"}}", err, sizeof err));   /* same rule */
+    TEST_ASSERT_EQUAL_STRING("WIFI.AP_PASS", err);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_schema_has_all_groups_and_types);
@@ -273,5 +306,8 @@ int main(void) {
     RUN_TEST(test_hhmm_bool_enum_forms);
     RUN_TEST(test_mcfg_export_secrets);
     RUN_TEST(test_cap_too_small);
+    RUN_TEST(test_mcfg_merge_opts_skip_blank_secrets);
+    RUN_TEST(test_mcfg_merge_opts_skip_keeps_a_real_secret);
+    RUN_TEST(test_mcfg_merge_without_skip_refuses_blank_ap_pass);
     return UNITY_END();
 }

@@ -70,6 +70,13 @@ int psvc_mcfg_json_fn(hg_mcfg_t *m, void *ctx, char *err, size_t errcap) {
     return rc == -1 ? PSVC_EDIT_BAD_JSON : PSVC_EDIT_INVALID_FIELD;
 }
 
+int psvc_mcfg_json_import_fn(hg_mcfg_t *m, void *ctx, char *err, size_t errcap) {
+    int rc = hg_json_merge_mcfg_opts(m, (const char *)ctx, 1, err, errcap);
+    if (rc == -1) return PSVC_EDIT_BAD_JSON;
+    if (rc == -2) return PSVC_EDIT_INVALID_FIELD;
+    return 0;
+}
+
 int psvc_mcfg_fields_fn(hg_mcfg_t *m, void *ctx, char *err, size_t errcap) {
     const psvc_fedits_t *set = (const psvc_fedits_t *)ctx;
     if (!set || (set->n > 0 && !set->e)) return PSVC_EDIT_INVALID_FIELD;

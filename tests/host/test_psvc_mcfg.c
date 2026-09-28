@@ -153,6 +153,29 @@ static void test_get_is_a_copy_of_the_live_config(void) {
     TEST_ASSERT_EQUAL_MEMORY(mcfg_get(), &m, sizeof m);
 }
 
+static void test_import_fn_keeps_a_blank_secret(void) {
+    mcfg_store_init();                                        /* the fake store back to defaults (ap_pass "hillgrow1") */
+    mcfg_ops_init();                                          /* idempotent; the lock fails closed until it exists */
+    char err[64] = "";
+    psvc_rc_t rc = psvc_mcfg_edit(psvc_mcfg_json_import_fn,
+                                  (void *)"{\"WIFI\":{\"AP_SSID\":\"Glass\",\"AP_PASS\":\"\",\"STA_PASS\":\"\"}}",
+                                  100, "TEST IMPORT", err, sizeof err);
+    TEST_ASSERT_EQUAL_INT(PSVC_OK, rc);
+    hg_mcfg_t m;
+    psvc_mcfg_get(&m);
+    TEST_ASSERT_EQUAL_STRING("Glass", m.ap_ssid);
+    TEST_ASSERT_EQUAL_STRING("hillgrow1", m.ap_pass);
+}
+
+static void test_json_fn_still_refuses_a_blank_ap_pass(void) {
+    mcfg_store_init();
+    mcfg_ops_init();
+    char err[64] = "";
+    psvc_rc_t rc = psvc_mcfg_edit(psvc_mcfg_json_fn, (void *)"{\"WIFI\":{\"AP_PASS\":\"\"}}", 100, "TEST PUT", err, sizeof err);
+    TEST_ASSERT_EQUAL_INT(PSVC_E_INVALID_FIELD, rc);          /* the web PUT is unchanged: its client drops blanks itself */
+    TEST_ASSERT_EQUAL_STRING("WIFI.AP_PASS", err);
+}
+
 int main(void) { UNITY_BEGIN();
     RUN_TEST(test_fields_edit_commits_and_applies_once);
     RUN_TEST(test_blank_secret_means_unchanged);
@@ -166,4 +189,6 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_storage_failure_is_storage_and_does_not_apply);
     RUN_TEST(test_ap_pass_edit_leaves_ap_default);
     RUN_TEST(test_get_is_a_copy_of_the_live_config);
+    RUN_TEST(test_import_fn_keeps_a_blank_secret);
+    RUN_TEST(test_json_fn_still_refuses_a_blank_ap_pass);
     return UNITY_END(); }

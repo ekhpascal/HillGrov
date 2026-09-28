@@ -32,12 +32,13 @@ if("${CMAKE_PROJECT_NAME}" STREQUAL "hillgrow_master" AND "${panel_target}" STRE
     list(APPEND PANEL_SRCS "pnl_dim.c" "pnl_idle.c")                     # Task 27: night dimming, wake guard, idle wipe
     list(APPEND PANEL_SRCS "pnl_sd_pick.c" "pnl_sd.c")                   # Task 31: microSD mount, firmware file picking
     list(APPEND PANEL_SRCS "sys_firmware.c")                             # Task 32: System -- firmware from microSD
+    list(APPEND PANEL_SRCS "cfg_card.c")                                 # Task 33: config export/import via microSD
 endif()
 
 idf_component_register(SRCS ${PANEL_SRCS} INCLUDE_DIRS "."
     REQUIRES panel_svc hg_cfg hg_mcfg ring_proto cmd_core
     PRIV_REQUIRES cmd_task node_mgr alarm_mgr wifi_mgr time_svc time_core app_common state_snap notify board hg_blob
-                  nvs_flash esp_timer esp_driver_ledc fatfs sdmmc esp_driver_sdmmc esp_app_format hg_image)
+                  nvs_flash esp_timer esp_driver_ledc fatfs sdmmc esp_driver_sdmmc esp_app_format hg_image hg_json)
 # every name above exists in every app build (the early requirements pass evaluates this file for zone/rescue too);
 # panel_ui never requires http_srv -- the web's quarantine count reaches it through psvc_state (Task 9)
 if(PANEL_SRCS)

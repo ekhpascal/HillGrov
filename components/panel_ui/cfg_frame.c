@@ -235,6 +235,10 @@ lv_obj_t *cfg_frame_build(lv_obj_t *body, const cfg_view_t *v, cfg_save_fn on_sa
     lv_obj_center(s_fr.save_lbl);
     lv_obj_add_event_cb(s_fr.save, ev_save, LV_EVENT_CLICKED, NULL);
     lv_obj_set_style_min_height(bar, 56, 0);
+    /* Task 33: [Export to card] [Import from card], packed left of the floating Save button */
+    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(bar, 12, 0);
+    cfg_card_bar(bar);
 
     s_fr.list = lv_obj_create(body);
     lv_obj_set_width(s_fr.list, lv_pct(100));

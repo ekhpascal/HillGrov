@@ -90,6 +90,7 @@ static void close_editor(void) {
     if (s_ui.open_zone >= 1) cfg_zone_close();
     else if (s_ui.open_zone == 0) cfg_master_close();
     s_ui.open_zone = -1;
+    cfg_card_teardown();                        /* ruling C2: the card buttons go with the frame */
     cfg_frame_forget();
 }
 static void open_editor(int zone) {
@@ -100,8 +101,13 @@ static void open_editor(int zone) {
     s_ui.open_zone = zone;
     picker_check(zone);
     s_last_zone = zone;
-    if (zone >= 1) cfg_zone_open(s_ui.body, (uint8_t)zone);
-    else cfg_master_open(s_ui.body);
+    if (zone >= 1) {
+        cfg_card_set_zone((uint8_t)zone);       /* before the open: the frame (and its card buttons) may build inside it */
+        cfg_zone_open(s_ui.body, (uint8_t)zone);
+    } else {
+        cfg_card_set_zone(0);
+        cfg_master_open(s_ui.body);
+    }
 }
 static int pick_target(const pnl_snap_t *s, int arg) {
     if (arg == 0) return 0;

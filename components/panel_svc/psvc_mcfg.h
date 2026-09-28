@@ -35,6 +35,8 @@ psvc_rc_t psvc_mcfg_edit(psvc_mcfg_fn fn, void *ctx, uint32_t lock_ms, const cha
 /* ctx = const char *json. hg_json_merge_mcfg: -1 -> PSVC_EDIT_BAD_JSON,
  * -2 -> PSVC_EDIT_INVALID_FIELD (err "GROUP.KEY"), 0 -> 0. */
 int  psvc_mcfg_json_fn(hg_mcfg_t *m, void *ctx, char *err, size_t errcap);
+int  psvc_mcfg_json_import_fn(hg_mcfg_t *m, void *ctx /* const char *json */, char *err, size_t errcap);
+     /* psvc_mcfg_json_fn with hg_json_merge_mcfg_opts(..., 1, ...): a blank secret keeps the stored one (panel import) */
 
 /* ctx = const psvc_fedits_t *. Per edit: a secret row (hg_mcfg_is_secret) with
  * empty text is skipped -- blank means unchanged, so a password cannot be
