@@ -18,7 +18,9 @@ lv_obj_t  *pnl_label(lv_obj_t *parent, const char *text, const lv_font_t *font, 
  * pnl_confirm_close() reaches them all. [LVGL] A modal msgbox on the top layer, [Cancel] + [ok_label]; a new
  * confirm dismisses an open one first. Exactly one of on_ok / on_cancel runs (either may be NULL), after the box is
  * detached, so a callback may open another confirm: on_ok on the OK tap; on_cancel on the Cancel tap and whenever
- * the box goes away otherwise (pnl_confirm_close, a new confirm, the box deleted from outside). */
+ * the box goes away otherwise (pnl_confirm_close, a new confirm, the box deleted from outside).
+ * on_cancel may run synchronously inside pnl_confirm(), on allocation failure or when an open box is replaced, so
+ * callers must set their state flags BEFORE calling it. */
 typedef void (*pnl_confirm_fn)(void *ctx);
 void pnl_confirm(const char *title, const char *text, const char *ok_label, pnl_confirm_fn on_ok,
                  pnl_confirm_fn on_cancel, void *ctx);

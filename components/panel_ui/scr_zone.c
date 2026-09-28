@@ -9,6 +9,7 @@
 #include "pnl_theme.h"
 #include "scr_shell.h"
 #include "scr_zone.h"
+#include "zone_sections.h"
 
 /* The web's zone page (app.js:801-834): 14 rows, the shelf table, "Configure
  * this zone". Read-only; Task 22 adds the console and Replace board below. */
@@ -225,10 +226,19 @@ static void zone_build(lv_obj_t *page, int arg) {
     lv_obj_set_flex_flow(s_extra, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_extra, 10, 0);
 
+    /* Task 22: console and Replace board, below the shelf table */
+    lv_obj_t *extra = scr_zone_extra_area();   /* NULL when no zone is shown */
+    if (extra) {
+        zone_console_build(extra, scr_zone_current());
+        zone_replace_build(extra, scr_zone_current());
+    }
+
     zone_update(sn);
 }
 
 static void zone_teardown(void) {
+    zone_console_teardown();
+    zone_replace_teardown();
     s_sel = s_title = s_notfound = s_body = s_rows = s_shelves = s_noshelf = s_extra = NULL;
     memset(s_sel_btn, 0, sizeof s_sel_btn);
     memset(s_sel_lbl, 0, sizeof s_sel_lbl);

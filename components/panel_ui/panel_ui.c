@@ -9,6 +9,7 @@
 #include "pnl_theme.h"
 #include "pnl_worker.h"
 #include "pnl_poll.h"
+#include "pnl_cmd.h"
 #include "scr_shell.h"
 #include "panel_ui.h"
 
@@ -56,6 +57,7 @@ int panel_start(void) {
 
 int panel_services_start(void) {
     if (!s_lit) return -1;   /* a dark panel runs no worker or poller */
+    pnl_cmd_init();          /* Task 22: the panel's own command sessions (a dark panel allocates none) */
     pnl_worker_start();
     pnl_poll_start();
     if (panel_lock(2000)) {

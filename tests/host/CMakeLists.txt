@@ -143,3 +143,6 @@ hg_test(test_pnl_msg ${COMP}/panel_ui/pnl_msg.c ${COMP}/panel_svc/psvc_rc.c)
 
 # panel_ui's keyboard filters and MAC parser (Task 19): pure.
 hg_test(test_pnl_input ${COMP}/panel_ui/pnl_input.c)
+
+# panel_ui zone console model (Task 22): pure.
+hg_test(test_pnl_console ${COMP}/panel_ui/pnl_console.c)

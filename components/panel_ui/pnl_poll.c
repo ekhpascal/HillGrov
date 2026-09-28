@@ -10,6 +10,7 @@
 #include "psvc_state.h"
 #include "psvc_zcfg.h"
 #include "pnl_poll.h"
+#include "pnl_cmd.h"
 
 static const char *TAG = "pnl_poll";
 
@@ -110,6 +111,7 @@ static void poll_task(void *arg) {
     for (;;) {
         uint32_t t0 = now_ms();
         psvc_state_fill(&s_stage->st, PSVC_FILL_SKIP_WIFI);
+        s_stage->panel_cmd_quarantined = pnl_cmd_quarantined();
         portENTER_CRITICAL(&s_wifi_mux);
         s_stage->st.wifi = s_wifi;
         portEXIT_CRITICAL(&s_wifi_mux);

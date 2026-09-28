@@ -20,6 +20,7 @@ typedef struct {
 
 static lv_obj_t   *s_start, *s_ring, *s_def, *s_def_lbl, *s_master, *s_mtitle, *s_time, *s_sta, *s_ap, *s_heap;
 static lv_obj_t   *s_quar, *s_grid;
+static lv_obj_t   *s_panel_q;   /* Task 22: the panel's own quarantined command slots (A7) */
 static dash_card_t s_card[HG_MAX_ZONES];
 static int         s_ring_seen = -1;
 
@@ -90,6 +91,9 @@ static void dash_build(lv_obj_t *page, int arg) {
     s_heap   = pnl_label(s_master, "", &lv_font_montserrat_20, PNL_C_MUTED);
 
     s_quar = pnl_label(page, "", &lv_font_montserrat_20, PNL_C_WARN_TEXT);
+    s_panel_q = lv_label_create(lv_obj_get_parent(s_quar));
+    lv_obj_set_style_text_color(s_panel_q, lv_color_hex(PNL_C_WARN_TEXT), 0);
+    lv_obj_add_flag(s_panel_q, LV_OBJ_FLAG_HIDDEN);
 
     s_grid = lv_obj_create(page);
     lv_obj_remove_style_all(s_grid);
@@ -132,7 +136,7 @@ static void dash_update(const pnl_snap_t *sn) {
     pnl_obj_show(s_ring, up);
     pnl_obj_show(s_master, up);
     pnl_obj_show(s_grid, up);
-    if (!up) { pnl_obj_show(s_def, 0); pnl_obj_show(s_quar, 0); return; }
+    if (!up) { pnl_obj_show(s_def, 0); pnl_obj_show(s_quar, 0); pnl_obj_show(s_panel_q, 0); return; }
 
     const psvc_state_t *st = &sn->st;
     char buf[160], t[96];
@@ -177,6 +181,15 @@ static void dash_update(const pnl_snap_t *sn) {
     } else {
         pnl_obj_show(s_quar, 0);
     }
+    if (s_panel_q) {
+        if (sn->panel_cmd_quarantined) {
+            snprintf(buf, sizeof buf, "%u panel console slot(s) degraded", (unsigned)sn->panel_cmd_quarantined);
+            pnl_label_set_if_changed(s_panel_q, buf);
+            lv_obj_remove_flag(s_panel_q, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_panel_q, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 
     int k = 0;
     for (int i = 0; i < HG_MAX_ZONES; i++) {
@@ -210,6 +223,7 @@ static void dash_update(const pnl_snap_t *sn) {
 static void dash_teardown(void) {
     s_start = s_ring = s_def = s_def_lbl = s_master = s_mtitle = s_time = s_sta = s_ap = s_heap = NULL;
     s_quar = s_grid = NULL;
+    s_panel_q = NULL;
     memset(s_card, 0, sizeof s_card);
     s_ring_seen = -1;
 }
