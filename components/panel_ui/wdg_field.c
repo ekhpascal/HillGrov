@@ -60,7 +60,8 @@ static void show_value(wrow_t *w) {
     char v[PSVC_FEDIT_TEXT_MAX + 8], t[PSVC_FEDIT_TEXT_MAX + 32];
     pcfg_format(&w->spec, w->raw, v, sizeof v);
     if (w->spec.kind == PCFG_K_TEXT && v[0] == '\0') snprintf(v, sizeof v, "(empty)");
-    if (w->spec.unit && w->spec.unit[0]) snprintf(t, sizeof t, "%s %s", v, w->spec.unit);
+    int is_zero_text = w->spec.zero_text && strcmp(v, w->spec.zero_text) == 0;   /* LIGHT.DLI 0: "off", no unit */
+    if (w->spec.unit && w->spec.unit[0] && !is_zero_text) snprintf(t, sizeof t, "%s %s", v, w->spec.unit);
     else snprintf(t, sizeof t, "%s", v);
     lv_label_set_text(w->value, t);
 }
@@ -123,6 +124,8 @@ static void ev_seg(lv_event_t *e) {
     uint32_t sel = lv_buttonmatrix_get_selected_button(w->editor);
     if (sel >= w->spec.n_opts) return;                     /* LV_BUTTONMATRIX_BUTTON_NONE */
     lv_buttonmatrix_set_button_ctrl(w->editor, sel, LV_BUTTONMATRIX_CTRL_CHECKED);   /* never leave none checked */
+    int32_t cur;
+    if (pcfg_parse_raw(&w->spec, w->raw, &cur) == 0 && cur == (int32_t)sel) return;   /* re-tap: nothing changed */
     set_num(w, (int32_t)sel);
 }
 static void ev_hhmm(lv_event_t *e) {
@@ -271,7 +274,10 @@ lv_obj_t *wdg_field_create(lv_obj_t *parent, const pcfg_spec_t *s, uint8_t group
         w->map[s->n_opts] = "";
         w->editor = lv_buttonmatrix_create(right);
         lv_buttonmatrix_set_map(w->editor, w->map);
-        lv_buttonmatrix_set_button_ctrl_all(w->editor, LV_BUTTONMATRIX_CTRL_CHECKABLE);
+        /* CLICK_TRIG: VALUE_CHANGED on release, not on touch-down (a finger that starts a list scroll here loses the
+         * press and changes nothing); NO_REPEAT: holding a segment does not re-emit (LVGL 9.5 lv_buttonmatrix.c) */
+        lv_buttonmatrix_set_button_ctrl_all(w->editor, LV_BUTTONMATRIX_CTRL_CHECKABLE | LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
+                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
         lv_buttonmatrix_set_one_checked(w->editor, true);
         lv_obj_set_size(w->editor, s->n_opts * 130, 56);
         if (have && v >= 0 && v < s->n_opts) lv_buttonmatrix_set_button_ctrl(w->editor, (uint32_t)v, LV_BUTTONMATRIX_CTRL_CHECKED);

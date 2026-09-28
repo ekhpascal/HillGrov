@@ -22,7 +22,7 @@ lv_obj_t *wdg_field_create(lv_obj_t *parent, const pcfg_spec_t *s, uint8_t group
        READONLY formatted value, muted (the owner shows "hardware plane -- set at the zone console" once per group).
        NULL on bad args or no memory. */
 void wdg_field_set_error(lv_obj_t *row, const char *code);   /* outline PNL_C_OFFLINE + code text; NULL clears */
-void wdg_field_set_dirty(lv_obj_t *row, int dirty);          /* "* " marker (U+2022) before the label */
+void wdg_field_set_dirty(lv_obj_t *row, int dirty);          /* U+2022 bullet + space marker before the label */
 void wdg_field_set_secret_text(lv_obj_t *row, const char *plain);   /* the revealed value (NULL re-masks and wipes) */
 typedef int (*wdg_reveal_fn)(void *ctx, const hg_field_t *f, char *out, size_t cap);   /* 0 filled / -1 */
 void wdg_field_set_reveal(lv_obj_t *row, wdg_reveal_fn fn, void *ctx);                  /* SECRET rows: shows [Reveal] */
