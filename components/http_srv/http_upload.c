@@ -35,7 +35,7 @@ static int type_is_octet_stream(httpd_req_t *req) {
  * subscription, so the kick below is a silent no-op; the budget is the bound. */
 #define DRAIN_MAX_TIMEOUTS 3
 #define DRAIN_BUDGET_US    (10 * 1000 * 1000LL)
-#define DRAIN_BUF          1024u
+#define DRAIN_BUF          4096u   /* transient: malloc/free around the drain only, never static */
 
 static int drain_body(httpd_req_t *req, uint8_t *buf, size_t cap, size_t got) {
     int timeouts = 0;

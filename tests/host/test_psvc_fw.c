@@ -9,16 +9,18 @@
    sequence, so every refusal means the same thing in both faces. */
 
 /* ---- fake environment ---- */
-static int f_claim_ok, f_claimed, f_releases, f_fleet_idle, f_wdt_begins, f_wdt_open, f_zclaim_ok, f_zclaims, f_zreleases,
-           f_yields;
+static int f_claim_ok, f_claimed, f_releases, f_fleet_idle, f_wdt_begins, f_wdt_open, f_wdt_token, f_wdt_ends,
+           f_wdt_deletes, f_zclaim_ok, f_zclaims, f_zreleases, f_yields;
 static uint32_t f_heap;
 static int e_claim(void) { if (!f_claim_ok || f_claimed) return 0; f_claimed = 1; return 1; }
 static void e_release(void) { f_claimed = 0; f_releases++; }
 static int e_fleet_idle(void) { return f_fleet_idle; }
 static uint32_t e_heap(void) { return f_heap; }
-static int e_wdt_begin(void) { f_wdt_begins++; f_wdt_open++; return 1; }
+/* f_wdt_token is what wdt_begin answers: 1 = subscribed here (the core must hand it back so it is deleted), 0 = the task
+   was already subscribed by someone else (psvc_fw_env.c: esp_task_wdt_status() == ESP_OK), so nothing may be deleted. */
+static int e_wdt_begin(void) { f_wdt_begins++; if (f_wdt_token) f_wdt_open++; return f_wdt_token; }
 static void e_wdt_kick(void) {}
-static void e_wdt_end(int token) { if (token) f_wdt_open--; }
+static void e_wdt_end(int token) { f_wdt_ends++; if (token) { f_wdt_open--; f_wdt_deletes++; } }
 static void e_yield(void) { f_yields++; }
 static int e_zclaim(void) { f_zclaims++; return f_zclaim_ok ? 0 : -1; }
 static void e_zrelease(void) { f_zreleases++; }
@@ -77,7 +79,7 @@ static void mk_image(size_t len, uint16_t chip, const char *proj) {
 
 void setUp(void) {
     f_claim_ok = 1; f_claimed = 0; f_releases = 0; f_fleet_idle = 1; f_heap = 200000u;
-    f_wdt_begins = 0; f_wdt_open = 0; f_zclaim_ok = 1; f_zclaims = 0; f_zreleases = 0; f_yields = 0;
+    f_wdt_begins = 0; f_wdt_open = 0; f_wdt_token = 1; f_wdt_ends = 0; f_wdt_deletes = 0; f_zclaim_ok = 1; f_zclaims = 0; f_zreleases = 0; f_yields = 0;
     k_ready_rc = 0; k_ready_calls = 0; k_begin_rc = 0; k_begins = 0; k_write_rc = 0; k_writes = 0;
     k_finish_rc = 0; k_finishes = 0; k_cancels = 0; k_max = 1u << 20; k_written = 0;
     r_pos = 0; r_chunk = 4096; r_fail_at = 0; r_fail_rc = 0; r_again = 0;
@@ -279,6 +281,68 @@ static void test_yields_every_eight_blocks(void) {
     TEST_ASSERT_EQUAL_INT(1, f_yields);
 }
 
+/* ---- Task 30 follow-ups: zone_fw is released on every failure after its claim; identity is checked before the claim;
+   an already-subscribed task keeps its TWDT subscription ---- */
+
+static void test_zone_begin_failure_releases_zone_fw(void) {
+    mk_image(10000, HG_CHIP_ESP32, HG_PROJ_ZONE);
+    k_begin_rc = -1;
+    TEST_ASSERT_EQUAL_INT(PSVC_E_WRITE_FAILED, install(PSVC_FW_ZONE, NULL, NULL));
+    TEST_ASSERT_EQUAL_INT(1, f_zclaims);
+    TEST_ASSERT_EQUAL_INT(1, f_zreleases);
+    TEST_ASSERT_EQUAL_INT(0, k_cancels);                 /* begin never succeeded: nothing to undo */
+    assert_all_released();
+}
+
+static void test_zone_write_failure_releases_zone_fw(void) {
+    mk_image(10000, HG_CHIP_ESP32, HG_PROJ_ZONE);
+    k_write_rc = -1;
+    TEST_ASSERT_EQUAL_INT(PSVC_E_WRITE_FAILED, install(PSVC_FW_ZONE, NULL, NULL));
+    TEST_ASSERT_EQUAL_INT(1, f_zclaims);
+    TEST_ASSERT_EQUAL_INT(1, f_zreleases);
+    TEST_ASSERT_EQUAL_INT(1, k_cancels);
+    assert_all_released();
+}
+
+static void test_zone_finish_failure_releases_zone_fw(void) {
+    mk_image(10000, HG_CHIP_ESP32, HG_PROJ_ZONE);
+    k_finish_rc = -1;
+    TEST_ASSERT_EQUAL_INT(PSVC_E_WRITE_FAILED, install(PSVC_FW_ZONE, NULL, NULL));
+    TEST_ASSERT_EQUAL_INT(1, f_zclaims);
+    TEST_ASSERT_EQUAL_INT(1, f_zreleases);
+    TEST_ASSERT_EQUAL_INT(1, k_cancels);
+    assert_all_released();
+}
+
+static void test_zone_identity_refused_before_the_zone_claim(void) {
+    mk_image(10000, HG_CHIP_ESP32P4, HG_PROJ_MASTER);    /* a master image offered as a zone image */
+    TEST_ASSERT_EQUAL_INT(PSVC_E_IMAGE_MISMATCH, install(PSVC_FW_ZONE, NULL, NULL));
+    TEST_ASSERT_EQUAL_INT(0, f_zclaims);                 /* identity BEFORE claim: zone_fw is never touched */
+    TEST_ASSERT_EQUAL_INT(0, f_zreleases);
+    TEST_ASSERT_EQUAL_INT(0, k_begins);
+    assert_all_released();
+}
+
+static void test_already_subscribed_twdt_is_not_deleted(void) {
+    f_wdt_token = 0;                                     /* the calling task was already watched */
+    TEST_ASSERT_EQUAL_INT(PSVC_OK, install(PSVC_FW_MASTER, NULL, NULL));
+    TEST_ASSERT_EQUAL_INT(1, f_wdt_begins);
+    TEST_ASSERT_EQUAL_INT(1, f_wdt_ends);                /* the token is handed back exactly once... */
+    TEST_ASSERT_EQUAL_INT(0, f_wdt_deletes);             /* ...and a 0 token deletes nothing */
+    r_pos = 0;                                           /* rewind the reader: it answers AGAIN forever at its end */
+    k_write_rc = -1;                                     /* the failure path hands it back the same way */
+    TEST_ASSERT_EQUAL_INT(PSVC_E_WRITE_FAILED, install(PSVC_FW_MASTER, NULL, NULL));
+    TEST_ASSERT_EQUAL_INT(2, f_wdt_ends);
+    TEST_ASSERT_EQUAL_INT(0, f_wdt_deletes);
+    assert_all_released();
+}
+
+static void test_own_twdt_subscription_is_deleted(void) {
+    TEST_ASSERT_EQUAL_INT(PSVC_OK, install(PSVC_FW_MASTER, NULL, NULL));
+    TEST_ASSERT_EQUAL_INT(1, f_wdt_ends);
+    TEST_ASSERT_EQUAL_INT(1, f_wdt_deletes);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_master_ok);
@@ -302,5 +366,11 @@ int main(void) {
     RUN_TEST(test_progress_runs_and_ends_empty);
     RUN_TEST(test_again_is_retried);
     RUN_TEST(test_yields_every_eight_blocks);
+    RUN_TEST(test_zone_begin_failure_releases_zone_fw);
+    RUN_TEST(test_zone_write_failure_releases_zone_fw);
+    RUN_TEST(test_zone_finish_failure_releases_zone_fw);
+    RUN_TEST(test_zone_identity_refused_before_the_zone_claim);
+    RUN_TEST(test_already_subscribed_twdt_is_not_deleted);
+    RUN_TEST(test_own_twdt_subscription_is_deleted);
     return UNITY_END();
 }

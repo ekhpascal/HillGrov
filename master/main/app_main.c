@@ -132,6 +132,13 @@ void app_main(void) {
      * cmd_task_start(), is safe and keeps this block in one place. */
     core.forward = node_mgr_forward;
 
+    /* The fleet sequencer's gate (node_mgr.h:118-129): it refuses to start a fleet update while ANY firmware install --
+     * a web upload or the panel's microSD install -- holds panel_svc's one install claim. Installed on every boot, and
+     * before cmd_task_start() and http_srv_start(): from the first console line (SET FW ZONE) and the first web upload
+     * on, the pair always has exactly one loser. A plain pointer store (node_mgr_fleet.c), and psvc_fw_busy() reads a
+     * statically initialised spinlock, so neither needs node_mgr_start() or anything else to have run. */
+    node_mgr_set_fw_gate(psvc_fw_busy);
+
     /* Must run before cmd_task_start()/cli_start(): those hand the console
      * to a task that can immediately run a NET/TIME/WEB row, and the mutex
      * has to exist by then. A fix-round regression once placed this call
@@ -215,10 +222,6 @@ void app_main(void) {
     uint8_t mac[6];
     hg_app_get_mac(mac);
     ring_link_start(1, master_id_fn, mac);
-    /* The fleet sequencer's gate (node_mgr.h:118-129): it refuses to start a fleet update while ANY firmware install --
-     * a web upload or the panel's microSD install -- holds panel_svc's one install claim. Installed here on every boot,
-     * before node_mgr_start(), rather than from http_srv_start(), which never runs on a boot without the AP. */
-    node_mgr_set_fw_gate(psvc_fw_busy);
     node_mgr_start();
 #if CONFIG_IDF_TARGET_ESP32P4
     /* Panel worker + poller, once node_mgr owns the node table and BEFORE the
