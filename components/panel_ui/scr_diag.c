@@ -174,9 +174,11 @@ void scr_diag_build(lv_obj_t *parent) {
 
 static void home_cb(lv_event_t *e) { (void)e; pnl_nav_go(PNL_DEST_HOME, 0); }
 
-/* Opened as "Touch test" (not as HOME, which has the rail), the screen carries
- * its own Home button at the bottom centre, above "Reset targets": the shell's
- * top-left one would cover the top-left target (controller ruling C1). */
+/* Opened as Panel (until Task 26) or "Touch test", full width with no rail, the
+ * screen carries its own Home button at the bottom centre, above "Reset
+ * targets": the shell's top-left one would cover the top-left target
+ * (controller ruling C1). HOME is scr_home since Task 13, so the check below
+ * only guards a registry that points HOME back here. */
 static void diag_build(lv_obj_t *page, int arg) {
     (void)arg;
     scr_diag_build(page);

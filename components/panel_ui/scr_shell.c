@@ -24,14 +24,14 @@ typedef struct { const char *title; const pnl_screen_ops_t *ops; uint8_t rail; }
  * own line: HOME (Task 13), ZONE (14), ALARMS (16), CONFIG (20), SYSTEM (23),
  * PANEL (13, then 26), AUDIO (13). rail = shown with the left rail. */
 static const pnl_reg_t REG[PNL_DEST_COUNT] = {
-    [PNL_DEST_HOME]      = { "Home",       &PNL_SCR_DIAG,        1 },   /* Task 13: &PNL_SCR_HOME, rail 0 */
+    [PNL_DEST_HOME]      = { "Home",       &PNL_SCR_HOME,        0 },
     [PNL_DEST_DASHBOARD] = { "Dashboard",  &PNL_SCR_DASHBOARD,   1 },
     [PNL_DEST_ZONE]      = { "Zone",       &PNL_SCR_PLACEHOLDER, 1 },   /* Task 14 */
     [PNL_DEST_CONFIG]    = { "Config",     &PNL_SCR_PLACEHOLDER, 1 },   /* Task 20 */
     [PNL_DEST_ALARMS]    = { "Alarms",     &PNL_SCR_PLACEHOLDER, 1 },   /* Task 16 */
     [PNL_DEST_SYSTEM]    = { "System",     &PNL_SCR_PLACEHOLDER, 1 },   /* Task 23 */
-    [PNL_DEST_PANEL]     = { "Panel",      &PNL_SCR_PLACEHOLDER, 0 },   /* Task 13: &PNL_SCR_DIAG; Task 26 */
-    [PNL_DEST_AUDIO]     = { "Audio",      &PNL_SCR_PLACEHOLDER, 0 },   /* Task 13 */
+    [PNL_DEST_PANEL]     = { "Panel",      &PNL_SCR_DIAG,        0 },   /* the touch test until Task 26's &PNL_SCR_PANEL */
+    [PNL_DEST_AUDIO]     = { "Audio",      &PNL_SCR_AUDIO,       0 },
     [PNL_DEST_DIAG]      = { "Touch test", &PNL_SCR_DIAG,        0 },
 };
 
