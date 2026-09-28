@@ -84,10 +84,11 @@ static void picker_rebuild(const pnl_snap_t *s) {   /* s NULL (no snapshot yet):
     picker_check(s_ui.open_zone);
 }
 
-/* ---------- editor routing (Task 21 replaces this whole block to add the master) ---------- */
-static int master_enabled(void) { return 0; }
+/* ---------- editor routing: the master (zone 0) and zones 1..8 ---------- */
+static int master_enabled(void) { return 1; }
 static void close_editor(void) {
     if (s_ui.open_zone >= 1) cfg_zone_close();
+    else if (s_ui.open_zone == 0) cfg_master_close();
     s_ui.open_zone = -1;
     cfg_frame_forget();
 }
@@ -98,29 +99,30 @@ static void open_editor(int zone) {
     cfg_set_status("", 0);
     s_ui.open_zone = zone;
     picker_check(zone);
-    if (zone >= 1) { s_last_zone = zone; cfg_zone_open(s_ui.body, (uint8_t)zone); return; }
-    cfg_set_title("Config");
-    lv_obj_t *l = lv_label_create(s_ui.body);
-    lv_label_set_text(l, "No zones enrolled.");
+    s_last_zone = zone;
+    if (zone >= 1) cfg_zone_open(s_ui.body, (uint8_t)zone);
+    else cfg_master_open(s_ui.body);
 }
 static int pick_target(const pnl_snap_t *s, int arg) {
+    if (arg == 0) return 0;
     if (arg >= 1 && zone_used(s, arg)) return arg;
+    if (s_last_zone == 0) return 0;
     if (s_last_zone >= 1 && zone_used(s, s_last_zone)) return s_last_zone;
     for (int z = 1; z <= HG_MAX_ZONES; z++) if (zone_used(s, z)) return z;
-    return -1;
+    return 0;                                   /* nothing enrolled: the master is always there */
 }
 static void ev_pick(lv_event_t *e) {
     (void)e;
     uint32_t sel = lv_buttonmatrix_get_selected_button(s_ui.picker);
     if (sel >= (uint32_t)s_ui.n_pick) return;
     int z = s_ui.zone_of[sel];
-    if (z == 0 || z == s_ui.open_zone) { picker_check(s_ui.open_zone); return; }
+    if (z == s_ui.open_zone) { picker_check(z); return; }
     open_editor(z);
 }
 static void route_update(const pnl_snap_t *snap) {
-    if (s_ui.open_zone >= 1) { cfg_zone_update(snap); return; }
-    int z = pick_target(snap, -1);
-    if (z >= 1) open_editor(z);
+    if (s_ui.open_zone >= 1) cfg_zone_update(snap);
+    else if (s_ui.open_zone == 0) cfg_master_update(snap);
+    else open_editor(pick_target(snap, -1));
 }
 /* ---------- end of editor routing ---------- */
 

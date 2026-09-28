@@ -23,11 +23,12 @@ if("${CMAKE_PROJECT_NAME}" STREQUAL "hillgrow_master" AND "${panel_target}" STRE
     list(APPEND PANEL_SRCS "pnl_input.c" "wdg_field.c" "wdg_keyboard.c")   # Task 19: field widgets, keyboard
     list(APPEND PANEL_SRCS "scr_config.c" "cfg_zone.c")     # Task 20: the generated config editor (zones)
     list(APPEND PANEL_SRCS "cfg_frame.c")                   # the editor frame, split out of scr_config.c (file rule)
+    list(APPEND PANEL_SRCS "cfg_master.c")                  # Task 21: the master config editor
 endif()
 
 idf_component_register(SRCS ${PANEL_SRCS} INCLUDE_DIRS "."
     REQUIRES panel_svc hg_cfg hg_mcfg ring_proto cmd_core
-    PRIV_REQUIRES cmd_task node_mgr alarm_mgr wifi_mgr time_svc app_common state_snap notify board hg_blob
+    PRIV_REQUIRES cmd_task node_mgr alarm_mgr wifi_mgr time_svc time_core app_common state_snap notify board hg_blob
                   nvs_flash esp_timer esp_driver_ledc fatfs sdmmc esp_driver_sdmmc esp_app_format)
 # every name above exists in every app build (the early requirements pass evaluates this file for zone/rescue too);
 # panel_ui never requires http_srv -- the web's quarantine count reaches it through psvc_state (Task 9)

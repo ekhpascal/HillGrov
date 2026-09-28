@@ -110,9 +110,11 @@ int cfg_render_group(lv_obj_t *list, const cfg_view_t *v, uint8_t group, int idx
     }
     int nrows;
     const hg_field_t *tab = rows_of(v->table, &nrows);
-    for (int i = 0; i < nrows && s_fr.n_rows < CFG_ROWS_MAX; i++) {
+    int dropped = 0;
+    for (int i = 0; i < nrows; i++) {
         const hg_field_t *f = &tab[i];
         if (f->group != group) continue;
+        if (s_fr.n_rows >= CFG_ROWS_MAX) { dropped++; continue; }   /* a table grew past the frame: say so */
         pcfg_spec_t sp;
         (void)pcfg_spec_for(v->table, f, &sp);       /* -1 still yields a READONLY/TEXT spec that renders */
         if (v->table == PCFG_TABLE_ZONE) pcfg_tighten(&sp, f, idx, v->hw_or_null);
@@ -128,6 +130,8 @@ int cfg_render_group(lv_obj_t *list, const cfg_view_t *v, uint8_t group, int idx
         if (sp.kind == PCFG_K_SECRET && v->reveal) wdg_field_set_reveal(row, v->reveal, v->ctx);
         s_fr.rows[s_fr.n_rows++] = (cfg_row_t){ row, group, idx, f, sp.keyboard };
     }
+    if (dropped) ESP_LOGW(TAG, "%s has %d more rows than CFG_ROWS_MAX (%d): not shown", gname(v->table, group), dropped,
+                          CFG_ROWS_MAX);
     int64_t dt = esp_timer_get_time() - t0;
     if (dt > CFG_SLOW_US) ESP_LOGW(TAG, "render %s took %lld ms", gname(v->table, group), (long long)(dt / 1000));
     return s_fr.n_rows;

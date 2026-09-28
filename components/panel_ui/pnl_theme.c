@@ -1,3 +1,4 @@
+#include <string.h>
 #include "lvgl.h"
 #include "pnl_palette.h"
 #include "pnl_theme.h"
@@ -40,3 +41,59 @@ lv_obj_t *pnl_label(lv_obj_t *parent, const char *text, const lv_font_t *font, u
     lv_obj_set_style_text_color(l, lv_color_hex(hex), 0);
     return l;
 }
+
+/* ---------- the one confirm dialog ---------- */
+typedef struct { lv_obj_t *mb; pnl_confirm_fn on_ok, on_cancel; void *ctx; } confirm_t;
+static confirm_t s_cf;
+
+static confirm_t cf_detach(void) {          /* the box is no longer "open" from here on: callbacks may reopen */
+    confirm_t c = s_cf;
+    memset(&s_cf, 0, sizeof s_cf);
+    return c;
+}
+static void cf_ok(lv_event_t *e) {
+    (void)e;
+    confirm_t c = cf_detach();
+    if (!c.mb) return;
+    lv_msgbox_close_async(c.mb);            /* the event target lives inside the box: never delete synchronously */
+    if (c.on_ok) c.on_ok(c.ctx);
+}
+static void cf_cancel(lv_event_t *e) {
+    (void)e;
+    confirm_t c = cf_detach();
+    if (!c.mb) return;
+    lv_msgbox_close_async(c.mb);
+    if (c.on_cancel) c.on_cancel(c.ctx);
+}
+static void cf_deleted(lv_event_t *e) {     /* deleted by someone else: still exactly one callback */
+    if (!s_cf.mb || lv_event_get_target(e) != s_cf.mb) return;
+    confirm_t c = cf_detach();
+    if (c.on_cancel) c.on_cancel(c.ctx);
+}
+
+void pnl_confirm(const char *title, const char *text, const char *ok_label, pnl_confirm_fn on_ok,
+                 pnl_confirm_fn on_cancel, void *ctx) {
+    pnl_confirm_close();
+    lv_obj_t *mb = lv_msgbox_create(NULL);  /* NULL parent: modal on the top layer */
+    if (!mb) {                              /* no LVGL memory: never leave the caller waiting for a callback */
+        if (on_cancel) on_cancel(ctx);
+        return;
+    }
+    lv_msgbox_add_title(mb, title ? title : "");
+    lv_msgbox_add_text(mb, text ? text : "");
+    lv_obj_t *b = lv_msgbox_add_footer_button(mb, "Cancel");
+    if (b) lv_obj_add_event_cb(b, cf_cancel, LV_EVENT_CLICKED, NULL);
+    b = lv_msgbox_add_footer_button(mb, ok_label ? ok_label : "OK");
+    if (b) lv_obj_add_event_cb(b, cf_ok, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(mb, cf_deleted, LV_EVENT_DELETE, NULL);
+    s_cf = (confirm_t){ .mb = mb, .on_ok = on_ok, .on_cancel = on_cancel, .ctx = ctx };
+}
+
+void pnl_confirm_close(void) {
+    confirm_t c = cf_detach();
+    if (!c.mb) return;
+    lv_msgbox_close(c.mb);                  /* cf_deleted sees s_cf cleared and stays quiet */
+    if (c.on_cancel) c.on_cancel(c.ctx);
+}
+
+int pnl_confirm_is_open(void) { return s_cf.mb != NULL; }
