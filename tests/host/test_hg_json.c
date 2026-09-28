@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <string.h>
 #include "unity.h"
 #include "cJSON.h"
@@ -293,6 +294,36 @@ static void test_mcfg_merge_without_skip_refuses_blank_ap_pass(void) {
     TEST_ASSERT_EQUAL_STRING("WIFI.AP_PASS", err);
 }
 
+/* skip_blank_secrets touches secrets only: a blank non-secret (HOSTNAME, AP_SSID, STA_SSID) is applied or refused
+ * exactly as it is without the option -- same rc, same err path, same resulting struct. */
+static void test_mcfg_merge_opts_skip_leaves_blank_non_secrets_alone(void) {
+    static const char *const docs[] = {
+        "{\"SYS\":{\"HOSTNAME\":\"\"}}",
+        "{\"WIFI\":{\"AP_SSID\":\"\"}}",
+        "{\"WIFI\":{\"STA_SSID\":\"\"}}",
+    };
+    hg_json_set_tz_check(NULL);
+    for (size_t i = 0; i < sizeof docs / sizeof docs[0]; i++) {
+        hg_mcfg_t a, b;
+        hg_mcfg_defaults(&a);
+        hg_mcfg_defaults(&b);
+        snprintf(a.sta_ssid, sizeof a.sta_ssid, "house");       /* so a blank STA_SSID is a real change */
+        snprintf(b.sta_ssid, sizeof b.sta_ssid, "house");
+        char ea[64] = "", eb[64] = "";
+        int ra = hg_json_merge_mcfg_opts(&a, docs[i], 0, ea, sizeof ea);
+        int rb = hg_json_merge_mcfg_opts(&b, docs[i], 1, eb, sizeof eb);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(ra, rb, docs[i]);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(ea, eb, docs[i]);
+        TEST_ASSERT_EQUAL_MEMORY_MESSAGE(&a, &b, sizeof a, docs[i]);
+    }
+    hg_mcfg_t m;                                                 /* and the blank STA_SSID really is applied */
+    hg_mcfg_defaults(&m);
+    snprintf(m.sta_ssid, sizeof m.sta_ssid, "house");
+    char err[64] = "";
+    TEST_ASSERT_EQUAL_INT(0, hg_json_merge_mcfg_opts(&m, "{\"WIFI\":{\"STA_SSID\":\"\"}}", 1, err, sizeof err));
+    TEST_ASSERT_EQUAL_STRING("", m.sta_ssid);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_schema_has_all_groups_and_types);
@@ -309,5 +340,6 @@ int main(void) {
     RUN_TEST(test_mcfg_merge_opts_skip_blank_secrets);
     RUN_TEST(test_mcfg_merge_opts_skip_keeps_a_real_secret);
     RUN_TEST(test_mcfg_merge_without_skip_refuses_blank_ap_pass);
+    RUN_TEST(test_mcfg_merge_opts_skip_leaves_blank_non_secrets_alone);
     return UNITY_END();
 }

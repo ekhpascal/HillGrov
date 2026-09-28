@@ -200,8 +200,10 @@ void cfg_master_update(const pnl_snap_t *s) {
     if (s_rerender_due && !wdg_keyboard_is_open()) { s_rerender_due = 0; cfg_frame_rerender(); }
 }
 
-/* Task 33: an import from the card was applied -- re-read the copy, as after a Save (the web refetches at once). */
+/* Task 33: an import from the card was applied -- the web's cfgApplyPut: the unsaved edits are discarded (pending
+ * passwords included; app.js:1583) and the copy is re-read at once. */
 void cfg_master_imported(void) {
+    if (s_medits) pcfg_edits_wipe(s_medits);
     if (!s_m) return;
     take_copy();
     if (s_open) s_rerender_due = 1;                  /* shown at the next update: never under an open keyboard */

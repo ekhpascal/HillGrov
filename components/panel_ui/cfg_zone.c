@@ -323,10 +323,14 @@ void cfg_zone_update(const pnl_snap_t *s) {
     if (s_rerender_due && !wdg_keyboard_is_open()) { s_rerender_due = 0; cfg_frame_rerender(); }
 }
 
-/* Task 33: an import from the card was queued for this zone (psvc_zone_cfg_edit OK) -- the Save outcomes: follow
- * cfg_busy / cfg_sync to "Landed on the zone.", and refetch the document 3 s on (the web's cfgApplyPut). */
+/* Task 33: an import from the card was queued for this zone (psvc_zone_cfg_edit OK) -- the web's cfgApplyPut: that
+ * zone's unsaved edits are discarded (open or not), and an open editor follows cfg_busy / cfg_sync to "Landed on the
+ * zone." and refetches the document 3 s on. */
 void cfg_zone_imported(uint8_t zone) {
+    if (zone < 1 || zone > HG_MAX_ZONES) return;
+    if (s_edits[zone - 1]) pcfg_edits_wipe(s_edits[zone - 1]);   /* the web: cfgDirty[id] = {} on success (app.js:1583) */
     if (s_state != ZS_LOADED || zone != s_zone) return;   /* another zone, or not loaded: its next open loads fresh */
+    s_rerender_due = 1;                           /* the dropped edits lose their dots now, not only at the reload */
     s_watch = 1;
     s_watch_seq = pnl_poll_seq();
     arm_reload();

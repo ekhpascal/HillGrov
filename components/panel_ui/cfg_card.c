@@ -8,13 +8,15 @@
  *   - Import: that file, at most 4096 bytes (the web's PUT body cap; larger is refused like its 413), through the same
  *     edit paths as the web PUT: psvc_zone_cfg_edit(psvc_zone_json_fn) -- the "hw" section only becomes warnings, the
  *     hardware plane is never written -- or psvc_mcfg_edit(psvc_mcfg_json_import_fn), where a blank secret means
- *     unchanged (the web client's rule, moved into hg_json). Same validation, same outcomes as Save.
+ *     unchanged (the web client's rule, moved into hg_json). Same validation, same outcomes as Save; on success that
+ *     editor's unsaved edits are discarded, as the web's cfgApplyPut does (app.js:1583), and the confirm says so.
  * Card rules (pnl_sd.h): every card operation runs on the worker, mount -> use -> unmount, each FILE* is closed before
  * the unmount, FAT32 only, never formatted. Nothing here logs: a file's contents never reach a log, and the document
  * buffer is wiped (pnl_zero) after every job, since an import file may carry passwords.
  * THE RULE: a done() touches a card button only through its pointer, which the button's own LV_EVENT_DELETE clears
  * (and cfg_card_teardown() drops when the editor closes); the outcome goes to the status line while the Config screen
- * that queued it is still up, and is kept for the next editor frame otherwise (cfg_card_wipe drops it). */
+ * that queued it is still up or a card bar is live on a rebuilt one, and is kept for the next editor frame otherwise
+ * (cfg_card_wipe drops it). */
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -163,7 +165,9 @@ static void card_done(pnl_job_t *j) {
     char who[24] = "";
     if (a.zone == 0) snprintf(who, sizeof who, "Master: ");
     else snprintf(who, sizeof who, "Zone %u: ", (unsigned)a.zone);
-    if (j->screen_gen == pnl_screen_gen()) {    /* the Config screen that queued it is still up (status NULL-safe) */
+    /* Shown now while the Config screen that queued it is still up, or while a card bar is live on a rebuilt one:
+     * teardown NULLs the old pointers, so a non-NULL s_imp_btn is the current screen's bar (status NULL-safe). */
+    if (j->screen_gen == pnl_screen_gen() || s_imp_btn) {
         char t[CARD_KEPT_MAX];
         snprintf(t, sizeof t, "%s%s", (s_imp_btn && s_zone == a.zone) ? "" : who, out);   /* another editor: say whose */
         s_kept[0] = '\0';
@@ -205,9 +209,9 @@ void cfg_card_import(uint8_t zone) {
     card_path(zone, path, sizeof path);
     if (zone == 0)
         snprintf(t, sizeof t, "Apply %s to the master? It may change Wi-Fi: changing the AP drops every phone connected "
-                 "to it.", path + strlen(PNL_SD_MOUNT));
+                 "to it. Unsaved edits in this editor are discarded.", path + strlen(PNL_SD_MOUNT));
     else
-        snprintf(t, sizeof t, "Apply %s to zone %u? Unsaved edits on this screen are not part of it.",
+        snprintf(t, sizeof t, "Apply %s to zone %u? Unsaved edits in this editor are discarded.",
                  path + strlen(PNL_SD_MOUNT), (unsigned)zone);
     s_confirming = 1;                           /* before the call: on_cancel may run inside it (pnl_theme.h) */
     pnl_confirm("Import from card?", t, "Import", import_go, import_cancel, (void *)(intptr_t)zone);

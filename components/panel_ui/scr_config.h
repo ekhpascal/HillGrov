@@ -60,9 +60,10 @@ void cfg_card_bar(lv_obj_t *bar);     /* [LVGL] adds [Export to card] [Import fr
 void cfg_card_set_zone(uint8_t zone); /* [LVGL] the zone the editor shows (0 = Master) */
 void cfg_card_teardown(void);         /* [LVGL] drop the two button pointers; dismiss an open import confirm */
 void cfg_card_wipe(void);             /* [LVGL] the idle wipe: drop a kept export/import outcome */
-void cfg_zone_imported(uint8_t zone); /* [LVGL] an import landed: that zone's open editor refetches and follows the push,
-                                         exactly as after a Save (edits on screen stay dirty) */
-void cfg_master_imported(void);       /* [LVGL] an import landed: the master editor re-reads its copy */
+void cfg_zone_imported(uint8_t zone); /* [LVGL] an import landed: that zone's unsaved edits are discarded (as the web);
+                                         its open editor refetches and follows the push, exactly as after a Save */
+void cfg_master_imported(void);       /* [LVGL] an import landed: the master's unsaved edits are discarded (as the web)
+                                         and the editor re-reads its copy */
 
 #ifdef __cplusplus
 }
