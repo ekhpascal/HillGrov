@@ -15,8 +15,8 @@
 
 #define HG_GPIO_RING_RX    29   /* header P3; ring UART2 -- NOT 18/19 (C6 SDIO) */
 #define HG_GPIO_RING_TX    28
-#define HG_GPIO_I2C_SDA    8    /* the board's own I2C header, level-shifted */
-#define HG_GPIO_I2C_SCL    7
+#define HG_GPIO_I2C_SDA    7    /* the board's own I2C header, level-shifted; = BSP_I2C_SDA (GT911 proven) */
+#define HG_GPIO_I2C_SCL    8    /* = BSP_I2C_SCL; any future P4 I2C user shares bsp_i2c_get_handle() (D6) */
 /* Placeholders until the migration settles them against the enclosure: the P4
  * board has its own BOOT/RESET buttons and a STAT LED whose nets are not in the
  * schematic text, and the PCA9685 OE line is an external-wiring choice. All

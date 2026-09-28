@@ -24,7 +24,7 @@ include_directories(
   ${COMP}/zone_cmds ${COMP}/rescue_handover ${COMP}/ring_proto ${COMP}/node_store ${COMP}/ota_trial
   ${COMP}/master_cmds ${COMP}/node_mgr ${COMP}/ring_link ${COMP}/web_auth ${COMP}/hg_json ${COMP}/alarm_mgr
   ${COMP}/time_core ${COMP}/wifi_mgr ${COMP}/state_snap ${COMP}/http_srv ${COMP}/mcfg_ops ${COMP}/cp_ota
-  ${COMP}/panel_svc ${COMP}/time_svc
+  ${COMP}/panel_svc ${COMP}/time_svc ${COMP}/panel_ui
   ${CMAKE_CURRENT_SOURCE_DIR}/fakes)
 enable_testing()
 function(hg_test NAME)
@@ -116,3 +116,7 @@ target_link_libraries(test_psvc_mcfg cjson_host)
 hg_test(test_psvc_zcfg ${COMP}/panel_svc/psvc_zcfg.c ${COMP}/panel_svc/psvc_rc.c ${HG_CFG_SRC}
         ${COMP}/hg_json/hg_json_cfg.c ${COMP}/hg_mcfg/hg_mcfg.c ${COMP}/hg_blob/hg_blob.c fakes/fake_nmgr_cfg_api.c)
 target_link_libraries(test_psvc_zcfg cjson_host)
+
+# panel_ui's PURE helpers only (panel plan Global Constraints, "Pure files"):
+# they include no lvgl.h / bsp / esp_* / freertos header, so they compile here.
+hg_test(test_pnl_touch ${COMP}/panel_ui/pnl_touch.c)

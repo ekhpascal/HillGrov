@@ -15,13 +15,13 @@
 set(PANEL_SRCS "")
 idf_build_get_property(panel_target IDF_TARGET)
 if("${CMAKE_PROJECT_NAME}" STREQUAL "hillgrow_master" AND "${panel_target}" STREQUAL "esp32p4")
-    set(PANEL_SRCS "panel_ui.c")
+    set(PANEL_SRCS "panel_ui.c" "panel_hw.c" "panel_lock.c" "pnl_touch.c" "pnl_theme.c" "scr_diag.c")
 endif()
 
 idf_component_register(SRCS ${PANEL_SRCS} INCLUDE_DIRS "."
     REQUIRES panel_svc hg_cfg hg_mcfg ring_proto cmd_core
     PRIV_REQUIRES cmd_task node_mgr alarm_mgr wifi_mgr time_svc app_common state_snap notify board hg_blob
-                  nvs_flash esp_timer esp_driver_ledc fatfs sdmmc esp_driver_sdmmc)
+                  nvs_flash esp_timer esp_driver_ledc fatfs sdmmc esp_driver_sdmmc esp_app_format)
 # every name above exists in every app build (the early requirements pass evaluates this file for zone/rescue too);
 # panel_ui never requires http_srv -- the web's quarantine count reaches it through psvc_state (Task 9)
 if(PANEL_SRCS)

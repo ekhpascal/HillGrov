@@ -69,7 +69,7 @@ Onboard and therefore no longer external: 7" touch display · RTC + coin cell ·
 | 7" LCD | backlight **32**, reset **33** (+ MIPI-DSI lanes) | BSP header `BSP_LCD_BACKLIGHT` / `BSP_LCD_RST` |
 | RS-485 transceiver | TXD **26**, RXD **27** | schematic (`485_TXD`/`485_RXD` into the THVD1406 RO/DI) |
 | CAN transceiver | TX **22**, RX **21** | schematic (`CANTX`/`CANRX` into the TJA1051) |
-| I²C header | SCL **7**, SDA **8** (level-shifted to `D_SCL`/`D_SDA`) | schematic |
+| I²C header | SCL **8**, SDA **7** (level-shifted to `D_SCL`/`D_SDA`) | BSP `BSP_I2C_SCL`/`BSP_I2C_SDA`, proven by the working GT911; the earlier SCL 7 / SDA 8 was swapped |
 | UART0 console / flashing | TX **37**, RX **38** | boot log (`GPIO 38 and 37 are used as console UART I/O pins`) |
 | Broken-out GPIO header P3 | 3V3, GND, **IO2–5, IO28–31, IO34, IO36** | silkscreen |
 | Broken-out GPIO header P1 | BAT, GND, 3V3, VO4, GND, **IO46–52** | silkscreen |
