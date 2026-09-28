@@ -1,6 +1,7 @@
 #include <string.h>
 #include "cJSON.h"
-#include "node_mgr.h"
+#include "node_mgr.h"     /* HG_MAX_ZONES */
+#include "psvc_fleet.h"
 #include "http_srv_internal.h"
 
 /* The fleet update button: POST /api/fleet starts SP3's fleet OTA sequencer
@@ -32,11 +33,11 @@ esp_err_t h_fleet_post(httpd_req_t *req) {
      * require the two to agree, i.e. an integral value. */
     int zone_ok = cJSON_IsNumber(zone) && zone->valuedouble == (double)zone->valueint;
 
-    int rc;
+    psvc_rc_t rc;
     if (cJSON_IsTrue(all)) {
-        rc = node_mgr_fw_all();
+        rc = psvc_fleet_all();
     } else if (zone_ok && zone->valueint >= 1 && zone->valueint <= HG_MAX_ZONES) {
-        rc = node_mgr_fw_zone((uint8_t)zone->valueint);
+        rc = psvc_fleet_zone((uint8_t)zone->valueint);
     } else {
         cJSON_Delete(root);
         http_srv_error(req, 400, "INVALID", NULL);
@@ -44,10 +45,10 @@ esp_err_t h_fleet_post(httpd_req_t *req) {
     }
     cJSON_Delete(root);
 
-    if (rc != 0) {
-        /* fleet_start: -2 = a sequence is already running, -1 = bad zone or
-         * no assigned zones (master_cmds maps the same pair). */
-        http_srv_error(req, 409, rc == -2 ? "FLEET_BUSY" : "FLEET_REJECTED", NULL);
+    if (rc != PSVC_OK) {
+        /* psvc_rc_from_fleet: -2 = a sequence is already running (or an upload holds the gate) -> FLEET_BUSY,
+         * any other refusal -> FLEET_REJECTED -- unchanged tokens, now shared with the panel. */
+        http_srv_error(req, 409, psvc_rc_token(rc), NULL);
         return http_srv_done(req, 1);
     }
     http_srv_json(req, 202, "{\"queued\":true}");
@@ -55,8 +56,9 @@ esp_err_t h_fleet_post(httpd_req_t *req) {
 }
 
 esp_err_t h_fleet_delete(httpd_req_t *req) {
-    if (node_mgr_fw_abort() != 0) {
-        http_srv_error(req, 409, "NOT_ACTIVE", NULL);
+    psvc_rc_t rc = psvc_fleet_abort();
+    if (rc != PSVC_OK) {
+        http_srv_error(req, 409, psvc_rc_token(rc), NULL);   /* NOT_ACTIVE */
         return http_srv_done(req, 0);
     }
     http_srv_json(req, 200, "{\"ok\":true}");

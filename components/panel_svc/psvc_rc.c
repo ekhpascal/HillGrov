@@ -33,3 +33,9 @@ int psvc_rc_to_net_legacy(psvc_rc_t rc) {
         return -3;
     }
 }
+
+psvc_rc_t psvc_rc_from_fleet(int rc, int is_abort) {
+    if (rc == 0) return PSVC_OK;
+    if (is_abort) return PSVC_E_NOT_ACTIVE;
+    return rc == -2 ? PSVC_E_FLEET_BUSY : PSVC_E_FLEET_REJECTED;
+}

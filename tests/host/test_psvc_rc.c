@@ -7,6 +7,7 @@
 #include <string.h>
 #include "unity.h"
 #include "psvc_rc.h"
+#include "psvc_fleet.h"
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -54,9 +55,65 @@ static void test_legacy_mapping_for_every_value(void) {
     }
 }
 
+/* node_mgr stubs: psvc_fleet.c is linked here so its range check and wiring are pinned, not just the mapping. */
+static int     g_zone_rc, g_all_rc, g_abort_rc, g_zone_calls;
+static uint8_t g_zone_last;
+int node_mgr_fw_zone(uint8_t zone) { g_zone_calls++; g_zone_last = zone; return g_zone_rc; }
+int node_mgr_fw_all(void)          { return g_all_rc; }
+int node_mgr_fw_abort(void)        { return g_abort_rc; }
+
+static void test_fleet_start_codes(void) {
+    TEST_ASSERT_EQUAL_INT(PSVC_OK, psvc_rc_from_fleet(0, 0));
+    TEST_ASSERT_EQUAL_INT(PSVC_E_FLEET_BUSY, psvc_rc_from_fleet(-2, 0));
+    TEST_ASSERT_EQUAL_INT(PSVC_E_FLEET_REJECTED, psvc_rc_from_fleet(-1, 0));
+    TEST_ASSERT_EQUAL_INT(PSVC_E_FLEET_REJECTED, psvc_rc_from_fleet(-7, 0));   /* http_fleet.c: anything but -2 */
+}
+
+static void test_fleet_abort_codes(void) {
+    TEST_ASSERT_EQUAL_INT(PSVC_OK, psvc_rc_from_fleet(0, 1));
+    TEST_ASSERT_EQUAL_INT(PSVC_E_NOT_ACTIVE, psvc_rc_from_fleet(-1, 1));
+    TEST_ASSERT_EQUAL_INT(PSVC_E_NOT_ACTIVE, psvc_rc_from_fleet(-2, 1));
+}
+
+static void test_fleet_tokens_are_the_webs(void) {
+    TEST_ASSERT_EQUAL_STRING("FLEET_BUSY", psvc_rc_token(psvc_rc_from_fleet(-2, 0)));
+    TEST_ASSERT_EQUAL_STRING("FLEET_REJECTED", psvc_rc_token(psvc_rc_from_fleet(-1, 0)));
+    TEST_ASSERT_EQUAL_STRING("NOT_ACTIVE", psvc_rc_token(psvc_rc_from_fleet(-1, 1)));
+}
+
+static void test_fleet_zone_range_and_wiring(void) {
+    g_zone_calls = 0; g_zone_rc = 0;
+    TEST_ASSERT_EQUAL_INT(PSVC_E_INVALID, psvc_fleet_zone(0));
+    TEST_ASSERT_EQUAL_INT(PSVC_E_INVALID, psvc_fleet_zone(9));
+    TEST_ASSERT_EQUAL_INT(0, g_zone_calls);                               /* refused before node_mgr is asked */
+    TEST_ASSERT_EQUAL_INT(PSVC_OK, psvc_fleet_zone(2));
+    TEST_ASSERT_EQUAL_UINT8(2, g_zone_last);
+    g_zone_rc = -2;
+    TEST_ASSERT_EQUAL_INT(PSVC_E_FLEET_BUSY, psvc_fleet_zone(8));
+    g_all_rc = -1;
+    TEST_ASSERT_EQUAL_INT(PSVC_E_FLEET_REJECTED, psvc_fleet_all());
+    g_abort_rc = -1;
+    TEST_ASSERT_EQUAL_INT(PSVC_E_NOT_ACTIVE, psvc_fleet_abort());
+    g_abort_rc = 0;
+    TEST_ASSERT_EQUAL_INT(PSVC_OK, psvc_fleet_abort());
+}
+
+static void test_fleet_idle(void) {
+    TEST_ASSERT_EQUAL_INT(1, psvc_fleet_idle("IDLE"));
+    TEST_ASSERT_EQUAL_INT(0, psvc_fleet_idle("2 UPDATING"));
+    TEST_ASSERT_EQUAL_INT(0, psvc_fleet_idle("idle"));      /* the token is exact (fleet_seq.c) */
+    TEST_ASSERT_EQUAL_INT(0, psvc_fleet_idle(""));
+    TEST_ASSERT_EQUAL_INT(0, psvc_fleet_idle(NULL));
+}
+
 int main(void) { UNITY_BEGIN();
     RUN_TEST(test_count_matches_the_token_list);
     RUN_TEST(test_every_value_has_its_token);
     RUN_TEST(test_out_of_range_is_internal);
     RUN_TEST(test_legacy_mapping_for_every_value);
+    RUN_TEST(test_fleet_start_codes);
+    RUN_TEST(test_fleet_abort_codes);
+    RUN_TEST(test_fleet_tokens_are_the_webs);
+    RUN_TEST(test_fleet_zone_range_and_wiring);
+    RUN_TEST(test_fleet_idle);
     return UNITY_END(); }

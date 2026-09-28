@@ -13,7 +13,7 @@ static const sys_row_t SYS_ROWS[PNL_SYS_SEC_COUNT] = {
     [PNL_SYS_SEC_WIFI]     = { "Wi-Fi",    &PNL_SYS_WIFI },
     [PNL_SYS_SEC_TIME]     = { "Time",     &PNL_SYS_TIME },
     [PNL_SYS_SEC_PASSWORD] = { "Password", &PNL_SYS_PASSWORD },
-    [PNL_SYS_SEC_FLEET]    = { "Fleet",    &PNL_SYS_PLACEHOLDER },
+    [PNL_SYS_SEC_FLEET]    = { "Fleet",    &PNL_SYS_FLEET },
     [PNL_SYS_SEC_FIRMWARE] = { "Firmware", &PNL_SYS_PLACEHOLDER },
 };
 
@@ -21,7 +21,7 @@ static lv_obj_t   *s_body, *s_tab[PNL_SYS_SEC_COUNT];
 static int         s_cur = -1, s_last = PNL_SYS_SEC_WIFI;
 static const char *s_cur_title = "";
 
-/* ---- the placeholder section (Tasks 25/32 replace it row by row) ---- */
+/* ---- the placeholder section (Task 32 replaces the last row) ---- */
 static void ph_build(lv_obj_t *parent) {
     lv_obj_t *c = pnl_kit_card(parent, s_cur_title);
     lv_obj_t *m = pnl_kit_msg(c);

@@ -105,7 +105,7 @@ hg_test(test_cp_ota ${COMP}/cp_ota/cp_ota.c ${COMP}/hg_blob/hg_blob.c)
 # psvc_rc.c is pure; psvc_mcfg.c runs over the REAL mcfg_ops.c, hg_mcfg
 # validation, hg_json merge and time_core tz_check -- only the NVS store
 # (fake_mcfg_store.c) and the two radio/time apply hooks (fake_apply.c) are faked.
-hg_test(test_psvc_rc ${COMP}/panel_svc/psvc_rc.c)
+hg_test(test_psvc_rc ${COMP}/panel_svc/psvc_rc.c ${COMP}/panel_svc/psvc_fleet.c)
 hg_test(test_psvc_mcfg ${COMP}/panel_svc/psvc_mcfg.c ${COMP}/panel_svc/psvc_rc.c ${COMP}/mcfg_ops/mcfg_ops.c
         ${COMP}/hg_mcfg/hg_mcfg.c ${HG_CFG_SRC} ${COMP}/hg_blob/hg_blob.c ${COMP}/hg_json/hg_json_mcfg.c
         ${COMP}/time_core/time_core.c fakes/fake_mcfg_store.c fakes/fake_apply.c)

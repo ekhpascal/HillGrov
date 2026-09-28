@@ -7,7 +7,7 @@
 set(PSVC_SRCS "")
 if("${CMAKE_PROJECT_NAME}" STREQUAL "hillgrow_master")
     list(APPEND PSVC_SRCS "psvc_rc.c" "psvc_mcfg.c" "psvc_net.c" "psvc_zcfg.c"
-                          "psvc_state.c" "psvc_state_conv.c" "psvc_fw.c")
+                          "psvc_state.c" "psvc_state_conv.c" "psvc_fw.c" "psvc_fleet.c")
 endif()
 
 idf_component_register(

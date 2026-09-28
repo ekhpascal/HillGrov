@@ -32,6 +32,12 @@ const char *psvc_rc_token(psvc_rc_t rc);
  * stored, retry" -- lock contention stays -2 there, D10); anything else -3. */
 int psvc_rc_to_net_legacy(psvc_rc_t rc);
 
+/* The node_mgr fleet sequencer's return codes (node_mgr_fw_zone/all/abort) in this vocabulary, the rule
+ * http_fleet.c has always answered with, now shared so both faces say the same thing. */
+psvc_rc_t psvc_rc_from_fleet(int rc, int is_abort);   /* 0 OK; abort: -1 NOT_ACTIVE; start: -2 FLEET_BUSY, -1 FLEET_REJECTED
+                                                          (every other non-zero start rc is FLEET_REJECTED, every other
+                                                          non-zero abort rc NOT_ACTIVE -- http_fleet.c's rule) */
+
 #ifdef __cplusplus
 }
 #endif
