@@ -26,21 +26,29 @@ static sdmmc_card_t         *s_card;       /* non-NULL exactly while mounted */
 static sd_pwr_ctrl_handle_t  s_pwr;
 static volatile uint8_t      s_in_use;     /* pnl_sd_mounted(): slot 0 is (or may be) on the controller */
 
-/* 1 once this layer created the controller itself (esp_hosted had not, this boot). The legacy driver's
- * sdmmc_host_deinit_slot() then DELETES it at every slot-0 teardown -- slot 0 is its only slot -- but never clears its
- * static s_ctlr, so a later no-op init would add a slot to freed memory. While this is 1, every mount creates the
- * controller afresh. */
+/* 1 once this layer created the controller itself (esp_hosted had not, this boot); never cleared again. The legacy
+ * driver's sdmmc_host_deinit_slot() DELETES our controller at every slot-0 teardown -- slot 0 is its only slot -- but
+ * never clears its static s_ctlr, so a no-op init after that would add a slot to freed memory. So while this is 1, every
+ * mount goes through the real sdmmc_host_init(), for the rest of the boot. */
 static uint8_t s_ctlr_ours;
+
+/* 1 after sdmmc_host_init() failed with anything but ESP_ERR_NOT_FOUND. A create that fails after claiming the
+ * peripheral leaves the claim held by a half-built controller and the legacy s_ctlr pointing at the previous (freed)
+ * one; every later attempt would then see NOT_FOUND and add a slot to freed memory. Latched: no mount until reboot. */
+static uint8_t s_unavailable;
 
 static esp_err_t ctlr_init(void) {
     if (!s_ctlr_ours) return ESP_OK;              /* esp_hosted created the one controller: nothing to do */
     esp_err_t e = sdmmc_host_init();
+    if (e == ESP_OK) return ESP_OK;
     if (e == ESP_ERR_NOT_FOUND) {
-        /* the controller is claimed again -- esp_hosted came back (recovery) or ours outlived a failed slot add: it is
-         * live, and the legacy s_ctlr points at it, so use it as it is */
-        s_ctlr_ours = 0;
+        /* the controller is claimed already -- esp_hosted came back (recovery) or ours outlived a failed slot add: it is
+         * live, and the legacy s_ctlr points at it, so use it as it is. s_ctlr_ours stays 1: if this one is ours, the
+         * teardown deletes it and the next mount must create it again. */
         return ESP_OK;
     }
+    s_unavailable = 1;
+    ESP_LOGE(TAG, "SDMMC controller create failed (%s) -- microSD unavailable until reboot", esp_err_to_name(e));
     return e;
 }
 
@@ -64,12 +72,14 @@ const char *pnl_sd_rc_text(pnl_sd_rc_t rc) {
     case PNL_SD_NO_CARD: return "No microSD card found -- insert a FAT32 card";
     case PNL_SD_NO_FS:   return "Card is not FAT32 -- exFAT cards (64 GB and up) must be reformatted to FAT32";
     case PNL_SD_BUSY:    return "microSD busy -- try again";
+    case PNL_SD_UNAVAILABLE: return "microSD unavailable until the master reboots";
     default:             return "microSD read failed";
     }
 }
 
 pnl_sd_rc_t pnl_sd_mount(void) {
     if (pnl_on_lvgl_task()) { ESP_LOGE(TAG, "pnl_sd_mount called on the LVGL task -- refused"); return PNL_SD_IO; }
+    if (s_unavailable) return PNL_SD_UNAVAILABLE;
     if (s_in_use) return PNL_SD_BUSY;
     s_in_use = 1;                           /* before the slot add: D20's refusal covers the whole attempt */
     sd_pwr_ctrl_ldo_config_t ldo = { .ldo_chan_id = SD_LDO_CHAN };
@@ -106,7 +116,7 @@ pnl_sd_rc_t pnl_sd_mount(void) {
         s_card = NULL;
         s_in_use = 0;
         ESP_LOGW(TAG, "microSD mount failed: %s", esp_err_to_name(e));
-        return map_err(e);
+        return s_unavailable ? PNL_SD_UNAVAILABLE : map_err(e);
     }
     return PNL_SD_OK;
 }
@@ -114,7 +124,13 @@ pnl_sd_rc_t pnl_sd_mount(void) {
 void pnl_sd_unmount(void) {
     if (pnl_on_lvgl_task()) { ESP_LOGE(TAG, "pnl_sd_unmount called on the LVGL task -- refused"); return; }
     if (!s_card) return;
+    /* While esp_hosted holds slot 1, the slot-0 teardown's controller delete is refused with an E line from SD_HOST
+     * ("host controller with slot registered") that sdmmc_host_deinit_slot() then maps to ESP_OK -- benign, but UART0 is
+     * the machine-parsed CLI. Muted for this one call only, then the previous level is restored. */
+    const esp_log_level_t sd_host_lvl = esp_log_level_get("SD_HOST");
+    esp_log_level_set("SD_HOST", ESP_LOG_NONE);
     esp_err_t e = esp_vfs_fat_sdcard_unmount(PNL_SD_MOUNT, s_card);
+    esp_log_level_set("SD_HOST", sd_host_lvl);
     if (e != ESP_OK) ESP_LOGW(TAG, "microSD unmount: %s", esp_err_to_name(e));
     if (s_pwr) { sd_pwr_ctrl_del_on_chip_ldo(s_pwr); s_pwr = NULL; }   /* the BSP's unmount never does this */
     s_card = NULL;

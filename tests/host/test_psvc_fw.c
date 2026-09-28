@@ -60,6 +60,7 @@ static int rd(void *src, void *buf, size_t cap) {
     }
     if (r_again > 0) { r_again--; return PSVC_FW_SRC_AGAIN; }
     if (r_fail_rc && r_pos >= r_fail_at) return r_fail_rc;
+    if (r_pos >= g_len) return PSVC_FW_SRC_FAILED;   /* asked past the image: a core regression fails, never hangs */
     size_t n = cap < r_chunk ? cap : r_chunk;
     if (n > g_len - r_pos) n = g_len - r_pos;
     memcpy(buf, g_img + r_pos, n);
