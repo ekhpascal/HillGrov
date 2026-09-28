@@ -3,6 +3,7 @@
 #include "esp_http_server.h"
 #include "cmd_core.h"
 #include "hg_mcfg.h"
+#include "http_auth.h"   /* the web-session store (components/http_auth) -- every http_auth_* entry point */
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,16 +30,6 @@ extern "C" {
  * boot continues either way, but ota_trial_drivers_ok() must not be called
  * after a failure (spec 3.10: the drivers criterion is AP netif + httpd). */
 int  http_srv_start(const cmd_core_t *core);
-
-/* One-time init of the shared web-auth state: PSA crypto + web_auth_init()
- * over the session array, then the persisted sessions from NVS ("hg"/"sess").
- * Idempotent. Call it at boot once nvs_flash_init() has run -- app_main does,
- * and so does http_srv_start(), because a boot whose radio never came up
- * still has to be able to hash a console SET WEB PASSWORD. Until it has
- * succeeded every entry point answers as if the board had no crypto (a login
- * fails, a password change reports ERR INTERNAL) rather than touching
- * uninitialised state. 0 ok, -1 if crypto or the mutex is unavailable. */
-int  http_auth_init(void);
 
 /* Cookie gate: 0 = not authenticated, and a 401 {"error":"UNAUTHORIZED"} has
  * already been sent (the handler must still return through
@@ -69,25 +60,6 @@ void http_srv_text(httpd_req_t *req, int status, const char *text);
 /* {"error":"<code>","path":"<path>"} -- path is sanitised (it is
  * attacker-controlled) and may be NULL to omit the member. */
 void http_srv_error(httpd_req_t *req, int status, const char *code, const char *path);
-
-/* ---- shared web-password state (master/main/net_ops_master.c) ----
- * http_srv owns the ONE wa_state_t: it holds the live login sessions AND the
- * sha/rand hooks web_auth needs, so a password change made from the CLI and
- * one made over HTTP go through the same state and both drop the sessions. */
-
-/* Puts a fresh salt + sha256(salt||pw) into *m and clears MCFG_F_WEB_DEFAULT,
- * without touching NVS -- the caller still owns the mcfg_commit(). Does NOT
- * drop sessions (see http_auth_sessions_drop, to be called only after the
- * commit succeeded). 0 ok, -1 pw outside 8..63 (*m untouched), -3 SHA-256
- * unavailable -- the board's crypto is broken, and in that case *m HAS been
- * modified and now holds a fresh salt with an all-zero digest that nothing
- * could ever match, so the caller must discard its copy and commit nothing. */
-int  http_auth_hash_password(hg_mcfg_t *m, const char *pw);
-
-/* Invalidates every live web session and rewrites NVS. Call right after a
- * successful password commit: the old cookies must not outlive the password
- * they were issued against. */
-void http_auth_sessions_drop(void);
 
 #ifdef __cplusplus
 }

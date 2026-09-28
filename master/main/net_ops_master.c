@@ -3,7 +3,7 @@
 #include "esp_log.h"
 #include "mcfg_ops.h"
 #include "mcfg_store.h"
-#include "http_srv.h"
+#include "http_auth.h"
 #include "wifi_mgr.h"
 #include "time_svc.h"
 #include "node_mgr.h"

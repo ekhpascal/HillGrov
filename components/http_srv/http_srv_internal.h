@@ -40,15 +40,6 @@ int http_srv_body(httpd_req_t *req, char *buf, size_t cap);
  * the route table and the auth gate are complete from day one. */
 esp_err_t h_not_impl(httpd_req_t *req);
 
-/* ---- http_auth.c: the locked facade over the shared wa_state_t ----
- * Every one of these takes http_auth's mutex internally; nothing outside
- * http_auth.c ever sees the wa_state_t itself. */
-
-int  http_auth_check(const char *cookie_hdr);                         /* 0 valid / -1 not */
-int  http_auth_login(const char *pw, char cookie_out[2 * WA_TOKEN_LEN + 1]);  /* 0 / -1 bad / -2 locked */
-int  http_auth_verify_password(const char *pw);                       /* 0 correct / -1 wrong; no session, no fail count */
-void http_auth_logout_cookie(const char *cookie_hdr);
-
 /* ---- http_login.c: the HTTP surface over that facade ---- */
 esp_err_t h_login(httpd_req_t *req);
 esp_err_t h_logout(httpd_req_t *req);

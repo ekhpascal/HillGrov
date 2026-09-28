@@ -9,7 +9,8 @@
 #include "app_if_common.h"
 #include "mcfg_store.h"
 #include "time_svc.h"
-#include "http_srv_internal.h"
+#include "web_auth.h"
+#include "http_auth.h"
 
 static const char *TAG = "http_auth";
 
@@ -17,8 +18,8 @@ static const char *TAG = "http_auth";
  * sha/rand hooks web_auth needs. Both the httpd task (login/logout/password/
  * cookie checks) and the CLI task (SET WEB PASSWORD, through
  * net_ops_master.c) reach it, so every access goes through s_lock and nothing
- * outside this file ever sees the struct -- the rest of http_srv uses the
- * locked facade in http_srv_internal.h.
+ * outside this file ever sees the struct -- every caller uses the locked
+ * facade in http_auth.h.
  *
  * Sharing it is the point: a password changed from the console drops the web
  * sessions too, because there is only one set of them. */
