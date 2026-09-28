@@ -55,7 +55,12 @@ static void drain_cb(lv_timer_t *t) {
     pnl_job_t *j = NULL;
     while (xQueueReceive(s_done, &j, 0) == pdTRUE) {
         if (!j) continue;
-        if (j->done) j->done(j);
+        if (j->done) {
+            int64_t t0 = esp_timer_get_time();   /* Global Constraints: a screen callback finishes in <= 200 ms */
+            j->done(j);
+            int64_t us = esp_timer_get_time() - t0;
+            if (us > 200000) ESP_LOGW(TAG, "job done callback %p took %u ms (limit 200)", (void *)j->done, (unsigned)(us / 1000));
+        }
         job_release(j);
     }
 }

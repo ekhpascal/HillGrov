@@ -5,11 +5,13 @@
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "sdkconfig.h"
 #include "lvgl.h"
 #include "panel_hw.h"
 #include "pnl_palette.h"
 #include "pnl_theme.h"
 #include "pnl_worker.h"
+#include "pnl_poll.h"
 #include "scr_diag.h"
 
 #define TGT_N 5
@@ -21,7 +23,7 @@ static const char *const TGT_NAME[TGT_N] = { "top left", "top right", "bottom le
 static const lv_align_t  TGT_ALIGN[TGT_N] = { LV_ALIGN_TOP_LEFT, LV_ALIGN_TOP_RIGHT, LV_ALIGN_BOTTOM_LEFT,
                                              LV_ALIGN_BOTTOM_RIGHT, LV_ALIGN_CENTER };
 
-static lv_obj_t   *s_heap, *s_touch;
+static lv_obj_t   *s_heap, *s_touch, *s_poll;
 static lv_obj_t   *s_tgt[TGT_N], *s_tgt_lbl[TGT_N];
 static uint16_t    s_hits[TGT_N];
 static lv_timer_t *s_tick;
@@ -103,6 +105,19 @@ static void diag_tick(lv_timer_t *t) {
              st.touch_ok ? "ok" : "UNAVAILABLE", (unsigned)st.reads, (unsigned)st.read_errs, st.last_err,
              (unsigned)st.points, (unsigned)st.last_x, (unsigned)st.last_y);
     lv_label_set_text(s_touch, buf);
+    if (s_poll) {
+        /* The LVGL pool figure every stage gate records (Global Constraints,
+         * "Memory": raise CONFIG_LV_MEM_SIZE_KILOBYTES only if max_used > 75 % of
+         * it). The budget is the INTERNAL pool; mon.total_size also counts Task 7's
+         * PSRAM overflow pool, so it is not the denominator. */
+        lv_mem_monitor_t mon;
+        lv_mem_monitor(&mon);
+        snprintf(buf, sizeof buf, "Poller: seq %u | LVGL pool: max used %u of %u KB internal (+%u KB PSRAM)",
+                 (unsigned)pnl_poll_seq(), (unsigned)(mon.max_used / 1024), (unsigned)CONFIG_LV_MEM_SIZE_KILOBYTES,
+                 (unsigned)(mon.total_size / 1024 > CONFIG_LV_MEM_SIZE_KILOBYTES
+                            ? mon.total_size / 1024 - CONFIG_LV_MEM_SIZE_KILOBYTES : 0));
+        lv_label_set_text(s_poll, buf);
+    }
 }
 
 void scr_diag_build(lv_obj_t *parent) {
@@ -116,6 +131,8 @@ void scr_diag_build(lv_obj_t *parent) {
     s_touch = pnl_label(parent, "", &lv_font_montserrat_20, PNL_C_MUTED);
     lv_obj_set_width(s_touch, 560);   /* a label's default long mode wraps at its width */
     lv_obj_align(s_touch, LV_ALIGN_TOP_MID, 0, 80);
+    s_poll = pnl_label(parent, "Poller: not started", &lv_font_montserrat_20, PNL_C_MUTED);
+    lv_obj_align(s_poll, LV_ALIGN_TOP_MID, 0, 136);
 
     for (int i = 0; i < TGT_N; i++) {
         s_tgt[i] = lv_button_create(parent);

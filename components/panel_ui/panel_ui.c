@@ -8,6 +8,7 @@
 #include "pnl_touch.h"
 #include "pnl_theme.h"
 #include "pnl_worker.h"
+#include "pnl_poll.h"
 #include "scr_diag.h"
 #include "panel_ui.h"
 
@@ -20,6 +21,12 @@ static void log_heap(const char *when) {
     ESP_LOGI(TAG, "internal heap %s: free %u, min %u", when,
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+}
+
+/* [LVGL] 1 s: proves the LVGL task is still turning (the poller watches it). */
+static void heartbeat_cb(lv_timer_t *t) {
+    (void)t;
+    pnl_lvgl_heartbeat();
 }
 
 int panel_start(void) {
@@ -48,7 +55,14 @@ int panel_start(void) {
 }
 
 int panel_services_start(void) {
-    if (!s_lit) return -1;   /* a dark panel runs no worker: nothing could ever submit to it */
+    if (!s_lit) return -1;   /* a dark panel runs no worker or poller */
     pnl_worker_start();
+    pnl_poll_start();
+    if (panel_lock(2000)) {
+        (void)lv_timer_create(heartbeat_cb, 1000, NULL);
+        panel_unlock();
+    } else {
+        ESP_LOGE(TAG, "display lock not taken -- no LVGL heartbeat, a frozen panel would go unreported");
+    }
     return 0;
 }
