@@ -18,9 +18,14 @@ are in `.superpowers/sdd/2026-09-23-master-v2-panel-ui/global-constraints.md`) b
 
 **Time:** about 3.5 h, of which about 50 min is hands-off (the web suites and the 30 min soak).
 
-**Rule for failures:** any FAIL fails the acceptance (Task 34 Step 3). Unless a check says **STOP**, write down the
-exact text (a photo of the glass is best) and carry on, so that one fix round covers every failure. The failed checks
-are then re-run on the fixed image. `[STATE]` marks a check that changes bench state; its restore step is in the check.
+**Rule for failures:** any FAIL fails the acceptance (Task 34 Step 3).
+- **STOP the session** when a check says **STOP** (3.1, 4.1), or when any **STOP condition** of 0.4 appears at any
+  point. A crash, an abort or an unexplained reboot is always a STOP. Then follow 0.4's "On a STOP". Do not go on to any
+  later check, above all a `[STATE]` one.
+- **Any other FAIL:** write down the exact text (a photo of the glass is best) and carry on, so that one fix round
+  covers every failure. The failed checks are then re-run on the fixed image.
+
+`[STATE]` marks a check that changes bench state; its restore step is in the check, or the check points to it.
 
 ---
 
@@ -84,8 +89,35 @@ function hgput0([string]$file) { curl.exe -s -b $JAR -X PUT -H "Content-Type: ap
 `hglogin` should print `login HTTP 204`. Run it again after any master reboot or password change.
 
 ### 0.4 Standing watch (W1, all session)
-Each of these is a FAIL wherever it appears; check the scrollback at the end of every Part:
-- `panic`, `abort`, `Backtrace`, `Guru Meditation`, a reboot you did not cause, `task_wdt`;
+Glance at W1 after every check, and search its scrollback at the end of every Part.
+
+**STOP conditions.** Each one stops the session wherever it appears:
+- `panic`, `abort`, `Backtrace`, `Guru Meditation`, `task_wdt`, or `Stack canary` / `stack overflow`;
+- a reboot that no step caused. The expected reboots are the power cycle in 9.3, the restarts in 10.3 and 10.4, the
+  Reboot now in 11.12, the master OTA inside 12.2, and the optional 15.x reboots;
+- a frozen panel: the clock stops, or nothing responds under the finger for more than 5 s.
+
+**On a STOP:**
+1. **Hands off.** Do not press RESET, power-cycle, pull the card or tap anything more. After a panic the master
+   usually restarts by itself; let it.
+2. **Capture:**
+   - Save the whole W1 scrollback to a file: select all, copy, then paste into `C:\tmp\hg_bench_stop.txt`. It must
+     include the lines from the last check's start through the backtrace and the next boot banner.
+   - Note the check number that was running and the last thing you did (the tap, the command, or the web_test suite).
+   - Take a photo of the glass.
+   - Do not rebuild `master\build_p4`: its `hillgrow_master.elf` is what decodes the backtrace.
+3. **Make it safe:**
+   - In W1, send `GET VERSION` and `GET FW ZONE`, and record both.
+   - If the slot shows `PENDING`, an OTA trial is running. Leave the board powered and untouched until W1 shows
+     `NOTIFY FW 0 TRIAL PASS` and `GET VERSION` shows `VALID`. Any reset before then retires the new image, so reboot
+     inside a trial only if you decide to.
+   - If a fleet update was running (System → Fleet status not `IDLE`), let it finish. Do not Abort, unless the zone
+     stays OFFLINE for more than 2 min.
+   - Then undo, from the phone's web UI, any `[STATE]` change whose restore you had not yet done: the password, the AP,
+     the STA, the TZ and the dimming. Use the "End state" list near the end of this runbook.
+4. Hand the capture file and the notes to the agent. The session resumes on a fixed image, from the stopped check.
+
+**FAIL conditions.** Each one is a FAIL wherever it appears; carry on after recording it:
 - `took N ms (budget 200)` (any screen);
 - `Failed to acquire LVGL lock`;
 - `W_PANEL_FROZEN`;
@@ -492,7 +524,7 @@ Plug zone 2 back in, or release EN.
 - The context line is blank or also "Clock not set". Any time or countdown is a FAIL.
 - The top right reads `NONE`.
 
-### 9.4 Unset clock: analogue face, and no dimming -- T26, T27 `[STATE]`
+### 9.4 Unset clock: analogue face, and no dimming -- T26, T27 `[STATE: restored in 9.6 (face) and 9.10 (dimming)]`
 Panel:
 - Clock face Analogue → Home. **PASS:** "Clock not set" on the face, and no hands.
 - Night dimming = Fixed hours, from the current hour to two hours later. "Dim after idle" 30 s. "Return to Home and wipe
@@ -574,7 +606,7 @@ System → Time.
 
 **Restore** the TZ noted in 9.5.
 
-**Also restore the dimming:** Panel → Night dimming "Follow the lights", idle 1 min, return after 5 min.
+**Also restore the dimming set in 9.4:** Panel → Night dimming "Follow the lights", idle 1 min, return after 5 min.
 
 ### 9.11 R2 readings -- T16 (S1.6), T20, T22, T23, S2.10
 Every destination has been visited, and more than 10 min have passed. Fill in row R2. **PASS:** the 0.5 criteria.
@@ -850,6 +882,8 @@ The run takes about 10 min.
 - The phone is logged out (MCFG).
 - LOGIN locks the web out for about 60 s at the end.
 - The master ends on the other slot, holding the same build.
+
+**Restore:** after the lockout (about 60 s), log the phone back in with `hillgrow1`.
 
 ### 12.3 Web by hand: image identity and AP_PASS -- T28, T30, T31, T33, D22
 Wait 60 s after 12.2 (the lockout), then run `hglogin`.
