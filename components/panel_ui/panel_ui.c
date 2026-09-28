@@ -12,6 +12,7 @@
 #include "pnl_cmd.h"
 #include "pnl_prefs_nvs.h"
 #include "scr_shell.h"
+#include "pnl_idle.h"
 #include "panel_ui.h"
 
 static const char *TAG = "panel";
@@ -45,6 +46,7 @@ int panel_start(void) {
     }
     pnl_theme_init(panel_hw_display());
     pnl_shell_start();
+    pnl_idle_start();          /* Task 27: dimming + idle wipe; the shell must exist before it can navigate */
     panel_unlock();
     (void)panel_hw_brightness(pnl_prefs_get()->dim.day_pct);
     s_lit = 1;

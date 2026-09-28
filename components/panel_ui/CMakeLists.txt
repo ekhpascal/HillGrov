@@ -29,6 +29,7 @@ if("${CMAKE_PROJECT_NAME}" STREQUAL "hillgrow_master" AND "${panel_target}" STRE
     list(APPEND PANEL_SRCS "sys_password.c")                              # Task 24: System -- web password reset
     list(APPEND PANEL_SRCS "sys_fleet.c")                                 # Task 25: System -- fleet update, the one reboot flow
     list(APPEND PANEL_SRCS "pnl_prefs.c" "pnl_prefs_nvs.c" "scr_panel.c" "pnl_dim_hold.c")   # Task 26: Panel screen
+    list(APPEND PANEL_SRCS "pnl_dim.c" "pnl_idle.c")                     # Task 27: night dimming, wake guard, idle wipe
 endif()
 
 idf_component_register(SRCS ${PANEL_SRCS} INCLUDE_DIRS "."

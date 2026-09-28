@@ -149,3 +149,6 @@ hg_test(test_pnl_console ${COMP}/panel_ui/pnl_console.c)
 
 # panel_ui panel-local preferences and their persisted form (Task 26): pure.
 hg_test(test_pnl_prefs ${COMP}/panel_ui/pnl_prefs.c ${COMP}/hg_blob/hg_blob.c)
+
+# panel_ui night dimming decision (Task 27): pure.
+hg_test(test_pnl_dim ${COMP}/panel_ui/pnl_dim.c ${COMP}/panel_ui/pnl_home.c ${COMP}/panel_ui/pnl_time.c ${HG_CFG_SRC})
