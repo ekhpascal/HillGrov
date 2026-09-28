@@ -10,6 +10,7 @@
 #include "pnl_fonts.h"
 #include "pnl_palette.h"
 #include "pnl_theme.h"
+#include "pnl_prefs_nvs.h"
 #include "scr_shell.h"
 
 /* Spec "Shell -- the home screen". Full screen, no rail. Layout (1024 x 600):
@@ -29,6 +30,58 @@ static pnl_tile_detail_t s_detail;
 static lv_timer_t *s_clock_timer;
 static int         s_alarm_on = -1;
 static uint32_t    s_ring_c, s_wifi_c;
+
+/* Task 26 (D3): the analogue face -- lv_scale round, hour/minute/second needles, updated by the same 1 s clock timer */
+static lv_obj_t *s_scale, *s_hand_h, *s_hand_m, *s_hand_s, *s_ana_unset;
+static int       s_ana_shown = -1;   /* the second of the day the needles show; -1 = none (or "Clock not set") */
+static const char *HOUR_TXT[] = { "12", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", NULL };
+
+static lv_obj_t *home_hand(lv_obj_t *scale, int width, uint32_t color) {
+    lv_obj_t *l = lv_line_create(scale);
+    lv_obj_set_style_line_width(l, width, 0);
+    lv_obj_set_style_line_rounded(l, true, 0);
+    lv_obj_set_style_line_color(l, lv_color_hex(color), 0);
+    return l;
+}
+
+static void home_analogue_build(lv_obj_t *parent) {
+    s_scale = lv_scale_create(parent);
+    lv_obj_set_size(s_scale, 200, 200);
+    lv_scale_set_mode(s_scale, LV_SCALE_MODE_ROUND_INNER);
+    lv_scale_set_range(s_scale, 0, 60);
+    lv_scale_set_total_tick_count(s_scale, 61);
+    lv_scale_set_major_tick_every(s_scale, 5);
+    lv_scale_set_angle_range(s_scale, 360);
+    lv_scale_set_rotation(s_scale, 270);             /* 0 at the top */
+    lv_scale_set_label_show(s_scale, true);
+    lv_scale_set_text_src(s_scale, HOUR_TXT);
+    lv_obj_set_style_radius(s_scale, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(s_scale, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_scale, lv_color_hex(PNL_C_CARD), 0);
+    s_hand_h = home_hand(s_scale, 8, PNL_C_TEXT);
+    s_hand_m = home_hand(s_scale, 5, PNL_C_TEXT);
+    s_hand_s = home_hand(s_scale, 2, PNL_C_ACCENT);
+    s_ana_unset = lv_label_create(s_scale);
+    lv_label_set_text(s_ana_unset, "Clock not set");  /* an unset clock is reported honestly, never as a plausible time */
+    lv_obj_center(s_ana_unset);
+    lv_obj_add_flag(s_ana_unset, LV_OBJ_FLAG_HIDDEN);
+    s_ana_shown = -1;
+}
+
+/* clock_tick runs from the 1 s timer and again from every poll's update: move the needles only when the second moved */
+static void home_analogue_set(const pnl_local_t *t) {
+    if (!s_scale) return;
+    int now = t->valid ? t->minute_of_day * 60 + t->sec : -1;
+    if (now == s_ana_shown && now >= 0) return;
+    lv_obj_t *hands[3] = { s_hand_h, s_hand_m, s_hand_s };
+    for (int i = 0; i < 3; i++) pnl_obj_show(hands[i], t->valid);
+    pnl_obj_show(s_ana_unset, !t->valid);
+    s_ana_shown = now;
+    if (!t->valid) return;
+    lv_scale_set_line_needle_value(s_scale, s_hand_h, 55, (t->hour % 12) * 5 + t->min / 12);
+    lv_scale_set_line_needle_value(s_scale, s_hand_m, 80, t->min);
+    lv_scale_set_line_needle_value(s_scale, s_hand_s, 88, t->sec);
+}
 
 static void nav_cb(lv_event_t *e) { pnl_nav_go((pnl_dest_t)(intptr_t)lv_event_get_user_data(e), 0); }
 
@@ -61,10 +114,11 @@ static void set_color_if_changed(lv_obj_t *o, uint32_t *seen, uint32_t hex) {
  * says "Clock not set"; the context line stays empty rather than repeat it. */
 static void clock_tick(lv_timer_t *t) {
     (void)t;
-    if (!s_clock) return;
+    if (!s_clock && !s_scale) return;   /* the date and context lines keep ticking on the analogue face */
     const pnl_snap_t *sn = pnl_shell_snap();
     pnl_local_t lt;
     pnl_local_time((int64_t)time(NULL), sn ? sn->st.utc_offset_s : 0, sn ? sn->st.time_is_set : 0, &lt);
+    home_analogue_set(&lt);
     char b[64];
     pnl_fmt_clock(&lt, b, sizeof b);
     pnl_label_set_if_changed(s_clock, b);
@@ -223,8 +277,14 @@ static void home_build(lv_obj_t *page, int arg) {
     s_src  = pnl_label(tr, "", &lv_font_montserrat_20, PNL_C_MUTED);
     s_wifi = pnl_label(tr, LV_SYMBOL_WIFI, &lv_font_montserrat_20, PNL_C_OFFLINE_TEXT);
 
-    s_clock = pnl_label(page, "--:--", pnl_font_clock(), PNL_C_TEXT);
-    lv_obj_align(s_clock, LV_ALIGN_TOP_MID, 0, 36);
+    if (pnl_prefs_get()->face == 1) {
+        s_clock = NULL;                                   /* the analogue face: no digital label */
+        home_analogue_build(page);
+        lv_obj_align(s_scale, LV_ALIGN_TOP_MID, 0, 20);   /* 200 px face ends at y 220, above the date line (y 222) */
+    } else {
+        s_clock = pnl_label(page, "--:--", pnl_font_clock(), PNL_C_TEXT);
+        lv_obj_align(s_clock, LV_ALIGN_TOP_MID, 0, 36);
+    }
     s_date = pnl_label(page, "", &lv_font_montserrat_48, PNL_C_TEXT);
     lv_obj_align(s_date, LV_ALIGN_TOP_MID, 0, 222);
     s_ctx = pnl_label(page, "", &lv_font_montserrat_28, PNL_C_MUTED);
@@ -262,6 +322,8 @@ static void home_teardown(void) {
     if (s_clock_timer) { lv_timer_delete(s_clock_timer); s_clock_timer = NULL; }
     if (s_band) lv_anim_delete(s_band, band_opa_cb);
     s_ring = s_src = s_wifi = s_clock = s_date = s_ctx = s_band = s_none = s_badge = NULL;
+    s_scale = s_hand_h = s_hand_m = s_hand_s = s_ana_unset = NULL;
+    s_ana_shown = -1;
     for (int i = 0; i < HG_MAX_ZONES; i++) s_tile[i] = s_dot[i] = s_l1[i] = s_l2[i] = s_l3[i] = NULL;
     s_ntiles = -1;
     s_alarm_on = -1;

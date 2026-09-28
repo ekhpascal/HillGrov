@@ -146,3 +146,6 @@ hg_test(test_pnl_input ${COMP}/panel_ui/pnl_input.c)
 
 # panel_ui zone console model (Task 22): pure.
 hg_test(test_pnl_console ${COMP}/panel_ui/pnl_console.c)
+
+# panel_ui panel-local preferences and their persisted form (Task 26): pure.
+hg_test(test_pnl_prefs ${COMP}/panel_ui/pnl_prefs.c ${COMP}/hg_blob/hg_blob.c)

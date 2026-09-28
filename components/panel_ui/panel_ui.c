@@ -10,6 +10,7 @@
 #include "pnl_worker.h"
 #include "pnl_poll.h"
 #include "pnl_cmd.h"
+#include "pnl_prefs_nvs.h"
 #include "scr_shell.h"
 #include "panel_ui.h"
 
@@ -33,7 +34,8 @@ static void heartbeat_cb(lv_timer_t *t) {
 int panel_start(void) {
     int64_t t0 = esp_timer_get_time();
     log_heap("before panel");
-    if (panel_hw_start(PNL_ORIENT_NORMAL) != 0) {
+    pnl_prefs_load();         /* Task 26: NVS is up (panel_start runs after nvs_flash_init in app_main) */
+    if (panel_hw_start(pnl_prefs_get()->orient) != 0) {
         ESP_LOGE(TAG, "no display");
         return -1;
     }
@@ -44,7 +46,7 @@ int panel_start(void) {
     pnl_theme_init(panel_hw_display());
     pnl_shell_start();
     panel_unlock();
-    (void)panel_hw_brightness(80);
+    (void)panel_hw_brightness(pnl_prefs_get()->dim.day_pct);
     s_lit = 1;
 
     panel_hw_status_t st;
