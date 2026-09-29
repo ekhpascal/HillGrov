@@ -28,7 +28,8 @@ typedef struct {
 /* A consistent copy of everything /api/alarms exports, for a reader that wants
  * structs (the panel). active[] is in the same order the JSON lists it;
  * events[] newest first. ~6.6 KB: keep it off the stack -- heap-allocate it
- * for the length of one use (as alarm_mgr_json does), or put it in PSRAM. */
+ * for the length of one use, or put it in PSRAM. alarm_mgr_json does not use
+ * it: it copies one entry per lock hold (alarm_mgr_internal.h). */
 typedef struct { char key[AM_KEY_MAX]; char text[72]; uint32_t since_s; } am_active_view_t;
 typedef struct {
     am_active_view_t active[AM_ACTIVE_MAX]; int n_active;
@@ -51,7 +52,7 @@ void alarm_mgr_init(uint32_t (*now_s)(void));
 void alarm_mgr_sink(void *ctx, const char *line);   /* ntf_sink_fn: notify_add_sink(alarm_mgr_sink, NULL, NTF_MASK_ALL) */
 int  alarm_mgr_active_count(void);
 int  alarm_mgr_total(void);                         /* events ever recorded, including ones dropped from the ring */
-int  alarm_mgr_json(char *out, size_t cap);          /* {"active":[{"key":..,"text":..,"since_s":..}],"events":[{"at_s":..,"text":..}, newest first, <=AM_EVENTS]} -- the state is copied under the lock, then formatted outside it */
+int  alarm_mgr_json(char *out, size_t cap);          /* {"active":[{"key":..,"text":..,"since_s":..}],"events":[{"at_s":..,"text":..}, newest first, <=AM_EVENTS]} -- each entry is copied under the lock, then formatted outside it */
 
 #ifdef __cplusplus
 }

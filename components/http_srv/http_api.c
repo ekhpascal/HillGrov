@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include "sdkconfig.h"      /* CONFIG_IDF_TARGET_ESP32P4 (h_state) */
 #include "esp_log.h"
 #include "cJSON.h"
 #include "state_snap.h"
@@ -47,9 +48,17 @@ static int chunk_writer(void *ctx, const char *buf, size_t n) {
 
 esp_err_t h_state(httpd_req_t *req) {
     /* The gather is panel_svc's (panel plan Task 9): the panel's poller runs
-     * the same psvc_state_fill(). ~1.9 KB, so static -- httpd serves every
-     * socket from ONE task, and h_state can never run twice at once. */
+     * the same psvc_state_fill(). ~1.9 KB. On the ESP32 master it lives on
+     * the httpd task's 8 KB stack (http_srv.c cfg.stack_size), as h_state's
+     * own gather did before Task 9: internal RAM there has no room for it as
+     * permanent .bss (the 64 KB heap-min bar). On the P4 it stays static --
+     * httpd serves every socket from ONE task, so h_state never runs twice
+     * at once. */
+#if CONFIG_IDF_TARGET_ESP32P4
     static psvc_state_t s;
+#else
+    psvc_state_t s;
+#endif
     psvc_state_fill(&s, PSVC_FILL_ALL);
     snap_master_t m;
     psvc_state_to_snap(&s, &m);   /* m points into s, which outlives the write below */

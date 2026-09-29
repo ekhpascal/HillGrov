@@ -253,3 +253,34 @@ void alarm_mgr_copy(am_snapshot_t *out) {
     out->total = am_total;
     am_unlock();
 }
+
+uint32_t am_copy_total(void) {
+    am_lock();
+    uint32_t t = am_total;
+    am_unlock();
+    return t;
+}
+
+int am_copy_active(int slot, am_active_view_t *out) {
+    if (!out || slot < 0 || slot >= AM_ACTIVE_MAX) return 0;
+    am_lock();
+    int used = am_active[slot].used;
+    if (used) {
+        memcpy(out->key, am_active[slot].key, sizeof out->key);
+        memcpy(out->text, am_active[slot].text, sizeof out->text);
+        out->since_s = am_active[slot].since_s;
+    }
+    am_unlock();
+    return used ? 1 : 0;
+}
+
+int am_copy_event(uint32_t total, uint32_t i, am_event_t *out) {
+    uint32_t kept = total < AM_EVENTS ? total : AM_EVENTS;
+    if (!out || i >= kept) return 0;
+    uint32_t seq = total - 1 - i;              /* the event's ordinal: slot seq % AM_EVENTS until overwritten */
+    am_lock();
+    int live = am_total - seq <= AM_EVENTS;    /* seq < am_total always; overwritten once AM_EVENTS newer exist */
+    if (live) *out = am_ring[seq % AM_EVENTS];
+    am_unlock();
+    return live;
+}

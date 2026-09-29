@@ -307,14 +307,16 @@ static void test_lock_hooks_balance_on_every_entry_point(void) {
     (void)alarm_mgr_json(buf, sizeof buf);
     alarm_mgr_sink(NULL, "NOTIFY BOOT 0 0.5.0 POWERON\n");   /* event-only: still one locked mutation */
     alarm_mgr_sink(NULL, "garbage");                          /* malformed: no lock at all */
-    TEST_ASSERT_EQUAL_INT(6, s_lock_n);                       /* sink, count, total, copy, json (its copy), sink */
+    /* sink, count, total, copy, sink -- and json: one hold per active slot, one for am_total, one per kept event (1) */
+    TEST_ASSERT_EQUAL_INT(5 + AM_ACTIVE_MAX + 1 + 1, s_lock_n);
     TEST_ASSERT_EQUAL_INT(s_lock_n, s_unlock_n);
     TEST_ASSERT_EQUAL_INT(1, s_max_depth);
     TEST_ASSERT_EQUAL_INT(0, s_depth);
 }
 
-/* The lock covers the copy only: every cJSON allocation during
-   alarm_mgr_json happens with no lock held. */
+/* The lock covers the copies only: every cJSON allocation during
+   alarm_mgr_json happens with no lock held. One ~92 B copy per hold: each
+   active slot, am_total once, then each kept event. */
 static void test_json_formats_outside_the_lock(void) {
     alarm_mgr_sink(NULL, "NOTIFY NODE 2 DEGRADED\n");
     alarm_mgr_sink(NULL, "NOTIFY RING 0 OPEN Z2 dead or wire Z2->Z1\n");
@@ -324,23 +326,65 @@ static void test_json_formats_outside_the_lock(void) {
     cJSON_InitHooks(&h);
     static char buf[4096];
     TEST_ASSERT_GREATER_THAN_INT(0, alarm_mgr_json(buf, sizeof buf));
-    TEST_ASSERT_EQUAL_INT(1, s_lock_n);
+    TEST_ASSERT_EQUAL_INT(AM_ACTIVE_MAX + 1 + 2, s_lock_n);
+    TEST_ASSERT_EQUAL_INT(1, s_max_depth);
     TEST_ASSERT_EQUAL_INT(0, s_malloc_held);
 }
 
 /* The -1 path (here: an output buffer too small for the document) leaves the
-   lock balanced and taken exactly once -- the heap snapshot is freed on it
-   too. (The snapshot's own malloc cannot be failed from here: it is plain
-   malloc, which cJSON's hooks do not reach.) */
+   lock balanced, taken once per copy as on success. */
 static void test_json_failure_returns_minus_one_lock_balanced(void) {
     alarm_mgr_sink(NULL, "NOTIFY NODE 2 DEGRADED\n");
     hooks_reset();
     alarm_mgr_set_lock(fake_lock, fake_unlock);
     char tiny[8];
     TEST_ASSERT_EQUAL_INT(-1, alarm_mgr_json(tiny, sizeof tiny));
-    TEST_ASSERT_EQUAL_INT(1, s_lock_n);
+    TEST_ASSERT_EQUAL_INT(AM_ACTIVE_MAX + 1 + 1, s_lock_n);
     TEST_ASSERT_EQUAL_INT(s_lock_n, s_unlock_n);
     TEST_ASSERT_EQUAL_INT(0, s_depth);
+}
+
+/* Events that arrive while alarm_mgr_json runs (a NOTIFY burst between two
+   of its lock holds) never shift, repeat or join the list: it stays the
+   newest-first list as of its one am_total read, cut short where the burst
+   overwrote the oldest entries. Injected from the unlock hook, after the 16
+   active holds, the am_total hold and 10 event holds. */
+static int s_burst_at, s_burst_done;
+static void burst_unlock(void) {
+    fake_unlock();
+    if (!s_burst_done && s_unlock_n == s_burst_at) {
+        s_burst_done = 1;
+        char l[64];
+        for (int k = 0; k < 5; k++) {
+            snprintf(l, sizeof l, "NOTIFY BOOT 0 new%d POWERON\n", k);
+            alarm_mgr_sink(NULL, l);                           /* nests nothing: this unlock has returned the lock */
+        }
+    }
+}
+static void test_json_burst_during_export_cuts_the_tail(void) {
+    char line[64];
+    for (int i = 0; i < AM_EVENTS; i++) {                      /* seq 0..63, ring full, nothing active */
+        snprintf(line, sizeof line, "NOTIFY BOOT 0 old%d POWERON\n", i);
+        alarm_mgr_sink(NULL, line);
+    }
+    hooks_reset();
+    s_burst_done = 0;
+    s_burst_at = AM_ACTIVE_MAX + 1 + 10;
+    alarm_mgr_set_lock(fake_lock, burst_unlock);
+    static char buf[16384];
+    TEST_ASSERT_GREATER_THAN_INT(0, alarm_mgr_json(buf, sizeof buf));
+    TEST_ASSERT_EQUAL_INT(1, s_burst_done);
+    cJSON *root = cJSON_Parse(buf);
+    TEST_ASSERT_NOT_NULL(root);
+    cJSON *events = cJSON_GetObjectItem(root, "events");
+    TEST_ASSERT_EQUAL_INT(AM_EVENTS - 5, cJSON_GetArraySize(events));   /* seq 0..4 were overwritten by the burst */
+    for (int i = 0; i < AM_EVENTS - 5; i++) {
+        char want[48];
+        snprintf(want, sizeof want, "BOOT 0 old%d POWERON", AM_EVENTS - 1 - i);
+        TEST_ASSERT_EQUAL_STRING(want, cJSON_GetObjectItem(cJSON_GetArrayItem(events, i), "text")->valuestring);
+    }
+    TEST_ASSERT_EQUAL_INT(AM_EVENTS + 5, alarm_mgr_total());
+    cJSON_Delete(root);
 }
 
 int main(void) { UNITY_BEGIN();
@@ -362,4 +406,5 @@ int main(void) { UNITY_BEGIN();
     RUN_TEST(test_lock_hooks_balance_on_every_entry_point);
     RUN_TEST(test_json_formats_outside_the_lock);
     RUN_TEST(test_json_failure_returns_minus_one_lock_balanced);
+    RUN_TEST(test_json_burst_during_export_cuts_the_tail);
     return UNITY_END(); }
