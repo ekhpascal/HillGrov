@@ -1,6 +1,7 @@
 #include <string.h>
 #include "pcfg_edit.h"
 #include "hg_mcfg.h"
+#include "hg_wipe.h"   /* an edit set may hold a pending password: never a plain memset */
 
 static int norm_idx(const pcfg_edits_t *e, uint8_t group, int idx) {
     if (e->table == PCFG_TABLE_MASTER) return -1;
@@ -17,7 +18,7 @@ static int blank_secret(const pcfg_edits_t *e, const psvc_fedit_t *d) {
 
 void pcfg_edits_reset(pcfg_edits_t *e, pcfg_table_t t, uint8_t zone) {
     if (!e) return;
-    memset(e, 0, sizeof *e);
+    hg_wipe(e, sizeof *e);
     e->table = t;
     e->zone = zone;
 }
@@ -37,7 +38,7 @@ int pcfg_edits_set(pcfg_edits_t *e, uint8_t group, int idx, const hg_field_t *f,
         e->d[i].idx = (int8_t)idx;
         e->d[i].f = f;
     }
-    memset(e->d[i].text, 0, sizeof e->d[i].text);
+    hg_wipe(e->d[i].text, sizeof e->d[i].text);
     memcpy(e->d[i].text, text, len);
     return 0;
 }
@@ -48,7 +49,7 @@ int pcfg_edits_drop(pcfg_edits_t *e, uint8_t group, int idx, const hg_field_t *f
     if (i < 0) return -1;
     memmove(&e->d[i], &e->d[i + 1], (size_t)(e->n - i - 1) * sizeof e->d[0]);
     e->n--;
-    memset(&e->d[e->n], 0, sizeof e->d[0]);
+    hg_wipe(&e->d[e->n], sizeof e->d[0]);
     return 0;
 }
 
@@ -73,7 +74,7 @@ void pcfg_edits_wipe(pcfg_edits_t *e) {
     if (!e) return;
     pcfg_table_t t = e->table;
     uint8_t z = e->zone;
-    memset(e, 0, sizeof *e);
+    hg_wipe(e, sizeof *e);
     e->table = t;
     e->zone = z;
 }
