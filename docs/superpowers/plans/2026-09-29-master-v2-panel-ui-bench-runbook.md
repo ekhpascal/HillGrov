@@ -6,17 +6,17 @@ and the Task 34 acceptance. Duplicate steps appear once. Each check names its so
 `S<stage>.<step>` for a stage bench gate, `P<n>` for Task 34's parity checklist (map-parity §G), and `A` for the Task 34
 acceptance.
 
-**Built and gated 2026-09-29 at `7e31e10`:**
+**Built and gated 2026-09-29 at `2223d2d` (the final-review fix wave; sections 10.5, 11.17a and 14.3 are its checks):**
 - GATE-HOST: 53/53.
 - GATE-ESP32: master, zone and rescue builds complete, and the lock diff is empty.
 - GATE-P4: builds with `CONFIG_IDF_TARGET="esp32p4"`.
-- P4 image: `hillgrow_master.bin` is 1,600,576 B, 76.3 % of the 2 MB factory partition that IDF checks against, and
+- P4 image: `hillgrow_master.bin` is 1,601,392 B, 76.4 % of the 2 MB factory partition that IDF checks against, and
   38.2 % of the 4 MB OTA slot.
 
 Nothing has been flashed since the plan started. If HEAD later gains code changes, re-run the three gates (the commands
 are in `.superpowers/sdd/2026-09-23-master-v2-panel-ui/global-constraints.md`) before Part 2.
 
-**Time:** about 3.5 h, of which about 50 min is hands-off (the web suites and the 30 min soak).
+**Time:** about 4 h, of which about 50 min is hands-off (the web suites and the 30 min soak).
 
 **Rule for failures:** any FAIL fails the acceptance (Task 34 Step 3).
 - **STOP the session** when a check says **STOP** (3.1, 4.1), or when any **STOP condition** of 0.4 appears at any
@@ -93,7 +93,7 @@ Glance at W1 after every check, and search its scrollback at the end of every Pa
 
 **STOP conditions.** Each one stops the session wherever it appears:
 - `panic`, `abort`, `Backtrace`, `Guru Meditation`, `task_wdt`, or `Stack canary` / `stack overflow`;
-- a reboot that no step caused. The expected reboots are the power cycle in 9.3, the restarts in 10.3 and 10.4, the
+- a reboot that no step caused. The expected reboots are the power cycle in 9.3, the restarts in 10.3, 10.4 and 10.5, the
   Reboot now in 11.12, the master OTA inside 12.2, and the optional 15.x reboots;
 - a frozen panel: the clock stops, or nothing responds under the finger for more than 5 s.
 
@@ -193,7 +193,7 @@ Also record:
 3. Then run the same command without `--dry-run`.
 
 **PASS:** every path the dry run prints contains `build_p4`, and the real run ends with the tool's success line.
-Record the image size: 1,600,576 B against 4,194,304 (the plan's slot) and 2,097,152 (the factory partition IDF checks).
+Record the image size: 1,601,392 B against 4,194,304 (the plan's slot) and 2,097,152 (the factory partition IDF checks).
 
 ### 2.2 Stage the zone image into zone_fw -- A (T34 Step 1.3) `[STATE]`
 1. `python C:\Projects\HillGrov\tools\flash_app.py --app zonefw --target esp32p4 --port COM28 --dry-run`
@@ -642,6 +642,12 @@ Every destination has been visited, and more than 10 min have passed. Fill in ro
 - About → Touch test: all five targets light under the finger, and `last x,y` stays within 0..1023 / 0..599, never near
   65000.
 
+**If the touch mapping is wrong under Flipped** (taps land on the wrong target, so the glass cannot reach Orientation):
+record the FAIL, and recover without touch. In W1 send `CLEAR PANEL CONFIRM`; it answers
+`OK PANEL CLEARED REBOOT TO APPLY`. Then send `REBOOT CONFIRM`. The panel boots Normal, with the default brightness
+(80 %) and dimming ("Follow the lights" / 1 min / 5 min). Do not touch the Panel screen between the two commands: a
+Panel change saves the live (Flipped) preferences again. Then skip to 10.5.
+
 ### 10.4 Normal again, via Reboot master -- T25, T26, S3.7, P17 `[STATE]`
 1. Panel → Orientation → Normal.
 2. System → Fleet → Reboot master. There is one confirm, because no trial is running. [Cancel]: nothing happens.
@@ -651,6 +657,19 @@ Every destination has been visited, and more than 10 min have passed. Fill in ro
 - "Rebooting..." fills the screen at once, the master restarts, and the panel lights again by itself, the right way up.
 - The Touch test's five targets land in Normal too.
 - If you can open Alarms within a second of the light, it shows "Loading..." and then the lists (T16, optional).
+
+### 10.5 The no-touch panel reset -- final review M7 (REQUIRED) `[STATE]`
+The recovery that 10.3 falls back on, proven while the glass still works.
+1. Panel → Night slider to 30 %, and Clock face → Analogue. Wait for "Saved".
+2. In W1: `CLEAR HELP` lists a `+ CLEAR PANEL <...>  -- panel prefs to defaults; reboot to apply` line. Then send
+   `CLEAR PANEL` alone: it is refused with an `ERR` line, and nothing changes.
+3. In W1: `CLEAR PANEL CONFIRM`. It answers `OK PANEL CLEARED REBOOT TO APPLY`. The glass does not change yet.
+4. In W1: `REBOOT CONFIRM`.
+
+**PASS after the boot:** Panel shows the defaults: Normal, Digital face, day 80 %, night 10 %, "Follow the lights",
+idle 1 min, return after 5 min.
+
+**Restore:** set the day level back to the one noted in 10.1.
 
 ---
 
@@ -834,6 +853,40 @@ Config → Master. Make one edit (a dot) → Import from card → Import.
 
 Card A now holds a padded zone image. Delete it after the session.
 
+### 11.17a Card teardown under Wi-Fi traffic -- final review C1 (REQUIRED)
+**Why:** stock IDF 6.0.1 panics the master on the C6's next SDIO interrupt after a card unmount or a failed mount
+(`sd_host_isr()` dereferences the removed slot 0). The build carries a patched driver,
+`components/esp_driver_sdmmc` (its `README.md` has the diff). This check is its bench proof. It runs straight after
+11.17, while the Firmware listing is still stale.
+
+Set-up: the phone on the Dashboard, a second phone (or a laptop) on `http://192.168.7.7/#/alarms`, both logged in. In
+W2, start background traffic and leave it running:
+`python C:\Projects\HillGrov\tools\web_test.py 192.168.7.7 --password hillgrow1 --soak 900`.
+
+1. **Install refused, 7 times.** Leave the card from 11.17 in the slot and do not Read card. Tap Install on the zone
+   row → Install, 7 times. Each one mounts the card, is refused ("The file on the card changed since Read card..."),
+   and unmounts it.
+2. **Export, 7 times.** Config → zone 2 → Export to card, 7 times. Each shows "Exported to /hillgrow/zone2.json".
+3. **Read card, 6 times.** System → Firmware → Read card, 6 times. Each lists the card.
+4. **Read card with no card, 10 times.** Pull the card. Read card 10 times. Each shows "No microSD card found --
+   insert a FAT32 card". These are 10 failed mounts, and each one's cleanup removes slot 0.
+5. Wait 60 s with the phones still polling.
+
+**PASS:**
+- Through all 30 operations and the 60 s after them, W1 shows no `panic`, `abort`, `Backtrace`, `Guru Meditation`,
+  `LoadProhibited`, `StoreProhibited`, `task_wdt` or boot banner. Any of these is a **STOP** (0.4). If the backtrace
+  names `sd_host_isr`, the driver override is not in the image: build with `CONFIG_HILLGROW_PANEL_SD=n` (the kill
+  switch in `components/panel_ui/Kconfig`) until it is fixed.
+- The phones' pages keep updating throughout, with no gap longer than a few seconds.
+- Afterwards the AP is still serving:
+  - `netsh wlan show interfaces` shows `HillGrow`;
+  - W1 `GET STATUS` shows an uptime that covers the whole check (no reboot);
+  - the W2 soak finishes and passes;
+  - `python C:\Projects\HillGrov\tools\web_test.py 192.168.7.7 --password hillgrow1 --only state` passes.
+- The only `E SD_HOST` lines follow the failed mounts of step 4 (0.4's rule).
+
+Reinsert card A for 11.18.
+
 ### 11.18 20 mount cycles: the C6 and the AP survive -- T31
 Tap Read card 20 times: 14 with card A, 3 with no card and 3 with card C.
 
@@ -948,10 +1001,30 @@ when R4's internal minimum is at least 128 KB. Otherwise leave the pool at 64 KB
 exhaustion, at some speed cost. Record the decision.
 
 **Budget summary for the report:**
-- image 1,600,576 B of 4,194,304 (and of the 2 MB factory partition: 76.3 %);
+- image 1,601,392 B of 4,194,304 (and of the 2 MB factory partition: 76.4 %);
 - R4 internal free/min;
 - R4 LVGL used/peak;
 - boot-to-lit `up in N ms` (3.1), plus 15.1's figure if it was run.
+
+### 14.3 ESP32 fallback master: heap-min after /api/alarms -- T15, C10, final review I2 (REQUIRED)
+This is a hard gate, not optional: the ESP32 (DevKitC) master is the maintained fallback, and its heap margin is thin.
+The final review moved `/api/state`'s ~1.9 KB gather back onto the httpd stack (h_state's frame is 2,160 B, against
+2,224 B before Task 9; the httpd stack is 8 KB), and `/api/alarms` no longer mallocs a 6.6 KB snapshot per request.
+This needs the DevKitC, and the P4 powered off so that only one `HillGrow` AP is up.
+1. Flash it:
+   - `python C:\Projects\HillGrov\tools\flash_app.py --app master --build-dir C:\Projects\HillGrov\master\build --port <DevKitC COM> --dry-run`
+   - then the same command without `--dry-run`.
+2. Run `python C:\Projects\HillGrov\tools\web_test.py 192.168.7.7 --password hillgrow1 --only state`. This exercises
+   `/api/state` and `/api/alarms`.
+3. Send `GET STATUS` on its UART.
+
+**PASS:**
+- heap min ≥ 64 KB (65,536 B). For reference, SP4 measured 68,488 B. This build's `.bss` is 92,288 B (94,200 B
+  before the final review) with 70,797 B of DRAM free (68,885 B before).
+- No `Stack canary` / `stack overflow` on its UART during step 2 (the httpd task carries h_state's gather again).
+- **FAIL** below 64 KB. That fails the acceptance.
+
+**Restore:** power the DevKitC off and the P4 on again.
 
 ---
 
@@ -995,17 +1068,8 @@ Only if you can reach System → Fleet → Reboot master within about 1 s of the
 
 **PASS:** the second confirm reads "Firmware state unknown". Otherwise record "not exercised".
 
-### 15.6 ESP32 fallback master: heap-min after /api/alarms -- T15, C10
-This needs the DevKitC, and the P4 powered off so that only one `HillGrow` AP is up.
-1. Flash it:
-   - `python C:\Projects\HillGrov\tools\flash_app.py --app master --build-dir C:\Projects\HillGrov\master\build --port <DevKitC COM> --dry-run`
-   - then the same command without `--dry-run`.
-2. Run `python C:\Projects\HillGrov\tools\web_test.py 192.168.7.7 --password hillgrow1 --only state`. This exercises
-   `/api/alarms`.
-3. Send `GET STATUS` on its UART.
-
-**PASS:** heap min ≥ 64 KB. For reference, SP4 measured 68,488 B, and this build's `.bss` is 94,200 B with 68,885 B of
-DRAM free.
+### 15.6 (moved)
+The ESP32 fallback master's heap-min check is now **14.3, REQUIRED** (final review I2).
 
 **Not exercisable on this bench** (record as "not exercised"):
 - the badge tap target with 8 tiles (T13; there are 2 zones);
@@ -1127,7 +1191,7 @@ and an owner acceptance. What held, and what to carry forward:
 - **Surprises on the bench:** <one bullet per surprise recorded in the Stage 0-5 task reports, or "none">.
 ```
 Where each value comes from:
-- `<size>`: 1,600,576 (2.1).
+- `<size>`: 1,601,392 (2.1).
 - `<free>` and `<min>`: R4.
 - `<used>`: R4. `<peak>`: R4 as a percentage of 64 KB.
 - `<ms>`: 3.1, and 15.1 if it was run.
