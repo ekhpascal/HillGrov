@@ -7,6 +7,7 @@
 #include "pnl_fmt.h"
 #include "pnl_palette.h"
 #include "pnl_theme.h"
+#include "pnl_ui_kit.h"     /* pnl_kit_cell_set */
 #include "scr_shell.h"
 #include "scr_zone.h"
 #include "zone_sections.h"
@@ -55,12 +56,6 @@ static void sel_cb(lv_event_t *e) {
 static void cfg_cb(lv_event_t *e) {
     (void)e;
     if (s_zone) pnl_nav_go(PNL_DEST_CONFIG, s_zone);
-}
-
-/* lv_table redraws the whole table on any cell write: write only on change. */
-static void cell_set(lv_obj_t *t, uint32_t r, uint32_t c, const char *txt) {
-    const char *cur = lv_table_get_cell_value(t, r, c);
-    if (!cur || strcmp(cur, txt) != 0) lv_table_set_cell_value(t, r, c, txt);
 }
 
 static void selector_update(const psvc_state_t *st) {
@@ -139,7 +134,7 @@ static void zone_update(const pnl_snap_t *sn) {
     snprintf(v[11], sizeof v[11], "%u", (unsigned)n->hb.reset_reason);
     snprintf(v[12], sizeof v[12], "0x%" PRIx64, (uint64_t)n->hb.active_faults);
     snprintf(v[13], sizeof v[13], "%u", (unsigned)n->hb.mode);
-    for (uint32_t r = 0; r < ZROWS; r++) cell_set(s_rows, r, 1, v[r]);
+    for (uint32_t r = 0; r < ZROWS; r++) pnl_kit_cell_set(s_rows, r, 1, v[r]);
 
     int ns = n->hb.n_shelves > 4 ? 4 : n->hb.n_shelves;
     pnl_obj_show(s_shelves, ns > 0);
@@ -149,13 +144,13 @@ static void zone_update(const pnl_snap_t *sn) {
         for (int i = 0; i < ns; i++) {
             const hg_hb_shelf_t *s = &n->hb.shelf[i];
             uint32_t r = (uint32_t)(i + 1);
-            snprintf(b, sizeof b, "%d", i);                          cell_set(s_shelves, r, 0, b);
-            snprintf(b, sizeof b, "%u", (unsigned)s->pct_a);         cell_set(s_shelves, r, 1, b);
-            snprintf(b, sizeof b, "%u", (unsigned)s->pct_b);         cell_set(s_shelves, r, 2, b);
-            snprintf(b, sizeof b, "%u", (unsigned)s->white);         cell_set(s_shelves, r, 3, b);
-            snprintf(b, sizeof b, "%u", (unsigned)s->red);           cell_set(s_shelves, r, 4, b);
-            cell_set(s_shelves, r, 5, s->out_flags ? "on" : "off");
-            snprintf(b, sizeof b, "%us", (unsigned)s->pump_today_s); cell_set(s_shelves, r, 6, b);
+            snprintf(b, sizeof b, "%d", i);                          pnl_kit_cell_set(s_shelves, r, 0, b);
+            snprintf(b, sizeof b, "%u", (unsigned)s->pct_a);         pnl_kit_cell_set(s_shelves, r, 1, b);
+            snprintf(b, sizeof b, "%u", (unsigned)s->pct_b);         pnl_kit_cell_set(s_shelves, r, 2, b);
+            snprintf(b, sizeof b, "%u", (unsigned)s->white);         pnl_kit_cell_set(s_shelves, r, 3, b);
+            snprintf(b, sizeof b, "%u", (unsigned)s->red);           pnl_kit_cell_set(s_shelves, r, 4, b);
+            pnl_kit_cell_set(s_shelves, r, 5, s->out_flags ? "on" : "off");
+            snprintf(b, sizeof b, "%us", (unsigned)s->pump_today_s); pnl_kit_cell_set(s_shelves, r, 6, b);
         }
     }
 }

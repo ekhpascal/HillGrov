@@ -19,6 +19,7 @@
 #include "pnl_dim_hold.h"
 #include "pnl_palette.h"
 #include "pnl_ui_kit.h"
+#include "pnl_fmt.h"        /* pnl_fmt_roller_opts */
 #include "scr_shell.h"
 #include "scr_system.h"     /* sys_reboot_confirm */
 
@@ -189,15 +190,6 @@ static lv_obj_t *slider(lv_obj_t *parent, uint8_t v, lv_event_cb_t changed) {
     return s;
 }
 
-static lv_obj_t *roller(lv_obj_t *parent, const char *opts, uint32_t sel, lv_event_cb_t cb) {
-    lv_obj_t *r = lv_roller_create(parent);
-    lv_roller_set_options(r, opts, LV_ROLLER_MODE_NORMAL);
-    lv_roller_set_visible_row_count(r, 3);
-    lv_roller_set_selected(r, sel, LV_ANIM_OFF);
-    lv_obj_add_event_cb(r, cb, LV_EVENT_VALUE_CHANGED, NULL);
-    return r;
-}
-
 static lv_obj_t *choice(lv_obj_t *row, const char *text, lv_event_cb_t cb, int i) {
     return pnl_kit_button(row, text, cb, (void *)(intptr_t)i);
 }
@@ -229,20 +221,17 @@ static void panel_build(lv_obj_t *content, int arg) {
     lv_obj_t *r = pnl_kit_row(d);
     for (int i = 0; i < 3; i++) s_mode[i] = choice(r, MODE_TXT[i], mode_click, i);
     set_checked(s_mode, 3, p->dim.mode);
-    if (!s_hours[0]) {
-        size_t o = 0;
-        for (int h = 0; h < 24; h++) o += (size_t)snprintf(s_hours + o, sizeof s_hours - o, "%s%02d", h ? "\n" : "", h);
-    }
+    if (!s_hours[0]) (void)pnl_fmt_roller_opts(s_hours, sizeof s_hours, 0, 24, 2);
     lv_obj_t *hr = pnl_kit_row(d);
     lv_obj_t *l = lv_label_create(hr); lv_label_set_text(l, "Fixed hours: dim from");
-    s_start = roller(hr, s_hours, p->dim.fixed_start_min / 60u, hours_changed);
+    s_start = pnl_kit_roller(hr, s_hours, p->dim.fixed_start_min / 60u, hours_changed, NULL);
     l = lv_label_create(hr); lv_label_set_text(l, "to");
-    s_end = roller(hr, s_hours, p->dim.fixed_end_min / 60u, hours_changed);
+    s_end = pnl_kit_roller(hr, s_hours, p->dim.fixed_end_min / 60u, hours_changed, NULL);
     lv_obj_t *ir = pnl_kit_row(d);
     l = lv_label_create(ir); lv_label_set_text(l, "Dim after idle");
-    (void)roller(ir, IDLE_TXT, (uint32_t)index_of(IDLE_S, 4, p->dim.idle_s, 1), idle_changed);
+    (void)pnl_kit_roller(ir, IDLE_TXT, (uint32_t)index_of(IDLE_S, 4, p->dim.idle_s, 1), idle_changed, NULL);
     l = lv_label_create(ir); lv_label_set_text(l, "Return to Home and wipe after");
-    (void)roller(ir, WIPE_TXT, (uint32_t)index_of(WIPE_S, 3, p->wipe_idle_s, 1), wipe_changed);
+    (void)pnl_kit_roller(ir, WIPE_TXT, (uint32_t)index_of(WIPE_S, 3, p->wipe_idle_s, 1), wipe_changed, NULL);
     lv_obj_t *note = pnl_kit_msg(d);
     pnl_kit_msg_set(note, "Follow the lights: dim while every scheduled shelf light is off. The first touch on a dimmed "
                           "panel only wakes it.", PNL_KIT_INFO);

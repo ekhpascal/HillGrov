@@ -91,3 +91,21 @@ int pnl_fmt_reading(const pnl_readings_t *r, int which, char *out, size_t cap) {
     default: return snprintf(out, cap, "--");
     }
 }
+
+size_t pnl_fmt_roller_opts(char *out, size_t cap, int from, int n, int width) {
+    if (!out || cap == 0) return 0;
+    size_t o = 0;
+    out[0] = '\0';
+    for (int i = 0; i < n; i++) {
+        int w = snprintf(out + o, cap - o, "%s%0*d", i ? "\n" : "", width, from + i);
+        if (w < 0 || (size_t)w >= cap - o) { out[o] = '\0'; break; }   /* no partial number at the end */
+        o += (size_t)w;
+    }
+    return o;
+}
+
+void pnl_fmt_trim_eol(char *s) {
+    if (!s) return;
+    size_t n = strlen(s);
+    while (n && (s[n - 1] == '\n' || s[n - 1] == '\r')) s[--n] = '\0';
+}

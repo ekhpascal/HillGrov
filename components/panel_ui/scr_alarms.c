@@ -7,6 +7,7 @@
 #include "pnl_fmt.h"
 #include "pnl_palette.h"
 #include "pnl_theme.h"
+#include "pnl_ui_kit.h"     /* pnl_kit_cell_set */
 #include "pnl_poll.h"
 #include "scr_shell.h"
 
@@ -17,12 +18,6 @@ static am_snapshot_t *s_am;          /* PSRAM, this screen's copy; freed on tear
 static uint32_t       s_am_seen;
 static uint8_t        s_have;        /* s_am holds at least one published snapshot */
 static lv_obj_t      *s_act, *s_act_empty, *s_ev, *s_ev_empty, *s_oom;
-
-/* lv_table redraws the whole table on any cell write: write only on change. */
-static void cell_set(lv_obj_t *t, uint32_t r, uint32_t c, const char *txt) {
-    const char *cur = lv_table_get_cell_value(t, r, c);
-    if (!cur || strcmp(cur, txt) != 0) lv_table_set_cell_value(t, r, c, txt);
-}
 
 static void age_text(const pnl_snap_t *sn, uint32_t stamp, char *b, size_t cap) {
     if (!sn || !sn->started) { snprintf(b, cap, "--"); return; }   /* HG.alarmAgo: no uptime yet -> a dash */
@@ -38,15 +33,15 @@ static void lists_render(void) {
     if (s_am->n_active > 0) {
         if (lv_table_get_row_count(s_act) != (uint32_t)s_am->n_active) lv_table_set_row_count(s_act, (uint32_t)s_am->n_active);
         for (int i = 0; i < s_am->n_active; i++) {
-            cell_set(s_act, (uint32_t)i, 0, s_am->active[i].key);
-            cell_set(s_act, (uint32_t)i, 1, s_am->active[i].text);
+            pnl_kit_cell_set(s_act, (uint32_t)i, 0, s_am->active[i].key);
+            pnl_kit_cell_set(s_act, (uint32_t)i, 1, s_am->active[i].text);
         }
     }
     pnl_obj_show(s_ev_empty, s_am->n_events == 0);
     pnl_obj_show(s_ev, s_am->n_events > 0);
     if (s_am->n_events > 0) {
         if (lv_table_get_row_count(s_ev) != (uint32_t)s_am->n_events) lv_table_set_row_count(s_ev, (uint32_t)s_am->n_events);
-        for (int i = 0; i < s_am->n_events; i++) cell_set(s_ev, (uint32_t)i, 1, s_am->events[i].text);
+        for (int i = 0; i < s_am->n_events; i++) pnl_kit_cell_set(s_ev, (uint32_t)i, 1, s_am->events[i].text);
     }
 }
 
@@ -55,11 +50,11 @@ static void ages_render(const pnl_snap_t *sn) {
     char b[24];
     for (int i = 0; i < s_am->n_active; i++) {
         age_text(sn, s_am->active[i].since_s, b, sizeof b);
-        cell_set(s_act, (uint32_t)i, 2, b);
+        pnl_kit_cell_set(s_act, (uint32_t)i, 2, b);
     }
     for (int i = 0; i < s_am->n_events; i++) {
         age_text(sn, s_am->events[i].at_s, b, sizeof b);
-        cell_set(s_ev, (uint32_t)i, 0, b);
+        pnl_kit_cell_set(s_ev, (uint32_t)i, 0, b);
     }
 }
 

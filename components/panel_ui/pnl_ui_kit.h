@@ -18,6 +18,11 @@ void      pnl_kit_enable(lv_obj_t *obj, int on);                        /* LV_ST
 lv_obj_t *pnl_kit_field(lv_obj_t *parent, const char *caption, lv_event_cb_t cb, void *ud);  /* returns the value label */
 lv_obj_t *pnl_kit_msg(lv_obj_t *parent);                                /* wrapping status label */
 void      pnl_kit_msg_set(lv_obj_t *lbl, const char *text, pnl_kit_tone_t tone);           /* NULL-safe */
+/* A 3-row roller on `opts` (copied; pnl_fmt_roller_opts builds numeric ones) showing row `sel`; cb, when non-NULL, on
+ * LV_EVENT_VALUE_CHANGED with ud. The caller sets any width. */
+lv_obj_t *pnl_kit_roller(lv_obj_t *parent, const char *opts, uint32_t sel, lv_event_cb_t cb, void *ud);
+/* lv_table redraws the whole table on any cell write: writes the cell only when its text changed. */
+void      pnl_kit_cell_set(lv_obj_t *t, uint32_t r, uint32_t c, const char *txt);
 
 #ifdef __cplusplus
 }

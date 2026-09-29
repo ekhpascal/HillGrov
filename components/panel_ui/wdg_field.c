@@ -9,6 +9,8 @@
 #include "pnl_input.h"      /* pnl_zero */
 #include "pnl_palette.h"
 #include "psvc_edit.h"
+#include "pnl_fmt.h"        /* pnl_fmt_roller_opts */
+#include "pnl_ui_kit.h"     /* pnl_kit_roller */
 
 #define REVEAL_MS 10000u
 #define MASK_TEXT "********"
@@ -141,23 +143,15 @@ static void ev_roller(lv_event_t *e) {
     else set_num(w, (int32_t)sel);
 }
 static void put2(char **p, int v) { *(*p)++ = (char)('0' + v / 10); *(*p)++ = (char)('0' + v % 10); }
-static const char *two_digit_opts(int n) {         /* "00\n01\n..": 24 hours or 60 minutes */
+static const char *two_digit_opts(int n) {         /* 24 hours or 60 minutes, built once */
     static char hh[24 * 3], mm[60 * 3];
     char *buf = (n == 24) ? hh : mm;
-    if (!buf[0]) {
-        char *p = buf;
-        for (int i = 0; i < n; i++) { if (i) *p++ = '\n'; put2(&p, i); }
-        *p = '\0';
-    }
+    if (!buf[0]) (void)pnl_fmt_roller_opts(buf, n == 24 ? sizeof hh : sizeof mm, 0, n, 2);
     return buf;
 }
 static lv_obj_t *roller(lv_obj_t *parent, const char *opts, uint32_t sel, int width, wrow_t *w, lv_event_cb_t cb) {
-    lv_obj_t *r = lv_roller_create(parent);
-    lv_roller_set_options(r, opts, LV_ROLLER_MODE_NORMAL);    /* copies opts */
-    lv_roller_set_visible_row_count(r, 3);
+    lv_obj_t *r = pnl_kit_roller(parent, opts, sel, cb, w);
     lv_obj_set_width(r, width);
-    lv_roller_set_selected(r, sel, LV_ANIM_OFF);
-    lv_obj_add_event_cb(r, cb, LV_EVENT_VALUE_CHANGED, w);
     return r;
 }
 

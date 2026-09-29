@@ -30,6 +30,12 @@ typedef struct { int soil_pct, light_pct, pump_s; uint8_t any; } pnl_readings_t;
 void pnl_node_readings(const hg_node_t *n, pnl_readings_t *out);           /* app.js:603-617 shelfTotals over min(n_shelves,4) */
 int  pnl_fmt_reading(const pnl_readings_t *r, int which /*0 soil 1 light 2 pump*/, char *out, size_t cap);  /* "41%" "12s" "--" */
 
+/* Roller options: n numbers from `from`, each zero-padded to `width` digits, one per line ("00\n01\n..\n23" for
+ * (0, 24, 2); "2024\n2025.." for years). Stops after the last whole number that fits cap; returns the length. */
+size_t pnl_fmt_roller_opts(char *out, size_t cap, int from, int n, int width);
+/* Strips trailing '\n' / '\r' in place: a CLI reply's line end, before it goes under a label. NULL-safe. */
+void   pnl_fmt_trim_eol(char *s);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,3 +1,4 @@
+#include <string.h>
 #include "lvgl.h"
 #include "pnl_palette.h"
 #include "pnl_theme.h"
@@ -82,4 +83,18 @@ void pnl_kit_msg_set(lv_obj_t *lbl, const char *text, pnl_kit_tone_t tone) {
     lv_label_set_text(lbl, text ? text : "");
     uint32_t c = tone == PNL_KIT_ERR ? PNL_C_OFFLINE_TEXT : tone == PNL_KIT_OK ? PNL_C_OK_TEXT : PNL_C_MUTED;
     lv_obj_set_style_text_color(lbl, lv_color_hex(c), 0);
+}
+
+lv_obj_t *pnl_kit_roller(lv_obj_t *parent, const char *opts, uint32_t sel, lv_event_cb_t cb, void *ud) {
+    lv_obj_t *r = lv_roller_create(parent);
+    lv_roller_set_options(r, opts, LV_ROLLER_MODE_NORMAL);    /* copies opts */
+    lv_roller_set_visible_row_count(r, 3);
+    lv_roller_set_selected(r, sel, LV_ANIM_OFF);
+    if (cb) lv_obj_add_event_cb(r, cb, LV_EVENT_VALUE_CHANGED, ud);
+    return r;
+}
+
+void pnl_kit_cell_set(lv_obj_t *t, uint32_t r, uint32_t c, const char *txt) {
+    const char *cur = lv_table_get_cell_value(t, r, c);
+    if (!cur || strcmp(cur, txt) != 0) lv_table_set_cell_value(t, r, c, txt);
 }

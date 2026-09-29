@@ -113,7 +113,36 @@ static void test_readings_follow_shelf_totals(void) {
     assert_ascii(b);
 }
 
+/* The shared roller builder reproduces the three builders it replaced (sys_time build_opts, wdg_field two_digit_opts,
+ * scr_panel's hours loop) byte for byte, in the buffers they used. */
+static void test_roller_opts_match_the_old_builders(void) {
+    char hh[24 * 3], mm[60 * 3], yy[12 * 5 + 1], ref[256];
+    size_t o = 0;
+    for (int i = 0; i < 24; i++) o += (size_t)snprintf(ref + o, sizeof ref - o, "%s%02d", i ? "\n" : "", i);
+    TEST_ASSERT_EQUAL_UINT32(o, pnl_fmt_roller_opts(hh, sizeof hh, 0, 24, 2));
+    TEST_ASSERT_EQUAL_STRING(ref, hh);
+    TEST_ASSERT_EQUAL_UINT32(24 * 3 - 1, strlen(hh));         /* the 24 * 3 buffers fit exactly */
+    TEST_ASSERT_EQUAL_UINT32(60 * 3 - 1, pnl_fmt_roller_opts(mm, sizeof mm, 0, 60, 2));
+    TEST_ASSERT_EQUAL_STRING_LEN("00\n01\n02", mm, 8);
+    TEST_ASSERT_EQUAL_STRING("58\n59", mm + strlen(mm) - 5);
+    TEST_ASSERT_EQUAL_UINT32(12 * 5 - 1, pnl_fmt_roller_opts(yy, sizeof yy, 2024, 12, 4));
+    TEST_ASSERT_EQUAL_STRING_LEN("2024\n2025", yy, 9);
+    TEST_ASSERT_EQUAL_UINT32(8, pnl_fmt_roller_opts(ref, 9, 1, 31, 2));   /* too small: whole numbers only */
+    TEST_ASSERT_EQUAL_STRING("01\n02\n03", ref);
+    TEST_ASSERT_EQUAL_UINT32(0, pnl_fmt_roller_opts(ref, 0, 0, 24, 2));
+}
+
+static void test_trim_eol(void) {
+    char a[] = "OK SET TIME 2026-09-29 12:00:00\r\n\n", b[] = "ERR BUSY", c[] = "\n";
+    pnl_fmt_trim_eol(a); TEST_ASSERT_EQUAL_STRING("OK SET TIME 2026-09-29 12:00:00", a);
+    pnl_fmt_trim_eol(b); TEST_ASSERT_EQUAL_STRING("ERR BUSY", b);
+    pnl_fmt_trim_eol(c); TEST_ASSERT_EQUAL_STRING("", c);
+    pnl_fmt_trim_eol(NULL);
+}
+
 int main(void) { UNITY_BEGIN();
+    RUN_TEST(test_roller_opts_match_the_old_builders);
+    RUN_TEST(test_trim_eol);
     RUN_TEST(test_zone_name);
     RUN_TEST(test_age_matches_the_web);
     RUN_TEST(test_sta_and_ap_lines);

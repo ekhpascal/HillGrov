@@ -59,8 +59,7 @@ static void reboot_done(pnl_job_t *j) {
     char r[PNL_JOB_OUT_MAX];
     memcpy(r, j->out, sizeof r);            /* pnl_cmd_run NUL-terminates within out */
     r[sizeof r - 1] = '\0';
-    size_t n = strlen(r);                   /* the ERR line ends with '\n' */
-    while (n && (r[n - 1] == '\n' || r[n - 1] == '\r')) r[--n] = '\0';
+    pnl_fmt_trim_eol(r);                    /* the ERR line ends with '\n' */
     overlay_fail(r[0] ? r : "Reboot failed");
 }
 
