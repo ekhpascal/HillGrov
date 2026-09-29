@@ -36,22 +36,45 @@ static lv_obj_t *s_upd[HG_MAX_ZONES], *s_name[HG_MAX_ZONES];
 /* ---- the one reboot flow (D16) ---- */
 static lv_obj_t *s_overlay, *s_overlay_lbl;   /* on the top layer: outlives any screen until Close (or the reset) */
 static uint8_t   s_overlay_failed;             /* the overlay shows a refusal and a Close button, not "Rebooting..." */
+/* The single worker runs jobs in submit order, so REBOOT CONFIRM can queue behind a long job (a 30 s scan, a card
+ * install). While it waits the overlay says so; reboot_run() raises s_reboot_started on the worker as it begins, and a
+ * 100 ms timer on the LVGL task then switches the text to "Rebooting...". */
+static volatile uint8_t s_reboot_started;
+static lv_timer_t      *s_reboot_wait;
+
+static void reboot_wait_stop(void) {
+    if (s_reboot_wait) { lv_timer_delete(s_reboot_wait); s_reboot_wait = NULL; }
+}
+
+static void reboot_wait_tick(lv_timer_t *t) {
+    (void)t;
+    if (!s_reboot_started) return;
+    reboot_wait_stop();
+    if (!s_overlay_lbl || s_overlay_failed) return;
+    lv_obj_set_style_text_font(s_overlay_lbl, &lv_font_montserrat_48, 0);
+    lv_label_set_text(s_overlay_lbl, "Rebooting...");
+}
 
 static void overlay_close(lv_event_t *e) {
     (void)e;
     if (s_overlay) lv_obj_delete_async(s_overlay);   /* the Close button lives inside it: never delete synchronously */
+    reboot_wait_stop();
     s_overlay = s_overlay_lbl = NULL;
     s_overlay_failed = 0;
 }
 
 static void overlay_fail(const char *text) {
+    reboot_wait_stop();
     lv_obj_set_style_text_font(s_overlay_lbl, &lv_font_montserrat_28, 0);
     lv_label_set_text(s_overlay_lbl, text);
     pnl_kit_button(s_overlay, "Close", overlay_close, NULL);
     s_overlay_failed = 1;
 }
 
-static void reboot_run(pnl_job_t *j) { j->irc = pnl_cmd_run("REBOOT CONFIRM", (char *)j->out, PNL_JOB_OUT_MAX); }
+static void reboot_run(pnl_job_t *j) {
+    s_reboot_started = 1;                   /* [WORKER] the jobs queued ahead of this one are done */
+    j->irc = pnl_cmd_run("REBOOT CONFIRM", (char *)j->out, PNL_JOB_OUT_MAX);
+}
 
 static void reboot_done(pnl_job_t *j) {
     /* OK means esp_restart() is already under way (cmd_common.c h_reboot): keep "Rebooting...". Only a real rejection
@@ -79,8 +102,16 @@ static void reboot_go(void *ctx) {
     s_overlay_lbl = lv_label_create(s_overlay);
     lv_obj_set_style_text_font(s_overlay_lbl, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(s_overlay_lbl, lv_color_hex(PNL_C_TEXT), 0);
-    lv_label_set_text(s_overlay_lbl, "Rebooting...");          /* shown before the reply, like the web */
-    if (pnl_worker_submit(reboot_run, reboot_done, NULL, 0) != 0) overlay_fail("Panel busy -- reboot not sent");
+    int queued_behind = pnl_worker_pending() > 0;             /* a job is running or queued ahead of this one */
+    s_reboot_started = 0;
+    if (pnl_worker_submit(reboot_run, reboot_done, NULL, 0) != 0) { overlay_fail("Panel busy -- reboot not sent"); return; }
+    if (queued_behind && !s_reboot_started) {
+        lv_obj_set_style_text_font(s_overlay_lbl, &lv_font_montserrat_28, 0);
+        lv_label_set_text(s_overlay_lbl, "Waiting for the running job...");   /* then "Rebooting..." (reboot_wait_tick) */
+        s_reboot_wait = lv_timer_create(reboot_wait_tick, 100, NULL);
+    } else {
+        lv_label_set_text(s_overlay_lbl, "Rebooting...");      /* shown before the reply, like the web */
+    }
 }
 
 static void reboot_trial_check(void *ctx) {
@@ -146,6 +177,7 @@ static void submit(uint8_t op, uint8_t zone) {
 void sys_fleet_wipe(void) {
     if (!s_busy) { s_last[0] = '\0'; s_last_err = 0; pnl_kit_msg_set(s_msg, "", PNL_KIT_INFO); }   /* NULL-safe */
     if (s_overlay && s_overlay_failed) {    /* called from a timer, never from inside the overlay: delete now */
+        reboot_wait_stop();
         lv_obj_delete(s_overlay);
         s_overlay = s_overlay_lbl = NULL;
         s_overlay_failed = 0;
