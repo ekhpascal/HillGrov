@@ -33,6 +33,7 @@ if("${CMAKE_PROJECT_NAME}" STREQUAL "hillgrow_master" AND "${panel_target}" STRE
     list(APPEND PANEL_SRCS "pnl_sd_pick.c" "pnl_sd.c")                   # Task 31: microSD mount, firmware file picking
     list(APPEND PANEL_SRCS "sys_firmware.c")                             # Task 32: System -- firmware from microSD
     list(APPEND PANEL_SRCS "cfg_card.c")                                 # Task 33: config export/import via microSD
+    list(APPEND PANEL_SRCS "pnl_cli.c")                                  # CLEAR PANEL CONFIRM: the no-touch prefs reset
 endif()
 
 idf_component_register(SRCS ${PANEL_SRCS} INCLUDE_DIRS "."

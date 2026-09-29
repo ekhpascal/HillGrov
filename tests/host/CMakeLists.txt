@@ -59,7 +59,10 @@ hg_test(test_ring_health ${COMP}/ring_proto/ring_health.c ${COMP}/ring_proto/rin
 hg_test(test_node_store ${COMP}/node_store/ztab.c ${COMP}/hg_blob/hg_blob.c)
 hg_test(test_ota_trial ${COMP}/ota_trial/trial_eval.c ${COMP}/ota_trial/trial_cmds.c ${CMD_CORE_SRC})
 hg_test(test_master_cmds ${COMP}/master_cmds/master_cmds.c ${CMD_CORE_SRC} ${COMP}/notify/notify.c
-        ${COMP}/cmd_common/cmd_common.c ${COMP}/ota_trial/trial_cmds.c fakes/fake_node_ops.c fakes/fake_net_ops.c)
+        ${COMP}/cmd_common/cmd_common.c ${COMP}/ota_trial/trial_cmds.c fakes/fake_node_ops.c fakes/fake_net_ops.c
+        ${COMP}/panel_ui/pnl_cli.c fakes/nvs_fake/fake_nvs.c)
+# CLEAR PANEL CONFIRM (pnl_cli.c) calls nvs_*: a fake nvs.h for this test only, never on the shared include path
+target_include_directories(test_master_cmds PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fakes/nvs_fake)
 hg_test(test_fleet_seq ${COMP}/node_mgr/fleet_seq.c)
 hg_test(test_hg_mcfg ${COMP}/hg_mcfg/hg_mcfg.c ${HG_CFG_SRC} ${COMP}/hg_blob/hg_blob.c)
 hg_test(test_web_auth ${COMP}/web_auth/web_auth.c ${COMP}/hg_mcfg/hg_mcfg.c ${HG_CFG_SRC} ${COMP}/hg_blob/hg_blob.c fakes/fake_sha256.c)

@@ -8,6 +8,8 @@
 #include "fake_node_ops.h"
 #include "fake_net_ops.h"
 #include "fake_clock.h"
+#include "pnl_cli.h"          /* PANEL_CMD_ROWS: the P4 master merges them too */
+#include "nvs.h"              /* fakes/nvs_fake: this test only */
 
 /* trial_cmds.c (linked in below for OTA_TRIAL_ROWS/N in test_merged_table_valid)
  * calls this from its handler; that test only runs cmd_table_check, never
@@ -80,6 +82,46 @@ static void test_merged_table_valid(void) {
            (size_t)OTA_TRIAL_ROWS_N * sizeof(cmd_entry_t));
     TEST_ASSERT_EQUAL_INT(CMD_COMMON_ROWS_N + MASTER_CMD_ROWS_N + OTA_TRIAL_ROWS_N, total);
     TEST_ASSERT_EQUAL_INT(-1, cmd_table_check(merged, total));
+}
+
+/* The P4 master's merge adds PANEL_CMD_ROWS last (cmd_table_master.c, CONFIG_IDF_TARGET_ESP32P4). */
+static cmd_entry_t s_p4[64];
+static int p4_table(void) {
+    int total = CMD_COMMON_ROWS_N + MASTER_CMD_ROWS_N + OTA_TRIAL_ROWS_N + PANEL_CMD_ROWS_N;
+    TEST_ASSERT_TRUE(total <= 64);
+    int o = 0;
+    memcpy(s_p4 + o, CMD_COMMON_ROWS, (size_t)CMD_COMMON_ROWS_N * sizeof(cmd_entry_t)); o += CMD_COMMON_ROWS_N;
+    memcpy(s_p4 + o, MASTER_CMD_ROWS, (size_t)MASTER_CMD_ROWS_N * sizeof(cmd_entry_t)); o += MASTER_CMD_ROWS_N;
+    memcpy(s_p4 + o, OTA_TRIAL_ROWS, (size_t)OTA_TRIAL_ROWS_N * sizeof(cmd_entry_t));  o += OTA_TRIAL_ROWS_N;
+    memcpy(s_p4 + o, PANEL_CMD_ROWS, (size_t)PANEL_CMD_ROWS_N * sizeof(cmd_entry_t));  o += PANEL_CMD_ROWS_N;
+    return o;
+}
+
+static void test_p4_merged_table_valid(void) {
+    int total = p4_table();
+    TEST_ASSERT_EQUAL_INT(-1, cmd_table_check(s_p4, total));
+}
+
+/* CLEAR PANEL CONFIRM: the no-touch recovery for a wrong Flipped mapping -- erases "panel"/"prefs" and says reboot. */
+static void test_clear_panel(void) {
+    core.table = s_p4; core.table_len = p4_table();
+    fake_nvs_reset();
+    fake_nvs_has_prefs = 1;
+    TEST_ASSERT_EQUAL_INT(0, run("CLEAR PANEL CONFIRM"));
+    TEST_ASSERT_EQUAL_STRING("OK PANEL CLEARED REBOOT TO APPLY\n", resp);
+    TEST_ASSERT_EQUAL_INT(0, fake_nvs_has_prefs);
+    TEST_ASSERT_EQUAL_INT(1, fake_nvs_commits);
+    TEST_ASSERT_EQUAL_INT(fake_nvs_open_n, fake_nvs_close_n);
+    TEST_ASSERT_EQUAL_INT(0, run("CLEAR PANEL CONFIRM"));       /* nothing stored: still OK, nothing committed */
+    TEST_ASSERT_EQUAL_STRING("OK PANEL CLEARED REBOOT TO APPLY\n", resp);
+    TEST_ASSERT_EQUAL_INT(1, fake_nvs_commits);
+    fake_nvs_open_rc = ESP_FAIL;                                /* NVS writes disabled (recovery design 6.5) */
+    TEST_ASSERT_EQUAL_INT(-1, run("CLEAR PANEL CONFIRM"));
+    TEST_ASSERT_EQUAL_STRING("ERR NVS_WRITE\n", resp);
+    fake_nvs_reset();
+    fake_nvs_has_prefs = 1;
+    TEST_ASSERT_EQUAL_INT(-1, run("CLEAR PANEL"));               /* no CONFIRM: refused by the table, nothing erased */
+    TEST_ASSERT_EQUAL_INT(1, fake_nvs_has_prefs);
 }
 
 static void test_get_nodes(void) {
@@ -521,6 +563,8 @@ static void test_help_lists_net_rows(void) {
 int main(void) { UNITY_BEGIN();
     RUN_TEST(test_table_valid);
     RUN_TEST(test_merged_table_valid);
+    RUN_TEST(test_p4_merged_table_valid);
+    RUN_TEST(test_clear_panel);
     RUN_TEST(test_get_nodes);
     RUN_TEST(test_get_ring_idle);
     RUN_TEST(test_get_ring_open_blame_and_counters);

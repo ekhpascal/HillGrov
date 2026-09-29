@@ -8,6 +8,13 @@
 #include "node_mgr.h"
 #include "master_cmds.h"
 #include "psvc_net.h"
+#include "sdkconfig.h"
+#if CONFIG_IDF_TARGET_ESP32P4
+#include "pnl_cli.h"      /* the panel exists only on the P4 master: CLEAR PANEL CONFIRM */
+#define PANEL_ROWS_N PANEL_CMD_ROWS_N
+#else
+#define PANEL_ROWS_N 0
+#endif
 
 static const char *TAG = "cmd_table_master";
 static cmd_entry_t s_table[64];
@@ -42,7 +49,7 @@ const cmd_entry_t *master_table(int *n) {
         /* Task 8: the NET/TIME rows get their own ops struct
          * (components/panel_svc/psvc_net.c), so this is init2, not init. */
         master_cmds_init2(&MASTER_NODE_OPS, master_net_ops());
-        int total = CMD_COMMON_ROWS_N + MASTER_CMD_ROWS_N + OTA_TRIAL_ROWS_N;
+        int total = CMD_COMMON_ROWS_N + MASTER_CMD_ROWS_N + OTA_TRIAL_ROWS_N + PANEL_ROWS_N;
         if (total > 64) {
             ESP_LOGE(TAG, "table overflow: %d rows > 64 capacity, clamping", total);
             total = 64;
@@ -50,10 +57,17 @@ const cmd_entry_t *master_table(int *n) {
         int n_common = CMD_COMMON_ROWS_N < total ? CMD_COMMON_ROWS_N : total;
         int remaining = total - n_common;
         int n_master = MASTER_CMD_ROWS_N < remaining ? MASTER_CMD_ROWS_N : remaining;
-        int n_trial = remaining - n_master;
+        remaining -= n_master;
+        int n_trial = OTA_TRIAL_ROWS_N < remaining ? OTA_TRIAL_ROWS_N : remaining;
+        int n_panel = remaining - n_trial;
         memcpy(s_table, CMD_COMMON_ROWS, (size_t)n_common * sizeof(cmd_entry_t));
         memcpy(s_table + n_common, MASTER_CMD_ROWS, (size_t)n_master * sizeof(cmd_entry_t));
         memcpy(s_table + n_common + n_master, OTA_TRIAL_ROWS, (size_t)n_trial * sizeof(cmd_entry_t));
+#if CONFIG_IDF_TARGET_ESP32P4
+        memcpy(s_table + n_common + n_master + n_trial, PANEL_CMD_ROWS, (size_t)n_panel * sizeof(cmd_entry_t));
+#else
+        (void)n_panel;
+#endif
         s_n = total;
         s_init = 1;
     }
