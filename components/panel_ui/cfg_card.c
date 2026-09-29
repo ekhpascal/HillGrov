@@ -179,6 +179,7 @@ static void card_done(pnl_job_t *j) {
 }
 
 static int card_submit(pnl_job_run_fn run, uint8_t zone, uint8_t import) {
+    if (!pnl_sd_enabled()) { cfg_set_status(PNL_SD_DISABLED_TEXT, 1); return -1; }   /* kill switch: no job, no card */
     if (s_busy) { cfg_set_status("microSD busy -- try again", 1); return -1; }
     if (!s_doc) s_doc = heap_caps_calloc(1, CARD_DOC_MAX + 1, MALLOC_CAP_SPIRAM);
     if (!s_doc) { cfg_set_status("microSD unavailable (no memory)", 1); return -1; }
@@ -204,6 +205,7 @@ static void import_go(void *ctx) {
 static void import_cancel(void *ctx) { (void)ctx; s_confirming = 0; }
 
 void cfg_card_import(uint8_t zone) {
+    if (!pnl_sd_enabled()) { cfg_set_status(PNL_SD_DISABLED_TEXT, 1); return; }
     if (s_busy) { cfg_set_status("microSD busy -- try again", 1); return; }
     char path[48], t[200];
     card_path(zone, path, sizeof path);

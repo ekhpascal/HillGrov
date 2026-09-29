@@ -2,11 +2,14 @@
 #include <string.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include "sdkconfig.h"
 #include "esp_log.h"
+#if CONFIG_HILLGROW_PANEL_SD
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 #include "driver/sdmmc_host.h"
 #include "sd_pwr_ctrl_by_on_chip_ldo.h"
+#endif
 #include "psvc_fw.h"          /* PSVC_FW_SRC_FAILED */
 #include "pnl_worker.h"
 #include "pnl_sd.h"
@@ -16,9 +19,22 @@
  * the BSP (slot 0 on its IOMUX pins, SDMMC_FREQ_HIGHSPEED, LDO VO4, width 4, no CD/WP), but host.init is ctlr_init()
  * below and deinit_p stays SDMMC_HOST_DEFAULT()'s sdmmc_host_deinit_slot: it removes slot 0, and when slot 1 is still
  * registered it maps the controller delete's "still in use" to ESP_OK (esp_driver_sdmmc/legacy/src/sdmmc_host.c), so
- * the C6 keeps its controller across every mount. */
+ * the C6 keeps its controller across every mount.
+ * The slot-0 removal is only safe with the project's esp_driver_sdmmc override (components/esp_driver_sdmmc/README.md):
+ * stock IDF 6.0.1's sd_host_isr() looks up slot[cur_slot_id], which still names the removed slot 0 after the last card
+ * transaction, and dereferences that NULL on the C6's next SDIO interrupt -- a panic. */
 
 static const char *TAG = "pnl_sd";
+
+int pnl_sd_enabled(void) {
+#if CONFIG_HILLGROW_PANEL_SD
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+#if CONFIG_HILLGROW_PANEL_SD
 
 #define SD_LDO_CHAN 4   /* bsp_sdcard_mount(): on-chip LDO VO4 powers the SD IO (the DSI PHY is VO3) */
 
@@ -73,6 +89,7 @@ const char *pnl_sd_rc_text(pnl_sd_rc_t rc) {
     case PNL_SD_NO_FS:   return "Card is not FAT32 -- exFAT cards (64 GB and up) must be reformatted to FAT32";
     case PNL_SD_BUSY:    return "microSD busy -- try again";
     case PNL_SD_UNAVAILABLE: return "microSD unavailable until the master reboots";
+    case PNL_SD_DISABLED: return PNL_SD_DISABLED_TEXT;
     default:             return "microSD read failed";
     }
 }
@@ -138,6 +155,25 @@ void pnl_sd_unmount(void) {
 }
 
 int pnl_sd_mounted(void) { return s_in_use; }
+
+#else  /* !CONFIG_HILLGROW_PANEL_SD: the kill switch -- no LDO handle, no slot add, the SDMMC controller is never touched */
+
+static const void *const s_card = NULL;     /* never mounted: pnl_sd_list_bins() answers -1 */
+
+const char *pnl_sd_rc_text(pnl_sd_rc_t rc) {
+    return rc == PNL_SD_OK ? "OK" : PNL_SD_DISABLED_TEXT;
+}
+
+pnl_sd_rc_t pnl_sd_mount(void) {
+    if (pnl_on_lvgl_task()) { ESP_LOGE(TAG, "pnl_sd_mount called on the LVGL task -- refused"); return PNL_SD_IO; }
+    return PNL_SD_DISABLED;
+}
+
+void pnl_sd_unmount(void) {}
+
+int pnl_sd_mounted(void) { return 0; }
+
+#endif /* CONFIG_HILLGROW_PANEL_SD */
 
 static int scan_dir(const char *dir, pnl_sd_file_t *out, int cap, int n) {
     DIR *d = opendir(dir);

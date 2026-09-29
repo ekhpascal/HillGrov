@@ -10,7 +10,12 @@
 extern "C" {
 #endif
 
-typedef enum { PNL_SD_OK = 0, PNL_SD_NO_CARD, PNL_SD_NO_FS, PNL_SD_BUSY, PNL_SD_IO, PNL_SD_UNAVAILABLE } pnl_sd_rc_t;
+typedef enum { PNL_SD_OK = 0, PNL_SD_NO_CARD, PNL_SD_NO_FS, PNL_SD_BUSY, PNL_SD_IO, PNL_SD_UNAVAILABLE,
+               PNL_SD_DISABLED } pnl_sd_rc_t;
+/* CONFIG_HILLGROW_PANEL_SD (panel_ui/Kconfig) = n builds a panel that never touches the SDMMC controller: every mount
+ * returns PNL_SD_DISABLED and the card screens show PNL_SD_DISABLED_TEXT with their card buttons disabled. */
+#define PNL_SD_DISABLED_TEXT "microSD disabled in this build"
+int         pnl_sd_enabled(void);   /* [ANY] CONFIG_HILLGROW_PANEL_SD */
 #define PNL_SD_MOUNT "/sdcard"
 #define PNL_SD_DIR   "/sdcard/hillgrow"
 pnl_sd_rc_t pnl_sd_mount(void);     /* [WORKER] no-op host.init while esp_hosted holds the controller. If the slot add finds no

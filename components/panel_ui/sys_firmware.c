@@ -57,8 +57,9 @@ static void install_click(lv_event_t *e);
 static void render_list(void) {
     if (!s_list) return;
     lv_obj_clean(s_list);
-    pnl_kit_enable(s_read_btn, !s_reading && !s_installing);
+    pnl_kit_enable(s_read_btn, pnl_sd_enabled() && !s_reading && !s_installing);
     lv_obj_t *m;
+    if (!pnl_sd_enabled()) { m = pnl_kit_msg(s_list); pnl_kit_msg_set(m, PNL_SD_DISABLED_TEXT, PNL_KIT_INFO); return; }
     if (s_reading) { m = pnl_kit_msg(s_list); pnl_kit_msg_set(m, "Reading the card...", PNL_KIT_INFO); return; }
     if (s_read_err[0]) { m = pnl_kit_msg(s_list); pnl_kit_msg_set(m, s_read_err, PNL_KIT_ERR); return; }
     if (s_n < 0) {
@@ -112,7 +113,7 @@ static void read_done(pnl_job_t *j) {
 
 static void read_click(lv_event_t *e) {
     (void)e;
-    if (s_reading || s_installing) return;
+    if (s_reading || s_installing || !pnl_sd_enabled()) return;
     if (!s_files) s_files = heap_caps_calloc(FW_MAX_FILES, sizeof *s_files, MALLOC_CAP_SPIRAM);
     if (!s_files) { snprintf(s_read_err, sizeof s_read_err, "Card listing unavailable (no memory)"); render_list(); return; }
     if (pnl_worker_submit(read_run, read_done, NULL, 0) != 0) {
