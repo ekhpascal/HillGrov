@@ -1,7 +1,7 @@
 /* Glue: System -> Fleet, the web's Fleet and Reboot cards (web/app.js:989-1015) and fleetUpdate / fleetUpdateAll /
  * fleetAbort / rebootMaster (app.js:1909-1954). The worker calls psvc_fleet_* (the same calls and the same refusal
  * tokens as POST/DELETE /api/fleet); Update and Update all are enabled only while the fleet line is "IDLE", Abort only
- * while it is not (app.js:990-1008).
+ * while it is not (app.js:990-1008), and all three stay disabled until the first poll delivers a fleet line.
  * The ONE reboot flow for the whole panel lives here (D16): sys_reboot_confirm() -- a confirm, a second confirm while
  * the running slot is on OTA trial (any reset during a trial retires the new image), then a full-screen "Rebooting..."
  * shown before the reply, exactly as the web does (REBOOT CONFIRM restarts at once, so the reply rarely arrives).
@@ -26,6 +26,7 @@ enum { OP_ZONE = 0, OP_ALL, OP_ABORT };
 typedef struct { uint8_t op, zone; } fleet_arg_t;
 
 static uint8_t  s_busy, s_idle, s_last_err;
+static uint8_t  s_have_status;              /* a poll has delivered a fleet line since this section was built */
 static char     s_last[96];                 /* the last outcome, kept for a rebuilt section */
 static int      s_rows_mask = -1;           /* -1 = rows not built yet (0xFF is a real mask: 8 enrolled zones) */
 static int      s_trial_shown = -1;         /* -1 = trial line not drawn yet */
@@ -109,9 +110,10 @@ static void fleet_run(pnl_job_t *j) {
 }
 
 static void enable_all(void) {              /* NULL-safe: pnl_kit_enable ignores a torn-down widget */
-    for (int i = 0; i < HG_MAX_ZONES; i++) pnl_kit_enable(s_upd[i], !s_busy && s_idle);
-    pnl_kit_enable(s_all_btn, !s_busy && s_idle);
-    pnl_kit_enable(s_abort_btn, !s_busy && !s_idle);
+    int ready = s_have_status && !s_busy;   /* before the first fleet line, every button is disabled */
+    for (int i = 0; i < HG_MAX_ZONES; i++) pnl_kit_enable(s_upd[i], ready && s_idle);
+    pnl_kit_enable(s_all_btn, ready && s_idle);
+    pnl_kit_enable(s_abort_btn, ready && !s_idle);
 }
 
 static void fleet_done(pnl_job_t *j) {
@@ -190,7 +192,8 @@ static void fleet_build(lv_obj_t *parent) {
     else if (s_last[0]) pnl_kit_msg_set(s_msg, s_last, s_last_err ? PNL_KIT_ERR : PNL_KIT_OK);
     s_rows_mask = -1;                       /* force the first update to build the rows */
     s_trial_shown = -1;
-    s_idle = 0;                             /* nothing enabled until a poll says IDLE */
+    s_have_status = 0;                      /* Update, Update all AND Abort disabled until a poll delivers a fleet line: */
+    s_idle = 0;                             /* the web never offers Abort before its first poll (app.js:995, 1007) */
     enable_all();
 
     lv_obj_t *rb = pnl_kit_card(parent, "Reboot");
@@ -213,6 +216,7 @@ static void fleet_update(const pnl_snap_t *s) {
         pnl_zone_name(&s->st.node[i], name);   /* a rename shows without a rebuild */
         pnl_label_set_if_changed(s_name[i], name);
     }
+    s_have_status = s->st.fleet_line[0] != '\0';
     s_idle = (uint8_t)psvc_fleet_idle(s->st.fleet_line);
     enable_all();
     snprintf(b, sizeof b, "Master firmware: %s %s", s->st.fw_slot, s->st.fw_state);
